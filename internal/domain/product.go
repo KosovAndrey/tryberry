@@ -28,6 +28,7 @@ type Subscription struct {
 	Active        bool
 	CreatedAt     time.Time
 	UpdatedAt     time.Time
+	TelegramID    int64
 
 	// Поля для JOIN-запросов (не хранятся отдельно)
 	ProductName     string

@@ -97,7 +97,7 @@ func makeHandler(
 		log := log.With("product_id", event.ProductID, "new_price", event.NewPrice)
 
 		// Находим все активные подписки на этот товар
-		subs, err := subRepo.GetActiveByProductID(ctx, event.ProductID)
+		subs, err := subRepo.GetActiveByProductIDWithTelegramID(ctx, event.ProductID)
 		if err != nil {
 			return fmt.Errorf("get subscriptions: %w", err)
 		}
@@ -139,7 +139,7 @@ func makeHandler(
 
 			// Отправляем уведомление в Telegram
 			err = tgNotifier.SendPriceAlert(ctx, telegram.PriceAlert{
-				ChatID:         sub.UserID,
+				ChatID:         sub.TelegramID,
 				SubscriptionID: sub.ID,
 				ProductName:    sub.ProductName,
 				ProductURL:     sub.ProductURL,

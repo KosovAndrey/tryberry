@@ -71,7 +71,14 @@ func (r *SubscriptionRepo) GetActiveByUserID(ctx context.Context, userID int64) 
 	const q = `
 		SELECT s.id, s.user_id, s.product_id, s.baseline_price, s.active,
 		       s.created_at, s.updated_at,
-		       p.name, p.url
+		       p.name, p.url,
+		       COALESCE(p.image_url, ''),
+		       COALESCE((
+		           SELECT ph.price FROM price_history ph
+		           WHERE ph.product_id = s.product_id
+		           ORDER BY ph.recorded_at DESC
+		           LIMIT 1
+		       ), 0) AS current_price
 		FROM subscriptions s
 		JOIN products p ON p.id = s.product_id
 		WHERE s.user_id = $1 AND s.active = TRUE
@@ -89,7 +96,8 @@ func (r *SubscriptionRepo) GetActiveByUserID(ctx context.Context, userID int64) 
 		if err := rows.Scan(
 			&s.ID, &s.UserID, &s.ProductID, &s.BaselinePrice, &s.Active,
 			&s.CreatedAt, &s.UpdatedAt,
-			&s.ProductName, &s.ProductURL,
+			&s.ProductName, &s.ProductURL, &s.ProductImageURL,
+			&s.CurrentPrice,
 		); err != nil {
 			return nil, err
 		}
@@ -152,4 +160,37 @@ func (r *SubscriptionRepo) UpdateBaseline(ctx context.Context, id int64, newPric
 
 	_, err := r.db.Exec(ctx, q, id, newPrice)
 	return err
+}
+
+func (r *SubscriptionRepo) GetActiveByProductIDWithTelegramID(ctx context.Context, productID int64) ([]*domain.Subscription, error) {
+	const q = `
+		SELECT s.id, s.user_id, s.product_id, s.baseline_price, s.active,
+		       s.created_at, s.updated_at,
+		       p.name, p.url, COALESCE(p.image_url, ''),
+		       u.telegram_id
+		FROM subscriptions s
+		JOIN products p ON p.id = s.product_id
+		JOIN users u ON u.id = s.user_id
+		WHERE s.product_id = $1 AND s.active = TRUE`
+
+	rows, err := r.db.Query(ctx, q, productID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var subs []*domain.Subscription
+	for rows.Next() {
+		s := &domain.Subscription{}
+		if err := rows.Scan(
+			&s.ID, &s.UserID, &s.ProductID, &s.BaselinePrice, &s.Active,
+			&s.CreatedAt, &s.UpdatedAt,
+			&s.ProductName, &s.ProductURL, &s.ProductImageURL,
+			&s.TelegramID,
+		); err != nil {
+			return nil, err
+		}
+		subs = append(subs, s)
+	}
+	return subs, rows.Err()
 }
