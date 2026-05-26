@@ -1,0 +1,117 @@
+{
+  "uid": "tryberrybot-scraping",
+  "title": "TryBerryBot — Scraping",
+  "tags": ["tryberrybot", "scraping"],
+  "timezone": "browser",
+  "schemaVersion": 39,
+  "version": 1,
+  "refresh": "30s",
+  "time": { "from": "now-1h", "to": "now" },
+  "panels": [
+    {
+      "id": 1,
+      "type": "stat",
+      "title": "Success rate (5m)",
+      "gridPos": { "h": 4, "w": 12, "x": 0, "y": 0 },
+      "targets": [
+        {
+          "expr": "tryberrybot:scrape_success_rate:5m",
+          "legendFormat": "{{marketplace}}",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percentunit",
+          "min": 0,
+          "max": 1,
+          "color": { "mode": "thresholds" },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "red", "value": null },
+              { "color": "orange", "value": 0.8 },
+              { "color": "green", "value": 0.95 }
+            ]
+          }
+        }
+      }
+    },
+    {
+      "id": 2,
+      "type": "timeseries",
+      "title": "Латентность скрейпинга p50/p95/p99",
+      "gridPos": { "h": 8, "w": 24, "x": 0, "y": 4 },
+      "targets": [
+        {
+          "expr": "histogram_quantile(0.5, sum(rate(tryberrybot_scrape_duration_seconds_bucket[5m])) by (marketplace, le))",
+          "legendFormat": "p50 {{marketplace}}",
+          "refId": "A"
+        },
+        {
+          "expr": "tryberrybot:scrape_duration_p95:5m",
+          "legendFormat": "p95 {{marketplace}}",
+          "refId": "B"
+        },
+        {
+          "expr": "tryberrybot:scrape_duration_p99:5m",
+          "legendFormat": "p99 {{marketplace}}",
+          "refId": "C"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": { "unit": "s" }
+      }
+    },
+    {
+      "id": 3,
+      "type": "timeseries",
+      "title": "Запросы скрейпинга по статусам",
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 12 },
+      "targets": [
+        {
+          "expr": "sum(rate(tryberrybot_scrape_requests_total[5m])) by (status, marketplace)",
+          "legendFormat": "{{marketplace}} / {{status}}",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": { "unit": "ops" }
+      }
+    },
+    {
+      "id": 4,
+      "type": "timeseries",
+      "title": "Снижения цен",
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 12 },
+      "targets": [
+        {
+          "expr": "sum(rate(tryberrybot_price_drops_total[5m])) by (marketplace)",
+          "legendFormat": "{{marketplace}}",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": { "unit": "ops" }
+      }
+    },
+    {
+      "id": 5,
+      "type": "logs",
+      "title": "Логи scraper",
+      "gridPos": { "h": 10, "w": 24, "x": 0, "y": 20 },
+      "datasource": { "type": "loki", "uid": "loki" },
+      "targets": [
+        {
+          "expr": "{service=\"scraper\"} | json",
+          "refId": "A"
+        }
+      ],
+      "options": {
+        "showTime": true,
+        "wrapLogMessage": true,
+        "enableLogDetails": true
+      }
+    }
+  ]
+}

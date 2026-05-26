@@ -256,7 +256,26 @@ services:
       # Лимит спанов в памяти, дальше старые вытесняются
       MEMORY_MAX_TRACES: "50000"
 
-
+  grafana:
+    image: grafana/grafana:11.3.0
+    container_name: pt_grafana
+    ports:
+      - "3000:3000"
+    volumes:
+      - ./monitoring/grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./monitoring/grafana/dashboards:/var/lib/grafana/dashboards:ro
+      - grafana_data:/var/lib/grafana
+    environment:
+      GF_SECURITY_ADMIN_USER: admin
+      GF_SECURITY_ADMIN_PASSWORD: admin
+      GF_USERS_ALLOW_SIGN_UP: "false"
+      # Анонимный доступ для удобства разработки (на проде отключим)
+      GF_AUTH_ANONYMOUS_ENABLED: "true"
+      GF_AUTH_ANONYMOUS_ORG_ROLE: Viewer
+    depends_on:
+      - prometheus
+      - loki
+      - jaeger
 
 #  node-exporter:
 #    image: prom/node-exporter:v1.8.2
