@@ -1,0 +1,44 @@
+package scraper
+
+import (
+	"context"
+	"errors"
+)
+
+// Marketplace — идентификатор маркетплейса (используется в БД и логах)
+type Marketplace string
+
+const (
+	MarketplaceWildberries  Marketplace = "wildberries"
+	MarketplaceOzon         Marketplace = "ozon"
+	MarketplaceYandexMarket Marketplace = "yandex_market"
+)
+
+// Result — единый формат данных о товаре, независимый от маркетплейса
+type Result struct {
+	Name     string
+	Price    float64
+	ImageURL string
+}
+
+// MarketplaceScraper — интерфейс который реализует каждый маркетплейс.
+// Добавление нового источника = новая реализация этого интерфейса
+// + регистрация в Registry. Изменения в остальном коде не требуются.
+type MarketplaceScraper interface {
+	// Marketplace возвращает идентификатор маркетплейса
+	Marketplace() Marketplace
+
+	// Matches проверяет относится ли URL к этому маркетплейсу
+	Matches(url string) bool
+
+	// Scrape получает данные о товаре по URL
+	Scrape(ctx context.Context, url string) (*Result, error)
+}
+
+// Доменные ошибки скрейпинга — общие для всех маркетплейсов
+var (
+	ErrInvalidURL         = errors.New("invalid product URL")
+	ErrProductNotFound    = errors.New("product not found")
+	ErrMarketplaceBlocked = errors.New("marketplace blocked the request")
+	ErrNotImplemented     = errors.New("marketplace not implemented yet")
+)

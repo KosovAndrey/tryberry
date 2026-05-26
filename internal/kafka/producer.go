@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/segmentio/kafka-go"
+	"gitlab.com/KosovAndrey/tryberrybot/internal/metrics"
 )
 
 type Producer struct {
@@ -30,6 +31,7 @@ func NewProducer(brokers []string, topic string) *Producer {
 func (p *Producer) Send(ctx context.Context, key string, value any) error {
 	body, err := json.Marshal(value)
 	if err != nil {
+		metrics.KafkaMessagesProduced.WithLabelValues(p.writer.Topic, "error").Inc()
 		return fmt.Errorf("marshal: %w", err)
 	}
 
@@ -38,8 +40,11 @@ func (p *Producer) Send(ctx context.Context, key string, value any) error {
 		Value: body,
 	})
 	if err != nil {
+		metrics.KafkaMessagesProduced.WithLabelValues(p.writer.Topic, "error").Inc()
 		return fmt.Errorf("kafka write: %w", err)
 	}
+
+	metrics.KafkaMessagesProduced.WithLabelValues(p.writer.Topic, "success").Inc()
 	return nil
 }
 

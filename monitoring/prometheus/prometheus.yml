@@ -1,0 +1,73 @@
+# Глобальные настройки Prometheus
+global:
+  # Как часто Prometheus идёт за метриками к экспортёрам
+  scrape_interval: 15s
+  # Таймаут одного scrape запроса
+  scrape_timeout: 10s
+  # Как часто пересчитывать recording/alerting rules
+  evaluation_interval: 15s
+  # Лейблы которые добавятся ко всем метрикам — пригодится в multi-env (dev/prod)
+  external_labels:
+    env: dev
+
+# Файлы с правилами (alerts, recording rules) — подключим в Этапе Д
+rule_files:
+  - /etc/prometheus/rules/*.yml
+
+# Куда отправлять сработавшие алерты — подключим в Этапе Д
+alerting:
+  alertmanagers:
+    - static_configs:
+        - targets: []
+          # - alertmanager:9093
+
+# Источники метрик
+scrape_configs:
+
+  - job_name: tryberrybot-api
+    metrics_path: /metrics
+    static_configs:
+      - targets: [ 'api:8081' ]
+        labels:
+          service: api
+
+  - job_name: tryberrybot-scraper
+    metrics_path: /metrics
+    static_configs:
+      - targets: [ 'scraper:8090' ]
+        labels:
+          service: scraper
+
+  - job_name: tryberrybot-notifier
+    metrics_path: /metrics
+    static_configs:
+      - targets: [ 'notifier:8091' ]
+        labels:
+          service: notifier
+
+  # Сам Prometheus — стандартная практика мониторить и его
+  - job_name: prometheus
+    static_configs:
+      - targets: ['localhost:9090']
+
+  # PostgreSQL метрики
+  - job_name: postgres
+    static_configs:
+      - targets: ['postgres-exporter:9187']
+        labels:
+          service: postgres
+
+  # Redis метрики
+  - job_name: redis
+    static_configs:
+      - targets: ['redis-exporter:9121']
+        labels:
+          service: redis
+
+  # Kafka метрики (consumer lag, topic size, etc)
+  - job_name: kafka
+    static_configs:
+      - targets: ['kafka-exporter:9308']
+        labels:
+          service: kafka
+

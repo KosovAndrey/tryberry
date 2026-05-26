@@ -2,6 +2,7 @@ package telegram
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"strconv"
@@ -10,6 +11,7 @@ import (
 	tgbotapi "github.com/go-telegram-bot-api/telegram-bot-api/v5"
 
 	"gitlab.com/KosovAndrey/tryberrybot/internal/domain"
+	"gitlab.com/KosovAndrey/tryberrybot/internal/metrics"
 	"gitlab.com/KosovAndrey/tryberrybot/internal/repository/postgres"
 	"gitlab.com/KosovAndrey/tryberrybot/internal/scraper"
 )
@@ -20,7 +22,7 @@ type Bot struct {
 	userRepo *postgres.UserRepo
 	subRepo  *postgres.SubscriptionRepo
 	prodRepo *postgres.ProductRepo
-	wbClient *scraper.Client
+	registry *scraper.Registry
 }
 
 func NewBot(
@@ -29,7 +31,7 @@ func NewBot(
 	userRepo *postgres.UserRepo,
 	subRepo *postgres.SubscriptionRepo,
 	prodRepo *postgres.ProductRepo,
-	wbClient *scraper.Client,
+	registry *scraper.Registry,
 ) (*Bot, error) {
 	api, err := tgbotapi.NewBotAPI(token)
 	if err != nil {
@@ -41,7 +43,7 @@ func NewBot(
 		userRepo: userRepo,
 		subRepo:  subRepo,
 		prodRepo: prodRepo,
-		wbClient: wbClient,
+		registry: registry,
 	}, nil
 }
 
@@ -84,8 +86,8 @@ func (b *Bot) HandleUpdate(ctx context.Context, update tgbotapi.Update) {
 func (b *Bot) handleMessage(ctx context.Context, msg *tgbotapi.Message) {
 	text := strings.TrimSpace(msg.Text)
 
-	// Если это ссылка на WB — сразу трекаем
-	if strings.Contains(text, "wildberries.ru/catalog/") {
+	// Проверяем через registry — поддерживается ли этот маркетплейс
+	if _, err := b.registry.FindByURL(text); err == nil {
 		user, err := b.userRepo.Upsert(ctx, msg.From.ID, msg.From.UserName)
 		if err != nil {
 			b.reply(msg.Chat.ID, "Произошла ошибка, попробуй позже.")
@@ -95,7 +97,6 @@ func (b *Bot) handleMessage(ctx context.Context, msg *tgbotapi.Message) {
 		return
 	}
 
-	// Иначе — показываем меню
 	b.sendMainMenu(ctx, msg.Chat.ID, 0, false)
 }
 
@@ -258,8 +259,8 @@ func (b *Bot) buildListView(subs []*domain.Subscription) (string, tgbotapi.Inlin
 			currentPriceStr = fmt.Sprintf("%s%.0f ₽", priceEmoji, sub.CurrentPrice)
 		}
 
-		fmt.Fprintf(&sb, "%d. <b>%s</b>\n   сейчас %s  |  при подписке %.0f ₽\n\n",
-			i+1, sub.ProductName, currentPriceStr, sub.BaselinePrice,
+		fmt.Fprintf(&sb, "%d. %s <b>%s</b>\n   сейчас %s  |  при подписке %.0f ₽\n\n",
+			i+1, marketplaceIcon(sub.ProductMarketplace), sub.ProductName, currentPriceStr, sub.BaselinePrice,
 		)
 	}
 
@@ -297,10 +298,11 @@ func (b *Bot) handleUntrack(ctx context.Context, msg *tgbotapi.Message) {
 		return
 	}
 	if err := b.subRepo.Deactivate(ctx, id); err != nil {
-		if err == domain.ErrNotFound {
+		if errors.Is(err, domain.ErrNotFound) {
 			b.reply(msg.Chat.ID, "Подписка не найдена.")
 			return
 		}
+		b.log.Error("deactivate subscription", "err", err)
 		b.reply(msg.Chat.ID, "Произошла ошибка, попробуй позже.")
 		return
 	}
@@ -310,13 +312,16 @@ func (b *Bot) handleUntrack(ctx context.Context, msg *tgbotapi.Message) {
 // ── doTrack — основная логика добавления товара ───────────────────────────────
 
 func (b *Bot) doTrack(ctx context.Context, chatID int64, rawURL string, user *domain.User) {
-	articleID, err := scraper.ExtractArticleID(rawURL)
+	// Находим подходящий скрейпер
+	s, err := b.registry.FindByURL(rawURL)
 	if err != nil {
-		b.reply(chatID,
-			"Не могу распознать ссылку.\n\n"+
-				"Убедись что это ссылка на товар Wildberries вида:\n"+
-				"<code>https://www.wildberries.ru/catalog/123456789/detail.aspx</code>",
-		)
+		metrics.TrackCommands.WithLabelValues("error").Inc()
+		supported := b.registry.SupportedMarketplaces()
+		b.reply(chatID, fmt.Sprintf(
+			"Не могу распознать ссылку.\n\nПоддерживаемые маркетплейсы: %v\n\n"+
+				"Пример ссылки:\n<code>https://www.wildberries.ru/catalog/123456789/detail.aspx</code>",
+			supported,
+		))
 		return
 	}
 
@@ -324,17 +329,25 @@ func (b *Bot) doTrack(ctx context.Context, chatID int64, rawURL string, user *do
 	wait.ParseMode = "HTML"
 	sent, _ := b.api.Send(wait)
 
-	result, err := b.wbClient.Scrape(ctx, articleID)
+	result, err := s.Scrape(ctx, rawURL)
 	if err != nil {
-		b.log.Error("scrape on track", "url", rawURL, "err", err)
-		edit := tgbotapi.NewEditMessageText(chatID, sent.MessageID,
-			"❌ Не удалось получить данные о товаре. Попробуй позже.")
+		metrics.TrackCommands.WithLabelValues("error").Inc()
+		b.log.Error("scrape on track", "url", rawURL, "marketplace", s.Marketplace(), "err", err)
+
+		msg := "❌ Не удалось получить данные о товаре. Попробуй позже."
+		if errors.Is(err, scraper.ErrNotImplemented) {
+			msg = fmt.Sprintf("⚠️ Маркетплейс <b>%s</b> пока не поддерживается. Сейчас доступен только Wildberries.", s.Marketplace())
+		}
+
+		edit := tgbotapi.NewEditMessageText(chatID, sent.MessageID, msg)
+		edit.ParseMode = "HTML"
 		b.api.Send(edit) //nolint:errcheck
 		return
 	}
 
-	product, err := b.prodRepo.Upsert(ctx, rawURL, result.Name, result.ImageURL)
+	product, err := b.prodRepo.Upsert(ctx, rawURL, result.Name, result.ImageURL, string(s.Marketplace()))
 	if err != nil {
+		metrics.TrackCommands.WithLabelValues("error").Inc()
 		b.log.Error("upsert product", "err", err)
 		b.reply(chatID, "Произошла ошибка, попробуй позже.")
 		return
@@ -342,6 +355,7 @@ func (b *Bot) doTrack(ctx context.Context, chatID int64, rawURL string, user *do
 
 	_, created, err := b.subRepo.Upsert(ctx, user.ID, product.ID, result.Price)
 	if err != nil {
+		metrics.TrackCommands.WithLabelValues("error").Inc()
 		b.log.Error("upsert subscription", "err", err)
 		b.reply(chatID, "Произошла ошибка, попробуй позже.")
 		return
@@ -349,6 +363,7 @@ func (b *Bot) doTrack(ctx context.Context, chatID int64, rawURL string, user *do
 
 	var responseText string
 	if created {
+		metrics.TrackCommands.WithLabelValues("success").Inc()
 		responseText = fmt.Sprintf(
 			"✅ <b>Добавил в отслеживание!</b>\n\n"+
 				"<b>%s</b>\n"+
@@ -357,6 +372,7 @@ func (b *Bot) doTrack(ctx context.Context, chatID int64, rawURL string, user *do
 			result.Name, result.Price,
 		)
 	} else {
+		metrics.TrackCommands.WithLabelValues("reactivated").Inc()
 		responseText = fmt.Sprintf(
 			"🔄 <b>Отслеживание возобновлено!</b>\n\n"+
 				"<b>%s</b>\n"+
@@ -438,7 +454,7 @@ func (b *Bot) callbackUntrack(ctx context.Context, cb *tgbotapi.CallbackQuery) {
 		return
 	}
 
-	if err := b.subRepo.Deactivate(ctx, id); err != nil && err != domain.ErrNotFound {
+	if err := b.subRepo.Deactivate(ctx, id); err != nil && !errors.Is(err, domain.ErrNotFound) {
 		b.log.Error("deactivate via callback", "err", err)
 		b.answerCallback(cb.ID, "Ошибка, попробуй позже")
 		return
@@ -497,4 +513,17 @@ func truncate(s string, max int) string {
 		return s
 	}
 	return string(runes[:max]) + "…"
+}
+
+func marketplaceIcon(mp string) string {
+	switch mp {
+	case "wildberries":
+		return "🟣"
+	case "yandex_market":
+		return "🟡"
+	case "ozon":
+		return "🔵"
+	default:
+		return "📦"
+	}
 }

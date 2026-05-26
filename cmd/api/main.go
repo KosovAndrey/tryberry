@@ -9,9 +9,14 @@ import (
 	"os"
 	"os/signal"
 	"syscall"
+	"time"
 
 	tgbotapi "github.com/go-telegram-bot-api/telegram-bot-api/v5"
+	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/joho/godotenv"
+	"github.com/prometheus/client_golang/prometheus/promhttp"
+	"gitlab.com/KosovAndrey/tryberrybot/internal/health"
+	"gitlab.com/KosovAndrey/tryberrybot/internal/metrics"
 
 	"gitlab.com/KosovAndrey/tryberrybot/internal/db"
 	"gitlab.com/KosovAndrey/tryberrybot/internal/partition"
@@ -71,10 +76,14 @@ func run(log *slog.Logger) error {
 	_ = redisClient
 
 	// ── WB клиент ────────────────────────────────────────────────────────────
-	wbClient := scraper.NewClient(5)
+	registry := scraper.NewRegistry(
+		scraper.NewWildberriesScraper(5),
+		scraper.NewOzonScraper(), // заглушка
+		scraper.NewYandexMarketScraper(2),
+	)
 
 	// ── Telegram бот ─────────────────────────────────────────────────────────
-	bot, err := telegram.NewBot(botToken, log, userRepo, subRepo, prodRepo, wbClient)
+	bot, err := telegram.NewBot(botToken, log, userRepo, subRepo, prodRepo, registry)
 	if err != nil {
 		return fmt.Errorf("init bot: %w", err)
 	}
@@ -94,7 +103,9 @@ func run(log *slog.Logger) error {
 	// ── HTTP сервер ───────────────────────────────────────────────────────────
 	mux := http.NewServeMux()
 
-	mux.HandleFunc("/webhook", func(w http.ResponseWriter, r *http.Request) {
+	healthChecker := health.New(pool, redisClient)
+
+	mux.Handle("/webhook", metrics.HTTPMiddleware("webhook")(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodPost {
 			w.WriteHeader(http.StatusMethodNotAllowed)
 			return
@@ -107,12 +118,11 @@ func run(log *slog.Logger) error {
 		}
 		bot.HandleUpdate(r.Context(), update)
 		w.WriteHeader(http.StatusOK)
-	})
+	})))
 
-	mux.HandleFunc("/health", func(w http.ResponseWriter, r *http.Request) {
-		w.WriteHeader(http.StatusOK)
-		w.Write([]byte("ok"))
-	})
+	mux.HandleFunc("/health", healthChecker.Handler())
+	mux.HandleFunc("/live", health.LivenessHandler())
+	mux.Handle("/metrics", promhttp.Handler())
 
 	srv := &http.Server{
 		Addr:    ":" + port,
@@ -124,6 +134,8 @@ func run(log *slog.Logger) error {
 
 	log.Info("api started", "port", port)
 
+	go runMetricsUpdater(ctx, log, pool)
+
 	go func() {
 		<-ctx.Done()
 		srv.Shutdown(context.Background())
@@ -133,6 +145,59 @@ func run(log *slog.Logger) error {
 		return fmt.Errorf("http server: %w", err)
 	}
 	return nil
+}
+
+func runMetricsUpdater(ctx context.Context, log *slog.Logger, pool *pgxpool.Pool) {
+	tick := func() {
+		ctxQ, cancel := context.WithTimeout(ctx, 5*time.Second)
+		defer cancel()
+
+		// Общие счётчики
+		var total int
+		if err := pool.QueryRow(ctxQ,
+			`SELECT COUNT(*) FROM subscriptions WHERE active = TRUE`).Scan(&total); err == nil {
+			metrics.ActiveSubscriptions.Set(float64(total))
+		}
+
+		var users int
+		if err := pool.QueryRow(ctxQ,
+			`SELECT COUNT(*) FROM users`).Scan(&users); err == nil {
+			metrics.TotalUsers.Set(float64(users))
+		}
+
+		// Подписки по маркетплейсам
+		rows, err := pool.Query(ctxQ, `
+        SELECT p.marketplace, COUNT(*)
+        FROM subscriptions s
+        JOIN products p ON p.id = s.product_id
+        WHERE s.active = TRUE
+        GROUP BY p.marketplace`)
+		if err == nil {
+			defer rows.Close()
+			// Сбрасываем чтобы убрать маркетплейсы у которых стало 0
+			metrics.SubscriptionsByMarketplace.Reset()
+			for rows.Next() {
+				var mp string
+				var count int
+				if err := rows.Scan(&mp, &count); err == nil {
+					metrics.SubscriptionsByMarketplace.WithLabelValues(mp).Set(float64(count))
+				}
+			}
+		}
+	}
+
+	tick()
+	ticker := time.NewTicker(30 * time.Second)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			tick()
+		}
+	}
 }
 
 func mustEnv(key string) string {

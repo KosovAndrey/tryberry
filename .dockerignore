@@ -1,0 +1,17 @@
+# .dockerignore
+.git
+.idea
+.vscode
+*.md
+bin/
+node_modules/
+monitoring/
+migrations/
+.env
+.env.example
+docker-compose*.yml
+Dockerfile*
+.dockerignore
+.golangci.yml
+Makefile
+*.log

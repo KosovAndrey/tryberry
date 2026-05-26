@@ -1,0 +1,44 @@
+server:
+  http_listen_port: 9080
+  log_level: warn
+
+positions:
+  filename: /tmp/positions.yaml
+
+clients:
+  - url: http://loki:3100/loki/api/v1/push
+
+scrape_configs:
+  # Сборщик логов Docker контейнеров с лейблом logging=promtail
+  - job_name: docker
+    docker_sd_configs:
+      - host: unix:///var/run/docker.sock
+        refresh_interval: 5s
+        filters:
+          - name: label
+            values: ["logging=promtail"]
+    relabel_configs:
+      # Имя контейнера
+      - source_labels: ['__meta_docker_container_name']
+        regex: '/(.*)'
+        target_label: 'container'
+      # Лейбл service из docker-compose
+      - source_labels: ['__meta_docker_container_label_service']
+        target_label: 'service'
+      # compose project
+      - source_labels: ['__meta_docker_container_label_com_docker_compose_project']
+        target_label: 'compose_project'
+    pipeline_stages:
+      # Парсим JSON логи slog'а
+      - json:
+          expressions:
+            level:
+            msg:
+            time:
+      # Используем уровень из лога как лейбл
+      - labels:
+          level:
+      # Используем время из лога как timestamp
+      - timestamp:
+          source: time
+          format: RFC3339Nano

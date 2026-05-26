@@ -4,16 +4,22 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"net/http"
 	"os"
 	"os/signal"
 	"strconv"
 	"strings"
 	"syscall"
 
+	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/joho/godotenv"
+	"github.com/prometheus/client_golang/prometheus/promhttp"
+	"github.com/redis/go-redis/v9"
 	"gitlab.com/KosovAndrey/tryberrybot/internal/db"
 	"gitlab.com/KosovAndrey/tryberrybot/internal/domain"
+	"gitlab.com/KosovAndrey/tryberrybot/internal/health"
 	"gitlab.com/KosovAndrey/tryberrybot/internal/kafka"
+	"gitlab.com/KosovAndrey/tryberrybot/internal/metrics"
 	"gitlab.com/KosovAndrey/tryberrybot/internal/partition"
 	"gitlab.com/KosovAndrey/tryberrybot/internal/repository/postgres"
 	redisrepo "gitlab.com/KosovAndrey/tryberrybot/internal/repository/redis"
@@ -41,10 +47,15 @@ func run(log *slog.Logger) error {
 	redisURL := mustEnv("REDIS_URL")
 	kafkaBrokers := strings.Split(mustEnv("KAFKA_BROKERS"), ",")
 	kafkaGroupID := mustEnv("KAFKA_GROUP_ID")
-	rpsStr := getEnv("SCRAPER_RATE_LIMIT_RPS", "5")
-	rps, err := strconv.ParseFloat(rpsStr, 64)
+	rpsStrWB := getEnv("SCRAPER_RATE_LIMIT_RPS_WB", "5")
+	rpsStrYandex := getEnv("SCRAPER_RATE_LIMIT_RPS_YANDEX", "2")
+	rpsWB, err := strconv.ParseFloat(rpsStrWB, 64)
 	if err != nil {
-		return fmt.Errorf("SCRAPER_RATE_LIMIT_RPS: %w", err)
+		return fmt.Errorf("SCRAPER_RATE_LIMIT_RPS_WB: %w", err)
+	}
+	rpsYandex, err := strconv.ParseFloat(rpsStrYandex, 64)
+	if err != nil {
+		return fmt.Errorf("SCRAPER_RATE_LIMIT_RPS_YANDEX: %w", err)
 	}
 
 	// ── Подключения ──────────────────────────────────────────────────────────
@@ -68,6 +79,8 @@ func run(log *slog.Logger) error {
 	}
 	log.Info("partitions ok")
 
+	go runHealthServer(ctx, log, pool, redisClient, "8090")
+
 	// ── Репозитории ──────────────────────────────────────────────────────────
 	productRepo := postgres.NewProductRepo(pool)
 	priceHistoryRepo := postgres.NewPriceHistoryRepo(pool)
@@ -85,18 +98,41 @@ func run(log *slog.Logger) error {
 	defer producer.Close()
 
 	// ── WB клиент ────────────────────────────────────────────────────────────
-	wbClient := scraper.NewClient(rps)
-
+	registry := scraper.NewRegistry(
+		scraper.NewWildberriesScraper(rpsWB),
+		scraper.NewOzonScraper(),
+		scraper.NewYandexMarketScraper(rpsYandex),
+	)
 	// ── Обработчик сообщений ─────────────────────────────────────────────────
-	handler := makeHandler(log, wbClient, productRepo, priceHistoryRepo, priceCache, producer)
+	handler := makeHandler(log, registry, productRepo, priceHistoryRepo, priceCache, producer)
 
 	log.Info("scraper started, waiting for tasks...")
 	return consumer.Run(ctx, handler)
 }
 
+func runHealthServer(ctx context.Context, log *slog.Logger, pool *pgxpool.Pool, redisClient *redis.Client, port string) {
+	healthChecker := health.New(pool, redisClient)
+	mux := http.NewServeMux()
+	mux.HandleFunc("/health", healthChecker.Handler())
+	mux.HandleFunc("/live", health.LivenessHandler())
+	mux.Handle("/metrics", promhttp.Handler())
+
+	srv := &http.Server{Addr: ":" + port, Handler: mux}
+
+	go func() {
+		<-ctx.Done()
+		srv.Shutdown(context.Background())
+	}()
+
+	log.Info("health server started", "port", port)
+	if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+		log.Error("health server", "err", err)
+	}
+}
+
 func makeHandler(
 	log *slog.Logger,
-	wbClient *scraper.Client,
+	registry *scraper.Registry,
 	productRepo *postgres.ProductRepo,
 	priceHistoryRepo *postgres.PriceHistoryRepo,
 	priceCache *redisrepo.PriceCache,
@@ -105,30 +141,21 @@ func makeHandler(
 	return func(ctx context.Context, msg kafka.Message) error {
 		task, err := kafka.Decode[domain.ScrapeTask](msg)
 		if err != nil {
-			// Не можем распарсить — пропускаем (poison pill)
 			log.Error("decode scrape task", "err", err)
 			return nil
 		}
 
 		log := log.With("product_id", task.ProductID, "url", task.URL)
 
-		// Извлекаем артикул из URL
-		articleID, err := scraper.ExtractArticleID(task.URL)
-		if err != nil {
-			log.Error("extract article id", "err", err)
-			return nil // не ретраить — URL невалидный
-		}
-
-		// Скрейпим товар
-		result, err := wbClient.Scrape(ctx, articleID)
+		// Скрейпим через registry — он сам выбирает нужный маркетплейс
+		result, marketplace, err := registry.Scrape(ctx, task.URL)
 		if err != nil {
 			log.Error("scrape failed", "err", err)
-			return err // ретраить
+			return err
 		}
+		log.Info("scraped", "marketplace", marketplace, "name", result.Name, "price", result.Price)
 
-		log.Info("scraped", "name", result.Name, "price", result.Price)
-
-		// Обновляем name и image_url в products
+		// Обновляем product с маркетплейсом
 		if err := productRepo.UpdateScrapedData(ctx, task.ProductID, result.Name, result.ImageURL); err != nil {
 			return fmt.Errorf("update product: %w", err)
 		}
@@ -154,15 +181,20 @@ func makeHandler(
 		// Если цена изменилась — публикуем событие
 		if prevPrice > 0 && result.Price != prevPrice {
 			event := domain.PriceEvent{
-				ProductID: task.ProductID,
-				OldPrice:  prevPrice,
-				NewPrice:  result.Price,
+				ProductID:   task.ProductID,
+				Marketplace: string(marketplace),
+				OldPrice:    prevPrice,
+				NewPrice:    result.Price,
 			}
 			key := strconv.FormatInt(task.ProductID, 10)
 			if err := producer.Send(ctx, key, event); err != nil {
 				return fmt.Errorf("send price event: %w", err)
 			}
+			if result.Price < prevPrice {
+				metrics.PriceDrops.WithLabelValues(string(marketplace)).Inc()
+			}
 			log.Info("price changed, event sent",
+				"marketplace", marketplace,
 				"old_price", prevPrice,
 				"new_price", result.Price,
 			)

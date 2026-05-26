@@ -12,23 +12,25 @@ type User struct {
 }
 
 type Product struct {
-	ID        int64
-	URL       string
-	Name      string
-	ImageURL  string
-	CreatedAt time.Time
-	UpdatedAt time.Time
+	ID          int64
+	URL         string
+	Name        string
+	ImageURL    string
+	Marketplace string
+	CreatedAt   time.Time
+	UpdatedAt   time.Time
 }
 
 type Subscription struct {
-	ID            int64
-	UserID        int64
-	ProductID     int64
-	BaselinePrice float64
-	Active        bool
-	CreatedAt     time.Time
-	UpdatedAt     time.Time
-	TelegramID    int64
+	ID                 int64
+	UserID             int64
+	ProductID          int64
+	BaselinePrice      float64
+	Active             bool
+	CreatedAt          time.Time
+	UpdatedAt          time.Time
+	TelegramID         int64
+	ProductMarketplace string
 
 	// Поля для JOIN-запросов (не хранятся отдельно)
 	ProductName     string
@@ -48,10 +50,11 @@ type Notification struct {
 
 // PriceEvent — сообщение в Kafka топике price-events
 type PriceEvent struct {
-	ProductID  int64     `json:"product_id"`
-	OldPrice   float64   `json:"old_price"`
-	NewPrice   float64   `json:"new_price"`
-	RecordedAt time.Time `json:"recorded_at"`
+	ProductID   int64     `json:"product_id"`
+	Marketplace string    `json:"marketplace"`
+	OldPrice    float64   `json:"old_price"`
+	NewPrice    float64   `json:"new_price"`
+	RecordedAt  time.Time `json:"recorded_at"`
 }
 
 // ScrapeTask — сообщение в Kafka топике scrape-tasks

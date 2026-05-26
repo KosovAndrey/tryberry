@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/segmentio/kafka-go"
+	"gitlab.com/KosovAndrey/tryberrybot/internal/metrics"
 )
 
 type Message struct {
@@ -41,18 +42,24 @@ func NewConsumer(brokers []string, topic, groupID string) *Consumer {
 // успешной обработки (at-least-once семантика).
 // Блокирует до отмены контекста.
 func (c *Consumer) Run(ctx context.Context, handler HandlerFunc) error {
+	topic := c.reader.Config().Topic
+
 	for {
 		msg, err := c.reader.FetchMessage(ctx)
 		if err != nil {
 			if ctx.Err() != nil {
-				return nil // graceful shutdown
+				return nil
 			}
 			return fmt.Errorf("fetch message: %w", err)
 		}
 
-		if err := handler(ctx, Message{Key: msg.Key, Value: msg.Value}); err != nil {
-			// Логируем но не коммитим — сообщение будет перечитано
-			fmt.Printf("handler error (will retry): %v\n", err)
+		start := time.Now()
+		handlerErr := handler(ctx, Message{Key: msg.Key, Value: msg.Value})
+		metrics.KafkaProcessingDuration.WithLabelValues(topic).Observe(time.Since(start).Seconds())
+
+		if handlerErr != nil {
+			metrics.KafkaMessagesConsumed.WithLabelValues(topic, "error").Inc()
+			fmt.Printf("handler error (will retry): %v\n", handlerErr)
 			continue
 		}
 
@@ -62,6 +69,8 @@ func (c *Consumer) Run(ctx context.Context, handler HandlerFunc) error {
 			}
 			return fmt.Errorf("commit message: %w", err)
 		}
+
+		metrics.KafkaMessagesConsumed.WithLabelValues(topic, "success").Inc()
 	}
 }
 
