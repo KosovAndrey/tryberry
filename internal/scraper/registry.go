@@ -7,6 +7,10 @@ import (
 	"time"
 
 	"gitlab.com/KosovAndrey/tryberrybot/internal/metrics"
+	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/codes"
+	"go.opentelemetry.io/otel/trace"
 )
 
 // Registry — реестр всех зарегистрированных скрейперов.
@@ -36,6 +40,15 @@ func (r *Registry) Scrape(ctx context.Context, url string) (*Result, Marketplace
 		return nil, "", err
 	}
 
+	tracer := otel.Tracer("scraper.registry")
+	ctx, span := tracer.Start(ctx, "scraper.scrape",
+		trace.WithAttributes(
+			attribute.String("marketplace", string(s.Marketplace())),
+			attribute.String("url", url),
+		),
+	)
+	defer span.End()
+
 	mp := string(s.Marketplace())
 	start := time.Now()
 
@@ -56,8 +69,16 @@ func (r *Registry) Scrape(ctx context.Context, url string) (*Result, Marketplace
 	metrics.ScrapeRequests.WithLabelValues(mp, status).Inc()
 
 	if err != nil {
+		span.RecordError(err)
+		span.SetStatus(codes.Error, status)
 		return nil, s.Marketplace(), err
 	}
+
+	span.SetAttributes(
+		attribute.String("product.name", result.Name),
+		attribute.Float64("product.price", result.Price),
+	)
+
 	return result, s.Marketplace(), nil
 }
 

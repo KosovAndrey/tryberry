@@ -30,8 +30,10 @@ func (r *ProductRepo) Upsert(ctx context.Context, url, name, imageURL, marketpla
 		RETURNING id, url, name, image_url, marketplace, created_at, updated_at`
 
 	p := &domain.Product{}
-	err := r.db.QueryRow(ctx, q, url, name, imageURL, marketplace).
-		Scan(&p.ID, &p.URL, &p.Name, &p.ImageURL, &p.Marketplace, &p.CreatedAt, &p.UpdatedAt)
+	err := withSpan(ctx, "upsert_product", func(ctx context.Context) error {
+		return r.db.QueryRow(ctx, q, url, name, imageURL, marketplace).
+			Scan(&p.ID, &p.URL, &p.Name, &p.ImageURL, &p.Marketplace, &p.CreatedAt, &p.UpdatedAt)
+	})
 	if err != nil {
 		return nil, err
 	}

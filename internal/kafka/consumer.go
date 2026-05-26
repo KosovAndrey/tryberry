@@ -8,6 +8,10 @@ import (
 
 	"github.com/segmentio/kafka-go"
 	"gitlab.com/KosovAndrey/tryberrybot/internal/metrics"
+	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/codes"
+	"go.opentelemetry.io/otel/trace"
 )
 
 type Message struct {
@@ -43,6 +47,7 @@ func NewConsumer(brokers []string, topic, groupID string) *Consumer {
 // Блокирует до отмены контекста.
 func (c *Consumer) Run(ctx context.Context, handler HandlerFunc) error {
 	topic := c.reader.Config().Topic
+	tracer := otel.Tracer("kafka.consumer")
 
 	for {
 		msg, err := c.reader.FetchMessage(ctx)
@@ -53,17 +58,33 @@ func (c *Consumer) Run(ctx context.Context, handler HandlerFunc) error {
 			return fmt.Errorf("fetch message: %w", err)
 		}
 
+		// Извлекаем trace context из headers сообщения
+		// Это связывает спан consumer'а с трейсом producer'а
+		msgCtx := extractTraceContext(ctx, msg.Headers)
+
+		msgCtx, span := tracer.Start(msgCtx, "kafka.receive",
+			trace.WithSpanKind(trace.SpanKindConsumer),
+			trace.WithAttributes(
+				attribute.String("messaging.system", "kafka"),
+				attribute.String("messaging.destination.name", topic),
+			),
+		)
+
 		start := time.Now()
-		handlerErr := handler(ctx, Message{Key: msg.Key, Value: msg.Value})
+		handlerErr := handler(msgCtx, Message{Key: msg.Key, Value: msg.Value})
 		metrics.KafkaProcessingDuration.WithLabelValues(topic).Observe(time.Since(start).Seconds())
 
 		if handlerErr != nil {
 			metrics.KafkaMessagesConsumed.WithLabelValues(topic, "error").Inc()
+			span.RecordError(handlerErr)
+			span.SetStatus(codes.Error, "handler failed")
+			span.End()
 			fmt.Printf("handler error (will retry): %v\n", handlerErr)
 			continue
 		}
 
 		if err := c.reader.CommitMessages(ctx, msg); err != nil {
+			span.End()
 			if ctx.Err() != nil {
 				return nil
 			}
@@ -71,6 +92,7 @@ func (c *Consumer) Run(ctx context.Context, handler HandlerFunc) error {
 		}
 
 		metrics.KafkaMessagesConsumed.WithLabelValues(topic, "success").Inc()
+		span.End()
 	}
 }
 

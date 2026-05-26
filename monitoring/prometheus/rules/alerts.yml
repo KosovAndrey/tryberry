@@ -1,0 +1,130 @@
+# Alerting rules — условия при которых Prometheus генерирует алерты
+# и отправляет в Alertmanager.
+#
+# Структура алерта:
+#   alert    — имя
+#   expr     — PromQL запрос. Если возвращает данные — алерт активен.
+#   for      — сколько подряд expr должен быть true до отправки (защита от шума)
+#   labels   — для маршрутизации в Alertmanager (severity, service)
+#   annotations — текст для шаблона уведомления
+
+groups:
+  - name: tryberrybot_critical
+    interval: 30s
+    rules:
+      # Любой из наших сервисов перестал отвечать
+      - alert: ServiceDown
+        expr: up{job=~"tryberrybot-.+"} == 0
+        for: 1m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Сервис {{ $labels.job }} недоступен"
+          description: "Prometheus не может достучаться до {{ $labels.job }} больше 1 минуты"
+
+      # Постгрес недоступен
+      - alert: PostgresDown
+        expr: pg_up == 0
+        for: 1m
+        labels:
+          severity: critical
+        annotations:
+          summary: "PostgreSQL недоступен"
+          description: "postgres-exporter не отвечает {{ $value }}m"
+
+      - alert: RedisDown
+        expr: redis_up == 0
+        for: 2m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Redis недоступен"
+          description: "redis-exporter не может подключиться к Redis"
+
+      # Kafka недоступен — критично, без него вся система встаёт
+      - alert: KafkaDown
+        expr: up{job="kafka"} == 0
+        for: 1m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Kafka недоступен"
+          description: "Сообщения не доставляются, система деградирует"
+
+  - name: tryberrybot_scraping
+    interval: 30s
+    rules:
+      # Высокий процент ошибок скрейпинга
+      - alert: HighScrapeErrorRate
+        expr: |
+          (
+            sum(rate(tryberrybot_scrape_requests_total{status!="success"}[5m])) by (marketplace)
+            /
+            sum(rate(tryberrybot_scrape_requests_total[5m])) by (marketplace)
+          ) > 0.5
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Высокий процент ошибок скрейпинга {{ $labels.marketplace }}"
+          description: "Больше 50% запросов к {{ $labels.marketplace }} падают за последние 5 минут (текущее: {{ $value | humanizePercentage }})"
+
+      # Маркетплейс начал блокировать
+      - alert: MarketplaceBlocked
+        expr: |
+          increase(tryberrybot_scrape_requests_total{status="blocked"}[5m]) > 5
+        for: 1m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Маркетплейс {{ $labels.marketplace }} блокирует запросы"
+          description: "5+ блокировок за 5 минут. Возможно нужен новый IP/VPN/User-Agent."
+
+      # Высокая латентность скрейпинга
+      - alert: HighScrapeLatency
+        expr: tryberrybot:scrape_duration_p95:5m > 10
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Медленный скрейпинг {{ $labels.marketplace }}"
+          description: "p95 латентности > 10s в течение 5 минут (текущее: {{ $value | humanizeDuration }})"
+
+  - name: tryberrybot_kafka
+    interval: 30s
+    rules:
+      # Consumer не успевает обрабатывать
+      - alert: HighKafkaConsumerLag
+        expr: kafka_consumergroup_lag > 100
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Высокий consumer lag в {{ $labels.topic }}"
+          description: "Группа {{ $labels.consumergroup }} отстаёт на {{ $value }} сообщений в топике {{ $labels.topic }}"
+
+      # Сообщения копятся очень сильно
+      - alert: CriticalKafkaConsumerLag
+        expr: kafka_consumergroup_lag > 1000
+        for: 2m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Критический lag в {{ $labels.topic }}"
+          description: "Воркер не справляется: lag {{ $value }} в топике {{ $labels.topic }}. Нужно масштабировать."
+
+  - name: tryberrybot_business
+    interval: 1m
+    rules:
+      # Совсем нет уведомлений при наличии подписок — что-то сломано
+      - alert: NoNotificationsButSubscriptionsExist
+        expr: |
+          tryberrybot_active_subscriptions > 0
+          and
+          sum(increase(tryberrybot_notifications_sent_total[6h])) == 0
+        for: 1h
+        labels:
+          severity: warning
+        annotations:
+          summary: "Нет уведомлений за 6 часов"
+          description: "Активных подписок: {{ with query \"tryberrybot_active_subscriptions\" }}{{ . | first | value }}{{ end }}, но за 6 часов ноль уведомлений. Возможно цены не падают, но проверь воркер."

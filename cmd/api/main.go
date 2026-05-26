@@ -17,6 +17,8 @@ import (
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"gitlab.com/KosovAndrey/tryberrybot/internal/health"
 	"gitlab.com/KosovAndrey/tryberrybot/internal/metrics"
+	"gitlab.com/KosovAndrey/tryberrybot/internal/tracing"
+	"go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp"
 
 	"gitlab.com/KosovAndrey/tryberrybot/internal/db"
 	"gitlab.com/KosovAndrey/tryberrybot/internal/partition"
@@ -48,8 +50,21 @@ func run(log *slog.Logger) error {
 	botToken := mustEnv("TELEGRAM_BOT_TOKEN")
 	webhookURL := mustEnv("TELEGRAM_WEBHOOK_URL")
 	port := getEnv("PORT", "8081")
+	otlpEndpoint := getEnv("OTLP_ENDPOINT", "jaeger:4317")
 
 	// ── Подключения ──────────────────────────────────────────────────────────
+	shutdownTracing, err := tracing.Init(ctx, "api", otlpEndpoint)
+	if err != nil {
+		log.Warn("tracing init failed, continuing without", "err", err)
+	} else {
+		defer func() {
+			shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer cancel()
+			shutdownTracing(shutdownCtx)
+		}()
+		log.Info("tracing initialized", "endpoint", otlpEndpoint)
+	}
+
 	pool, err := db.NewPostgresPool(ctx, databaseURL)
 	if err != nil {
 		return fmt.Errorf("postgres: %w", err)
@@ -105,7 +120,7 @@ func run(log *slog.Logger) error {
 
 	healthChecker := health.New(pool, redisClient)
 
-	mux.Handle("/webhook", metrics.HTTPMiddleware("webhook")(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	webhookHandler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodPost {
 			w.WriteHeader(http.StatusMethodNotAllowed)
 			return
@@ -118,8 +133,11 @@ func run(log *slog.Logger) error {
 		}
 		bot.HandleUpdate(r.Context(), update)
 		w.WriteHeader(http.StatusOK)
-	})))
+	})
 
+	mux.Handle("/webhook", metrics.HTTPMiddleware("webhook")(
+		otelhttp.NewHandler(webhookHandler, "webhook"),
+	))
 	mux.HandleFunc("/health", healthChecker.Handler())
 	mux.HandleFunc("/live", health.LivenessHandler())
 	mux.Handle("/metrics", promhttp.Handler())

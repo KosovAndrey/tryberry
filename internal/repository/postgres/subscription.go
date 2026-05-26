@@ -31,21 +31,17 @@ func (r *SubscriptionRepo) Upsert(ctx context.Context, userID, productID int64, 
 			    updated_at     = NOW()
 		RETURNING id, user_id, product_id, baseline_price, active, created_at, updated_at,
 		          (xmax = 0) AS inserted`
-	// xmax = 0 означает что строка была INSERT, а не UPDATE
 
 	s := &domain.Subscription{}
 	var inserted bool
-	err := r.db.QueryRow(ctx, q, userID, productID, baselinePrice).
-		Scan(&s.ID, &s.UserID, &s.ProductID, &s.BaselinePrice,
-			&s.Active, &s.CreatedAt, &s.UpdatedAt, &inserted)
+	err := withSpan(ctx, "upsert_subscription", func(ctx context.Context) error {
+		return r.db.QueryRow(ctx, q, userID, productID, baselinePrice).
+			Scan(&s.ID, &s.UserID, &s.ProductID, &s.BaselinePrice,
+				&s.Active, &s.CreatedAt, &s.UpdatedAt, &inserted)
+	})
 	if err != nil {
 		return nil, false, err
 	}
-
-	// Если строка существовала и была активна до UPDATE — это дубль
-	// inserted=false означает что была UPDATE, но мы не знаем была ли она активна
-	// Поэтому проверяем через отдельный флаг: если !inserted и active был true до — это повтор
-	// Упрощение: возвращаем created=inserted, вызывающий код решает как ответить
 	return s, inserted, nil
 }
 

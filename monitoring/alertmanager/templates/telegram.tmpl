@@ -1,0 +1,18 @@
+{{ define "telegram.message" }}
+{{ if eq .Status "firing" }}🚨 <b>АЛЕРТ</b>{{ else }}✅ <b>ВОССТАНОВЛЕНО</b>{{ end }}
+
+{{ range .Alerts }}
+{{ if eq .Labels.severity "critical" }}🔴{{ else if eq .Labels.severity "warning" }}🟡{{ else }}🔵{{ end }} <b>{{ .Annotations.summary }}</b>
+
+{{ .Annotations.description }}
+
+<b>Severity:</b> {{ .Labels.severity }}
+<b>Service:</b> {{ .Labels.service }}{{ if .Labels.job }} ({{ .Labels.job }}){{ end }}
+{{ if .Labels.marketplace }}<b>Marketplace:</b> {{ .Labels.marketplace }}
+{{ end }}{{ if .Labels.topic }}<b>Topic:</b> {{ .Labels.topic }}
+{{ end }}<b>Started:</b> {{ .StartsAt.Format "15:04:05 02-Jan" }}
+{{ if eq .Status "resolved" }}<b>Resolved:</b> {{ .EndsAt.Format "15:04:05 02-Jan" }}
+{{ end }}
+🔗 <a href="http://localhost:3000/d/tryberrybot">Открыть Grafana</a>
+{{ end }}
+{{ end }}
