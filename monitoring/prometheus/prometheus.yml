@@ -18,8 +18,8 @@ rule_files:
 alerting:
   alertmanagers:
     - static_configs:
-        - targets: []
-          # - alertmanager:9093
+        - targets:
+            - alertmanager:9093
 
 # Источники метрик
 scrape_configs:

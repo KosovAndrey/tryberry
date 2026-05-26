@@ -27,14 +27,15 @@ func (r *UserRepo) Upsert(ctx context.Context, telegramID int64, username string
 		RETURNING id, telegram_id, username, created_at`
 
 	u := &domain.User{}
-	err := r.db.QueryRow(ctx, q, telegramID, username).
-		Scan(&u.ID, &u.TelegramID, &u.Username, &u.CreatedAt)
+	err := withSpan(ctx, "upsert_user", func(ctx context.Context) error {
+		return r.db.QueryRow(ctx, q, telegramID, username).
+			Scan(&u.ID, &u.TelegramID, &u.Username, &u.CreatedAt)
+	})
 	if err != nil {
 		return nil, err
 	}
 	return u, nil
 }
-
 func (r *UserRepo) GetByTelegramID(ctx context.Context, telegramID int64) (*domain.User, error) {
 	const q = `
 		SELECT id, telegram_id, username, created_at

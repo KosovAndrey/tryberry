@@ -17,6 +17,7 @@ services:
       TELEGRAM_BOT_TOKEN: "${TELEGRAM_BOT_TOKEN}"
       TELEGRAM_WEBHOOK_URL: "${TELEGRAM_WEBHOOK_URL}"
       WEBHOOK_ENABLED: "${WEBHOOK_ENABLED:-false}"
+      OTLP_ENDPOINT: "jaeger:4317"
       PORT: "8081"
     depends_on:
       postgres:
@@ -25,6 +26,8 @@ services:
         condition: service_healthy
       kafka:
         condition: service_healthy
+      jaeger:
+        condition: service_started
     labels:
       # Лейблы для Promtail — он по ним группирует логи в Loki
       logging: "promtail"
@@ -46,6 +49,7 @@ services:
       KAFKA_GROUP_ID: "price-tracker"
       SCRAPER_RATE_LIMIT_RPS: "5"
       SCRAPER_HEALTH_PORT: "8090"
+      OTLP_ENDPOINT: "jaeger:4317"
     depends_on:
       postgres:
         condition: service_healthy
@@ -53,6 +57,8 @@ services:
         condition: service_healthy
       kafka:
         condition: service_healthy
+      jaeger:
+        condition: service_started
     labels:
       logging: "promtail"
       service: "scraper"
@@ -73,6 +79,7 @@ services:
       KAFKA_GROUP_ID: "price-tracker"
       TELEGRAM_BOT_TOKEN: "${TELEGRAM_BOT_TOKEN}"
       NOTIFIER_HEALTH_PORT: "8091"
+      OTLP_ENDPOINT: "jaeger:4317"
     depends_on:
       postgres:
         condition: service_healthy
@@ -80,6 +87,8 @@ services:
         condition: service_healthy
       kafka:
         condition: service_healthy
+      jaeger:
+        condition: service_started
     labels:
       logging: "promtail"
       service: "notifier"
@@ -219,6 +228,36 @@ services:
       kafka:
         condition: service_healthy
 
+  alertmanager:
+    image: prom/alertmanager:v0.27.0
+    container_name: pt_alertmanager
+    ports:
+      - "9093:9093"
+    volumes:
+      - ./monitoring/alertmanager:/config:ro
+      - alertmanager_data:/alertmanager
+    environment:
+      TELEGRAM_ALERT_BOT_TOKEN: "${TELEGRAM_ALERT_BOT_TOKEN}"
+      TELEGRAM_ALERT_CHAT_ID: "${TELEGRAM_ALERT_CHAT_ID}"
+    user: root
+    entrypoint: [ "/bin/sh", "/config/entrypoint.sh" ]
+
+
+  jaeger:
+    image: jaegertracing/all-in-one:latest
+    container_name: pt_jaeger
+    ports:
+      - "16686:16686"  # UI
+      - "4317:4317"    # OTLP gRPC (куда сервисы шлют спаны)
+    environment:
+      COLLECTOR_OTLP_ENABLED: "true"
+      # Хранение в памяти — для пет-проекта норм
+      SPAN_STORAGE_TYPE: "memory"
+      # Лимит спанов в памяти, дальше старые вытесняются
+      MEMORY_MAX_TRACES: "50000"
+
+
+
 #  node-exporter:
 #    image: prom/node-exporter:v1.8.2
 #    container_name: pt_node_exporter
@@ -234,3 +273,5 @@ volumes:
   pgdata:
   prometheus_data:
   loki_data:
+  alertmanager_data:
+  grafana_data:

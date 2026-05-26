@@ -10,6 +10,7 @@ import (
 	"strconv"
 	"strings"
 	"syscall"
+	"time"
 
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/joho/godotenv"
@@ -24,6 +25,7 @@ import (
 	"gitlab.com/KosovAndrey/tryberrybot/internal/repository/postgres"
 	redisrepo "gitlab.com/KosovAndrey/tryberrybot/internal/repository/redis"
 	"gitlab.com/KosovAndrey/tryberrybot/internal/scraper"
+	"gitlab.com/KosovAndrey/tryberrybot/internal/tracing"
 )
 
 func main() {
@@ -47,6 +49,7 @@ func run(log *slog.Logger) error {
 	redisURL := mustEnv("REDIS_URL")
 	kafkaBrokers := strings.Split(mustEnv("KAFKA_BROKERS"), ",")
 	kafkaGroupID := mustEnv("KAFKA_GROUP_ID")
+	otlpEndpoint := getEnv("OTLP_ENDPOINT", "jaeger:4317")
 	rpsStrWB := getEnv("SCRAPER_RATE_LIMIT_RPS_WB", "5")
 	rpsStrYandex := getEnv("SCRAPER_RATE_LIMIT_RPS_YANDEX", "2")
 	rpsWB, err := strconv.ParseFloat(rpsStrWB, 64)
@@ -59,6 +62,19 @@ func run(log *slog.Logger) error {
 	}
 
 	// ── Подключения ──────────────────────────────────────────────────────────
+
+	shutdownTracing, err := tracing.Init(ctx, "scraper", otlpEndpoint)
+	if err != nil {
+		log.Warn("tracing init failed, continuing without", "err", err)
+	} else {
+		defer func() {
+			shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer cancel()
+			shutdownTracing(shutdownCtx)
+		}()
+		log.Info("tracing initialized", "endpoint", otlpEndpoint)
+	}
+
 	pool, err := db.NewPostgresPool(ctx, databaseURL)
 	if err != nil {
 		return fmt.Errorf("postgres: %w", err)

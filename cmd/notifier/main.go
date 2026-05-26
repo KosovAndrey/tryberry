@@ -9,6 +9,7 @@ import (
 	"os/signal"
 	"strings"
 	"syscall"
+	"time"
 
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/joho/godotenv"
@@ -16,6 +17,7 @@ import (
 	"github.com/redis/go-redis/v9"
 	"gitlab.com/KosovAndrey/tryberrybot/internal/health"
 	"gitlab.com/KosovAndrey/tryberrybot/internal/metrics"
+	"gitlab.com/KosovAndrey/tryberrybot/internal/tracing"
 
 	"gitlab.com/KosovAndrey/tryberrybot/internal/db"
 	"gitlab.com/KosovAndrey/tryberrybot/internal/domain"
@@ -48,8 +50,21 @@ func run(log *slog.Logger) error {
 	kafkaBrokers := strings.Split(mustEnv("KAFKA_BROKERS"), ",")
 	kafkaGroupID := mustEnv("KAFKA_GROUP_ID")
 	botToken := mustEnv("TELEGRAM_BOT_TOKEN")
+	otlpEndpoint := mustEnv("OTLP_ENDPOINT")
 
 	// ── Подключения ──────────────────────────────────────────────────────────
+	shutdownTracing, err := tracing.Init(ctx, "notifier", otlpEndpoint)
+	if err != nil {
+		log.Warn("tracing init failed, continuing without", "err", err)
+	} else {
+		defer func() {
+			shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer cancel()
+			shutdownTracing(shutdownCtx)
+		}()
+		log.Info("tracing initialized", "endpoint", otlpEndpoint)
+	}
+
 	pool, err := db.NewPostgresPool(ctx, databaseURL)
 	if err != nil {
 		return fmt.Errorf("postgres: %w", err)

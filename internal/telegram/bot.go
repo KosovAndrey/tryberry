@@ -9,6 +9,10 @@ import (
 	"strings"
 
 	tgbotapi "github.com/go-telegram-bot-api/telegram-bot-api/v5"
+	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/codes"
+	"go.opentelemetry.io/otel/trace"
 
 	"gitlab.com/KosovAndrey/tryberrybot/internal/domain"
 	"gitlab.com/KosovAndrey/tryberrybot/internal/metrics"
@@ -312,10 +316,24 @@ func (b *Bot) handleUntrack(ctx context.Context, msg *tgbotapi.Message) {
 // ── doTrack — основная логика добавления товара ───────────────────────────────
 
 func (b *Bot) doTrack(ctx context.Context, chatID int64, rawURL string, user *domain.User) {
+	tracer := otel.Tracer("bot")
+	ctx, span := tracer.Start(ctx, "bot.handleTrack",
+		trace.WithAttributes(
+			attribute.String("url", rawURL),
+			attribute.Int64("user.id", user.ID),
+			attribute.Int64("chat.id", chatID),
+		),
+	)
+	defer span.End()
+
 	// Находим подходящий скрейпер
 	s, err := b.registry.FindByURL(rawURL)
 	if err != nil {
+		span.RecordError(err)
+		span.SetStatus(codes.Error, "no scraper matches URL")
+		span.SetStatus(codes.Error, err.Error())
 		metrics.TrackCommands.WithLabelValues("error").Inc()
+		// ... остальной код без изменений
 		supported := b.registry.SupportedMarketplaces()
 		b.reply(chatID, fmt.Sprintf(
 			"Не могу распознать ссылку.\n\nПоддерживаемые маркетплейсы: %v\n\n"+
@@ -325,12 +343,17 @@ func (b *Bot) doTrack(ctx context.Context, chatID int64, rawURL string, user *do
 		return
 	}
 
+	span.SetAttributes(attribute.String("marketplace", string(s.Marketplace())))
+
 	wait := tgbotapi.NewMessage(chatID, "⏳ Получаю данные о товаре...")
 	wait.ParseMode = "HTML"
 	sent, _ := b.api.Send(wait)
 
 	result, err := s.Scrape(ctx, rawURL)
 	if err != nil {
+		span.RecordError(err)
+		span.SetStatus(codes.Error, "scrape failed")
+		span.SetStatus(codes.Error, err.Error())
 		metrics.TrackCommands.WithLabelValues("error").Inc()
 		b.log.Error("scrape on track", "url", rawURL, "marketplace", s.Marketplace(), "err", err)
 
@@ -345,8 +368,16 @@ func (b *Bot) doTrack(ctx context.Context, chatID int64, rawURL string, user *do
 		return
 	}
 
+	span.SetAttributes(
+		attribute.String("product.name", result.Name),
+		attribute.Float64("product.price", result.Price),
+	)
+
 	product, err := b.prodRepo.Upsert(ctx, rawURL, result.Name, result.ImageURL, string(s.Marketplace()))
 	if err != nil {
+		span.RecordError(err)
+		span.SetStatus(codes.Error, "upsert product failed")
+		span.SetStatus(codes.Error, err.Error())
 		metrics.TrackCommands.WithLabelValues("error").Inc()
 		b.log.Error("upsert product", "err", err)
 		b.reply(chatID, "Произошла ошибка, попробуй позже.")
@@ -355,12 +386,18 @@ func (b *Bot) doTrack(ctx context.Context, chatID int64, rawURL string, user *do
 
 	_, created, err := b.subRepo.Upsert(ctx, user.ID, product.ID, result.Price)
 	if err != nil {
+		span.RecordError(err)
+		span.SetStatus(codes.Error, "upsert subscription failed")
+		span.SetStatus(codes.Error, err.Error())
 		metrics.TrackCommands.WithLabelValues("error").Inc()
 		b.log.Error("upsert subscription", "err", err)
 		b.reply(chatID, "Произошла ошибка, попробуй позже.")
 		return
 	}
 
+	span.SetAttributes(attribute.Bool("subscription.created", created))
+
+	// ... остальной код responseText без изменений
 	var responseText string
 	if created {
 		metrics.TrackCommands.WithLabelValues("success").Inc()
