@@ -4,12 +4,18 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"net/http"
 	"os"
 	"os/signal"
 	"strings"
 	"syscall"
 
+	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/joho/godotenv"
+	"github.com/prometheus/client_golang/prometheus/promhttp"
+	"github.com/redis/go-redis/v9"
+	"gitlab.com/KosovAndrey/tryberrybot/internal/health"
+	"gitlab.com/KosovAndrey/tryberrybot/internal/metrics"
 
 	"gitlab.com/KosovAndrey/tryberrybot/internal/db"
 	"gitlab.com/KosovAndrey/tryberrybot/internal/domain"
@@ -55,6 +61,8 @@ func run(log *slog.Logger) error {
 		log.Warn("redis unavailable, running without cache", "err", err)
 		redisClient = nil
 	}
+
+	go runHealthServer(ctx, log, pool, redisClient, "8091")
 
 	// ── Репозитории ──────────────────────────────────────────────────────────
 	subRepo := postgres.NewSubscriptionRepo(pool)
@@ -165,7 +173,7 @@ func makeHandler(
 			}); err != nil {
 				return fmt.Errorf("insert notification: %w", err)
 			}
-
+			metrics.NotificationsSent.WithLabelValues(event.Marketplace).Inc()
 			log.Info("notification sent",
 				"subscription_id", sub.ID,
 				"user_id", sub.UserID,
@@ -175,6 +183,26 @@ func makeHandler(
 		}
 
 		return nil
+	}
+}
+
+func runHealthServer(ctx context.Context, log *slog.Logger, pool *pgxpool.Pool, redisClient *redis.Client, port string) {
+	healthChecker := health.New(pool, redisClient)
+	mux := http.NewServeMux()
+	mux.HandleFunc("/health", healthChecker.Handler())
+	mux.HandleFunc("/live", health.LivenessHandler())
+	mux.Handle("/metrics", promhttp.Handler())
+
+	srv := &http.Server{Addr: ":" + port, Handler: mux}
+
+	go func() {
+		<-ctx.Done()
+		srv.Shutdown(context.Background())
+	}()
+
+	log.Info("health server started", "port", port)
+	if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+		log.Error("health server", "err", err)
 	}
 }
 

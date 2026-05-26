@@ -1,6 +1,89 @@
-version: '3.9'
-
 services:
+
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      args:
+        SERVICE: api
+    container_name: pt_api
+    ports:
+      - "8081:8081"
+    environment:
+      DATABASE_URL: "postgres://user:password@postgres:5432/tryberrybot?sslmode=disable"
+      REDIS_URL: "redis://redis:6379"
+      KAFKA_BROKERS: "kafka:29092"
+      KAFKA_GROUP_ID: "price-tracker"
+      TELEGRAM_BOT_TOKEN: "${TELEGRAM_BOT_TOKEN}"
+      TELEGRAM_WEBHOOK_URL: "${TELEGRAM_WEBHOOK_URL}"
+      WEBHOOK_ENABLED: "${WEBHOOK_ENABLED:-false}"
+      PORT: "8081"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      kafka:
+        condition: service_healthy
+    labels:
+      # Лейблы для Promtail — он по ним группирует логи в Loki
+      logging: "promtail"
+      service: "api"
+
+  scraper:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      args:
+        SERVICE: scraper
+    container_name: pt_scraper
+    ports:
+      - "8090:8090"
+    environment:
+      DATABASE_URL: "postgres://user:password@postgres:5432/tryberrybot?sslmode=disable"
+      REDIS_URL: "redis://redis:6379"
+      KAFKA_BROKERS: "kafka:29092"
+      KAFKA_GROUP_ID: "price-tracker"
+      SCRAPER_RATE_LIMIT_RPS: "5"
+      SCRAPER_HEALTH_PORT: "8090"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      kafka:
+        condition: service_healthy
+    labels:
+      logging: "promtail"
+      service: "scraper"
+
+  notifier:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      args:
+        SERVICE: notifier
+    container_name: pt_notifier
+    ports:
+      - "8091:8091"
+    environment:
+      DATABASE_URL: "postgres://user:password@postgres:5432/tryberrybot?sslmode=disable"
+      REDIS_URL: "redis://redis:6379"
+      KAFKA_BROKERS: "kafka:29092"
+      KAFKA_GROUP_ID: "price-tracker"
+      TELEGRAM_BOT_TOKEN: "${TELEGRAM_BOT_TOKEN}"
+      NOTIFIER_HEALTH_PORT: "8091"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      kafka:
+        condition: service_healthy
+    labels:
+      logging: "promtail"
+      service: "notifier"
+
   postgres:
     image: postgres:16
     container_name: pt_postgres
@@ -45,7 +128,12 @@ services:
     environment:
       KAFKA_BROKER_ID: 1
       KAFKA_ZOOKEEPER_CONNECT: zookeeper:2181
-      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://localhost:9092
+      # ВНУТРЕННИЙ listener для общения между контейнерами (kafka-exporter, etc)
+      # ВНЕШНИЙ listener для подключения с хоста (наши Go-сервисы)
+      KAFKA_LISTENERS: INTERNAL://0.0.0.0:29092,EXTERNAL://0.0.0.0:9092
+      KAFKA_ADVERTISED_LISTENERS: INTERNAL://kafka:29092,EXTERNAL://localhost:9092
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: INTERNAL:PLAINTEXT,EXTERNAL:PLAINTEXT
+      KAFKA_INTER_BROKER_LISTENER_NAME: INTERNAL
       KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
       KAFKA_AUTO_CREATE_TOPICS_ENABLE: "true"
       KAFKA_NUM_PARTITIONS: 10
@@ -56,5 +144,93 @@ services:
       retries: 15
       start_period: 30s
 
+  # ── Observability ─────────────────────────────────────────────────────────
+
+  prometheus:
+    image: prom/prometheus:v2.54.1
+    container_name: pt_prometheus
+    ports:
+      - "9090:9090"
+    volumes:
+      - ./monitoring/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - ./monitoring/prometheus/rules:/etc/prometheus/rules:ro
+      - prometheus_data:/prometheus
+    command:
+      - '--config.file=/etc/prometheus/prometheus.yml'
+      - '--storage.tsdb.path=/prometheus'
+      - '--storage.tsdb.retention.time=14d'
+      - '--web.enable-lifecycle'  # позволяет reload конфига без рестарта
+    # Linux — нужен extra_hosts чтобы достучаться до хоста
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+
+  loki:
+    image: grafana/loki:3.2.0
+    container_name: pt_loki
+    ports:
+      - "3100:3100"
+    volumes:
+      - ./monitoring/loki/loki-config.yml:/etc/loki/loki-config.yml:ro
+      - loki_data:/loki
+    command:
+      - '-config.file=/etc/loki/loki-config.yml'
+
+  promtail:
+    image: grafana/promtail:3.2.0
+    container_name: pt_promtail
+    volumes:
+      - ./monitoring/promtail/promtail-config.yml:/etc/promtail/config.yml:ro
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+    command:
+      - '-config.file=/etc/promtail/config.yml'
+    depends_on:
+      - loki
+
+  postgres-exporter:
+    image: prometheuscommunity/postgres-exporter:v0.15.0
+    container_name: pt_postgres_exporter
+    ports:
+      - "9187:9187"
+    environment:
+      DATA_SOURCE_NAME: "postgresql://user:password@postgres:5432/tryberrybot?sslmode=disable"
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  redis-exporter:
+    image: oliver006/redis_exporter:v1.62.0
+    container_name: pt_redis_exporter
+    ports:
+      - "9121:9121"
+    environment:
+      REDIS_ADDR: "redis://redis:6379"
+    depends_on:
+      redis:
+        condition: service_healthy
+
+  kafka-exporter:
+    image: danielqsj/kafka-exporter:v1.7.0
+    container_name: pt_kafka_exporter
+    ports:
+      - "9308:9308"
+    command:
+      - '--kafka.server=kafka:29092'
+    depends_on:
+      kafka:
+        condition: service_healthy
+
+#  node-exporter:
+#    image: prom/node-exporter:v1.8.2
+#    container_name: pt_node_exporter
+#    ports:
+#      - "9100:9100"
+#    command:
+#      - '--path.rootfs=/host'
+#    volumes:
+#      - /:/host:ro,rslave
+#    pid: host
+
 volumes:
   pgdata:
+  prometheus_data:
+  loki_data:
