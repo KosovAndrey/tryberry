@@ -15,3 +15,6 @@ Dockerfile*
 .golangci.yml
 Makefile
 *.log
+# Production runtime — не должно попадать в build context
+nginx/certbot/
+nginx/.htpasswd

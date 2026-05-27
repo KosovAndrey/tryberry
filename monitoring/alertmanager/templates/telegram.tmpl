@@ -13,6 +13,15 @@
 {{ end }}<b>Started:</b> {{ .StartsAt.Format "15:04:05 02-Jan" }}
 {{ if eq .Status "resolved" }}<b>Resolved:</b> {{ .EndsAt.Format "15:04:05 02-Jan" }}
 {{ end }}
-🔗 <a href="http://localhost:3000/d/tryberrybot">Открыть Grafana</a>
+{{/* ── Маршрутизация на нужный дашборд по типу алерта ─────────────────── */}}
+{{- if eq .Labels.service "scraper" -}}
+🔗 <a href="https://grafana.tryberry.ru/d/tryberrybot-scraping?{{ if .Labels.marketplace }}var-marketplace={{ .Labels.marketplace }}&{{ end }}from=now-1h&to=now">Grafana → Scraping</a>
+{{- else if or (eq .Labels.service "postgres") (eq .Labels.service "redis") (eq .Labels.service "kafka") (eq .Labels.alertname "ServiceDown") (eq .Labels.alertname "HighKafkaConsumerLag") (eq .Labels.alertname "CriticalKafkaConsumerLag") -}}
+🔗 <a href="https://grafana.tryberry.ru/d/tryberrybot-infra?from=now-1h&to=now">Grafana → Infrastructure</a>
+{{- else if or (eq .Labels.alertname "NoNotificationsButSubscriptionsExist") (eq .Labels.service "notifier") (eq .Labels.service "api") -}}
+🔗 <a href="https://grafana.tryberry.ru/d/tryberrybot-business?from=now-6h&to=now">Grafana → Business</a>
+{{- else -}}
+🔗 <a href="https://grafana.tryberry.ru/d/tryberrybot-infra?from=now-1h&to=now">Grafana</a>
+{{- end }}
 {{ end }}
 {{ end }}

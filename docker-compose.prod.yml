@@ -1,0 +1,120 @@
+# ────────────────────────────────────────────────────────────────────────────
+# docker-compose.prod.yml
+#
+# Production overlay поверх основного docker-compose.yml.
+# Запуск:
+#   docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d
+#
+# Что делает:
+#   1. Добавляет nginx (reverse proxy + TLS) и certbot (Let's Encrypt)
+#   2. Добавляет node-exporter для метрик хоста (CPU, RAM, disk)
+#   3. Закрывает публичные ports у служебных сервисов
+#   4. Включает webhook-режим у API, отключает анонимный доступ к Grafana
+# ────────────────────────────────────────────────────────────────────────────
+
+services:
+
+  # ── Reverse proxy + TLS ────────────────────────────────────────────────
+  nginx:
+    image: nginx:1.27-alpine
+    container_name: tryberry_nginx
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./nginx/nginx.conf:/etc/nginx/nginx.conf:ro
+      - ./nginx/conf.d:/etc/nginx/conf.d:ro
+      - ./nginx/html:/usr/share/nginx/html:ro
+      - ./nginx/.htpasswd:/etc/nginx/.htpasswd:ro
+      - ./nginx/certbot/conf:/etc/letsencrypt:ro
+      - ./nginx/certbot/www:/var/www/certbot:ro
+      - nginx_logs:/var/log/nginx
+    depends_on:
+      - api
+      - grafana
+    # Reload каждые 6 часов — подхватить обновлённые сертификаты certbot
+    command: >
+      /bin/sh -c "while :; do sleep 6h & wait $${!}; nginx -s reload; done
+      & nginx -g 'daemon off;'"
+    labels:
+      logging: "promtail"
+      service: "nginx"
+
+  # ── Let's Encrypt автоматическое обновление ─────────────────────────────
+  certbot:
+    image: certbot/certbot:v2.11.0
+    container_name: tryberry_certbot
+    restart: unless-stopped
+    volumes:
+      - ./nginx/certbot/conf:/etc/letsencrypt
+      - ./nginx/certbot/www:/var/www/certbot
+    entrypoint: /bin/sh -c "trap exit TERM;
+      while :; do certbot renew --webroot -w /var/www/certbot --quiet;
+      sleep 12h & wait $${!}; done"
+
+  # ── Метрики хоста ──────────────────────────────────────────────────────
+  node-exporter:
+    image: prom/node-exporter:v1.8.2
+    container_name: pt_node_exporter
+    restart: unless-stopped
+    command:
+      - '--path.rootfs=/host'
+    volumes:
+      - /:/host:ro,rslave
+    pid: host
+    # Порт НЕ публикуем — Prometheus сходит через docker network
+
+  # ── Базовые сервисы: закрываем публичные порты ──────────────────────────
+  api:
+    ports: !reset []
+    environment:
+      WEBHOOK_ENABLED: "true"
+      TELEGRAM_WEBHOOK_URL: "https://tryberry.ru/webhook"
+
+  scraper:
+    ports: !reset []
+
+  notifier:
+    ports: !reset []
+
+  grafana:
+    ports: !reset []
+    environment:
+      GF_SECURITY_ADMIN_PASSWORD: "${GRAFANA_ADMIN_PASSWORD:?GRAFANA_ADMIN_PASSWORD must be set in .env}"
+      GF_AUTH_ANONYMOUS_ENABLED: "false"
+      GF_SERVER_ROOT_URL: "https://grafana.tryberry.ru"
+      GF_SERVER_SERVE_FROM_SUB_PATH: "false"
+      GF_USERS_ALLOW_SIGN_UP: "false"
+      GF_SECURITY_COOKIE_SECURE: "true"
+      GF_SECURITY_COOKIE_SAMESITE: "lax"
+
+  prometheus:
+    ports: !reset []
+
+  alertmanager:
+    ports: !reset []
+
+  jaeger:
+    ports: !reset []
+
+  loki:
+    ports: !reset []
+
+  promtail:
+    ports: !reset []
+
+  postgres:
+    ports: !reset []
+
+  redis:
+    ports: !reset []
+
+  kafka:
+    ports: !reset []
+
+  zookeeper:
+    ports: !reset []
+
+volumes:
+  nginx_logs:

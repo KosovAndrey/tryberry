@@ -1,0 +1,383 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>TryBerry — следим за ценами на маркетплейсах</title>
+<meta name="description" content="Telegram-бот, который следит за ценами на Wildberries и Яндекс.Маркете и пишет, когда цена падает.">
+
+<!-- Favicon: ягода SVG -->
+<link rel="icon" type="image/svg+xml" href='data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100"><circle cx="38" cy="40" r="14" fill="%23C73E5C"/><circle cx="62" cy="40" r="14" fill="%23C73E5C"/><circle cx="50" cy="64" r="18" fill="%23A02545"/><path d="M50 10q6-8 14-4q-6 10-14 12z" fill="%232D5F3F"/></svg>'>
+
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Fraunces:ital,opsz,wght@0,9..144,300;0,9..144,500;0,9..144,700;1,9..144,500&family=Manrope:wght@400;500;600&display=swap" rel="stylesheet">
+
+<style>
+  /* ── Палитра D: Лес и клюква ─────────────────────────────────────── */
+  :root {
+    --bg:       #F4F6F2;
+    --paper:    #FFFFFF;
+    --sage:     #8AB87A;
+    --sage-soft:#E8F0E0;
+    --forest:   #2D5F3F;
+    --forest-deep: #1C2A1F;
+    --cranberry:#C73E5C;
+    --cranberry-deep: #A02545;
+    --ink:      #1C2A1F;
+    --muted:    #5F7062;
+  }
+
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+
+  html { -webkit-text-size-adjust: 100%; }
+
+  body {
+    font-family: 'Manrope', system-ui, -apple-system, sans-serif;
+    background: var(--bg);
+    color: var(--ink);
+    line-height: 1.6;
+    min-height: 100vh;
+    overflow-x: hidden;
+    /* Тонкая бумажная текстура: SVG-шум */
+    background-image:
+      radial-gradient(circle at 15% 10%, var(--sage-soft) 0%, transparent 28%),
+      radial-gradient(circle at 88% 78%, rgba(199,62,92,0.05) 0%, transparent 32%);
+  }
+
+  /* Зерно поверх — лёгкая текстура бумаги */
+  body::before {
+    content: '';
+    position: fixed;
+    inset: 0;
+    pointer-events: none;
+    opacity: 0.4;
+    z-index: 0;
+    background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='200' height='200'><filter id='n'><feTurbulence type='fractalNoise' baseFrequency='0.85' numOctaves='2' stitchTiles='stitch'/><feColorMatrix values='0 0 0 0 0.1 0 0 0 0 0.15 0 0 0 0 0.1 0 0 0 0.06 0'/></filter><rect width='100%' height='100%' filter='url(%23n)'/></svg>");
+  }
+
+  /* ── Layout ──────────────────────────────────────────────────────── */
+  .page {
+    position: relative;
+    z-index: 1;
+    max-width: 960px;
+    margin: 0 auto;
+    padding: 28px 24px 80px;
+    min-height: 100vh;
+    display: flex;
+    flex-direction: column;
+  }
+
+  header.top {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    margin-bottom: 80px;
+  }
+
+  .brand {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    font-family: 'Fraunces', serif;
+    font-weight: 500;
+    font-size: 20px;
+    letter-spacing: -0.01em;
+    color: var(--forest-deep);
+  }
+
+  .brand svg { width: 28px; height: 28px; }
+
+  .status {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 13px;
+    color: var(--forest);
+    background: var(--sage-soft);
+    padding: 5px 12px;
+    border-radius: 999px;
+    font-weight: 500;
+  }
+
+  .status .dot {
+    width: 7px; height: 7px;
+    border-radius: 50%;
+    background: var(--sage);
+    box-shadow: 0 0 0 4px rgba(138,184,122,0.25);
+    animation: pulse 2.4s ease-in-out infinite;
+  }
+
+  @keyframes pulse {
+    0%, 100% { opacity: 1; }
+    50%      { opacity: 0.5; }
+  }
+
+  /* ── Hero ────────────────────────────────────────────────────────── */
+  .hero {
+    display: grid;
+    grid-template-columns: 1fr;
+    gap: 56px;
+    align-items: center;
+    flex: 1;
+  }
+
+  @media (min-width: 760px) {
+    .hero {
+      grid-template-columns: 1.1fr 0.9fr;
+      gap: 64px;
+    }
+  }
+
+  h1 {
+    font-family: 'Fraunces', serif;
+    font-weight: 300;
+    font-size: clamp(54px, 9vw, 104px);
+    line-height: 0.95;
+    letter-spacing: -0.035em;
+    color: var(--forest-deep);
+    margin-bottom: 28px;
+    font-variation-settings: "opsz" 144, "SOFT" 50;
+  }
+
+  h1 .berry {
+    font-style: italic;
+    font-weight: 500;
+    color: var(--cranberry);
+    font-variation-settings: "opsz" 144, "SOFT" 80, "WONK" 1;
+  }
+
+  .lead {
+    font-size: clamp(17px, 2vw, 20px);
+    color: var(--muted);
+    max-width: 460px;
+    margin-bottom: 36px;
+    line-height: 1.55;
+  }
+
+  .lead strong {
+    color: var(--forest-deep);
+    font-weight: 600;
+  }
+
+  .cta {
+    display: inline-flex;
+    align-items: center;
+    gap: 10px;
+    background: var(--forest-deep);
+    color: var(--bg);
+    padding: 16px 28px;
+    border-radius: 14px;
+    text-decoration: none;
+    font-weight: 600;
+    font-size: 16px;
+    transition: transform 0.18s ease, background 0.18s ease, box-shadow 0.18s ease;
+    box-shadow: 0 1px 0 rgba(0,0,0,0.04), 0 8px 24px -10px rgba(28,42,31,0.4);
+  }
+
+  .cta:hover {
+    background: var(--cranberry-deep);
+    transform: translateY(-1px);
+    box-shadow: 0 1px 0 rgba(0,0,0,0.04), 0 12px 28px -10px rgba(160,37,69,0.55);
+  }
+
+  .cta .arrow {
+    transition: transform 0.18s ease;
+  }
+
+  .cta:hover .arrow { transform: translateX(3px); }
+
+  /* ── Illustration (big berry) ────────────────────────────────────── */
+  .illustration {
+    position: relative;
+    aspect-ratio: 1 / 1;
+    max-width: 420px;
+    margin: 0 auto;
+    width: 100%;
+  }
+
+  .illustration svg {
+    width: 100%;
+    height: 100%;
+    filter: drop-shadow(0 14px 28px rgba(160, 37, 69, 0.15));
+  }
+
+  /* Лёгкое покачивание грозди */
+  .illustration svg {
+    animation: sway 7s ease-in-out infinite;
+    transform-origin: 50% 8%;
+  }
+
+  @keyframes sway {
+    0%, 100% { transform: rotate(-2deg); }
+    50%      { transform: rotate(2deg); }
+  }
+
+  /* ── Features ────────────────────────────────────────────────────── */
+  .features {
+    margin-top: 100px;
+    display: grid;
+    grid-template-columns: 1fr;
+    gap: 18px;
+  }
+
+  @media (min-width: 720px) {
+    .features { grid-template-columns: repeat(3, 1fr); gap: 22px; }
+  }
+
+  .feat {
+    background: var(--paper);
+    border: 1px solid rgba(45,95,63,0.08);
+    border-radius: 18px;
+    padding: 26px 24px 28px;
+    position: relative;
+  }
+
+  .feat::before {
+    content: '';
+    position: absolute;
+    top: 26px; left: 24px;
+    width: 28px; height: 2px;
+    background: var(--cranberry);
+    border-radius: 2px;
+  }
+
+  .feat h3 {
+    font-family: 'Fraunces', serif;
+    font-weight: 500;
+    font-size: 22px;
+    color: var(--forest-deep);
+    margin: 24px 0 8px;
+    letter-spacing: -0.01em;
+  }
+
+  .feat p {
+    font-size: 14.5px;
+    color: var(--muted);
+    line-height: 1.55;
+  }
+
+  /* ── Footer ──────────────────────────────────────────────────────── */
+  footer {
+    margin-top: 80px;
+    padding-top: 28px;
+    border-top: 1px solid rgba(45,95,63,0.1);
+    display: flex;
+    flex-wrap: wrap;
+    gap: 16px;
+    justify-content: space-between;
+    color: var(--muted);
+    font-size: 13px;
+  }
+
+  footer a {
+    color: var(--forest);
+    text-decoration: none;
+    border-bottom: 1px solid rgba(45,95,63,0.25);
+    padding-bottom: 1px;
+    transition: border-color 0.15s;
+  }
+
+  footer a:hover {
+    border-bottom-color: var(--cranberry);
+  }
+</style>
+</head>
+
+<body>
+<div class="page">
+
+  <header class="top">
+    <div class="brand">
+      <svg viewBox="0 0 100 100" aria-hidden="true">
+        <path d="M50 12 Q58 4 68 8 Q60 22 50 24 Z" fill="#2D5F3F"/>
+        <circle cx="38" cy="40" r="13" fill="#C73E5C"/>
+        <circle cx="62" cy="40" r="13" fill="#C73E5C"/>
+        <circle cx="50" cy="64" r="17" fill="#A02545"/>
+      </svg>
+      <span>TryBerry</span>
+    </div>
+
+    <div class="status" title="Бот в сети">
+      <span class="dot"></span>
+      онлайн
+    </div>
+  </header>
+
+  <section class="hero">
+    <div>
+      <h1>
+        Цены<br>
+        падают &mdash; <span class="berry">мы&nbsp;знаем</span>
+      </h1>
+
+      <p class="lead">
+        Telegram-бот, который следит за товарами на&nbsp;<strong>Wildberries</strong> и&nbsp;<strong>Яндекс.Маркете</strong>
+        и пишет, как только цена снизится.
+      </p>
+
+      <a class="cta" href="https://t.me/tryberrybot" rel="noopener">
+        Открыть в Telegram
+        <span class="arrow" aria-hidden="true">→</span>
+      </a>
+    </div>
+
+    <div class="illustration" aria-hidden="true">
+      <svg viewBox="0 0 200 220" xmlns="http://www.w3.org/2000/svg">
+        <!-- Веточка -->
+        <path d="M100 6 L100 50" stroke="#2D5F3F" stroke-width="2.5" stroke-linecap="round" fill="none"/>
+
+        <!-- Большой лист -->
+        <path d="M100 14 Q128 -4 152 12 Q146 38 122 44 Q104 42 100 32 Z"
+              fill="#2D5F3F"/>
+        <path d="M100 22 Q120 18 144 18" stroke="#1C2A1F" stroke-width="1" fill="none" opacity="0.35"/>
+
+        <!-- Малый лист с другой стороны -->
+        <path d="M100 28 Q78 24 64 38 Q72 50 92 50 Q100 46 100 38 Z"
+              fill="#8AB87A"/>
+
+        <!-- Гроздь ягод -->
+        <g>
+          <circle cx="72"  cy="80"  r="22" fill="#C73E5C"/>
+          <circle cx="120" cy="78"  r="22" fill="#C73E5C"/>
+          <circle cx="60"  cy="120" r="24" fill="#A02545"/>
+          <circle cx="100" cy="128" r="28" fill="#C73E5C"/>
+          <circle cx="140" cy="122" r="22" fill="#A02545"/>
+          <circle cx="82"  cy="166" r="22" fill="#A02545"/>
+          <circle cx="124" cy="170" r="20" fill="#C73E5C"/>
+
+          <!-- Блики -->
+          <ellipse cx="66"  cy="72"  rx="5" ry="3.5" fill="#FF8FA8" opacity="0.7"/>
+          <ellipse cx="114" cy="70"  rx="5" ry="3.5" fill="#FF8FA8" opacity="0.7"/>
+          <ellipse cx="93"  cy="118" rx="6" ry="4"   fill="#FF8FA8" opacity="0.65"/>
+          <ellipse cx="76"  cy="158" rx="4" ry="3"   fill="#FF8FA8" opacity="0.55"/>
+        </g>
+      </svg>
+    </div>
+  </section>
+
+  <section class="features">
+    <div class="feat">
+      <h3>Просто кинь&nbsp;ссылку</h3>
+      <p>Вставь URL товара в чат — бот сам разберёт карточку и начнёт следить за&nbsp;ценой.</p>
+    </div>
+
+    <div class="feat">
+      <h3>Узнаешь первым</h3>
+      <p>Когда цена опускается ниже базовой, приходит уведомление с фото и&nbsp;кнопками «отменить» / «продолжить».</p>
+    </div>
+
+    <div class="feat">
+      <h3>Несколько площадок</h3>
+      <p>Wildberries и&nbsp;Яндекс.Маркет — в одном месте, в&nbsp;одном&nbsp;Telegram-чате.</p>
+    </div>
+  </section>
+
+  <footer>
+    <span>© 2026 TryBerry</span>
+    <span>Контакт: <a href="https://t.me/kosov_andrey">@kosov_andrey</a></span>
+  </footer>
+
+</div>
+</body>
+</html>

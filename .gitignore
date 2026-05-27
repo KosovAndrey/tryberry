@@ -24,3 +24,6 @@ Thumbs.db
 
 
 monitoring/alertmanager/alertmanager.yml
+# Production runtime — секреты и сертификаты, НЕ коммитить
+nginx/.htpasswd
+nginx/certbot/
