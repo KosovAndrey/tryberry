@@ -67,15 +67,18 @@ services:
 
   # ── Базовые сервисы: закрываем публичные порты ──────────────────────────
   api:
+    restart: unless-stopped
     ports: !reset []
     environment:
       WEBHOOK_ENABLED: "true"
       TELEGRAM_WEBHOOK_URL: "https://tryberry.ru/webhook"
 
   scraper:
+    restart: unless-stopped
     ports: !reset []
 
   notifier:
+    restart: unless-stopped
     ports: !reset []
 
   grafana:

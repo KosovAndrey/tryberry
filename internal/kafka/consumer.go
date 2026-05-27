@@ -42,12 +42,44 @@ func NewConsumer(brokers []string, topic, groupID string) *Consumer {
 	}
 }
 
+// Параметры экспоненциального backoff'а для transient ошибок Kafka.
+// Срабатывает при leader election, перезапуске координатора, временных сетевых
+// проблемах. Backoff удваивается до maxBackoff, затем держит максимум.
+const (
+	minBackoff = 1 * time.Second
+	maxBackoff = 30 * time.Second
+)
+
+// nextBackoff удваивает текущую паузу с capper на maxBackoff.
+func nextBackoff(current time.Duration) time.Duration {
+	next := current * 2
+	if next > maxBackoff {
+		return maxBackoff
+	}
+	return next
+}
+
+// sleepWithCtx ждёт d или отмену контекста — что наступит раньше.
+// Возвращает true если контекст отменён (пора выходить).
+func sleepWithCtx(ctx context.Context, d time.Duration) bool {
+	select {
+	case <-ctx.Done():
+		return true
+	case <-time.After(d):
+		return false
+	}
+}
+
 // Run — читает сообщения и вызывает handler. Коммитит offset только после
 // успешной обработки (at-least-once семантика).
-// Блокирует до отмены контекста.
+// При transient ошибках Kafka (leader election, coordinator down, network
+// flaps) делает exponential backoff и продолжает работать — НЕ убивает процесс.
+// Возвращается только при отмене контекста.
 func (c *Consumer) Run(ctx context.Context, handler HandlerFunc) error {
 	topic := c.reader.Config().Topic
 	tracer := otel.Tracer("kafka.consumer")
+
+	backoff := minBackoff
 
 	for {
 		msg, err := c.reader.FetchMessage(ctx)
@@ -55,8 +87,18 @@ func (c *Consumer) Run(ctx context.Context, handler HandlerFunc) error {
 			if ctx.Err() != nil {
 				return nil
 			}
-			return fmt.Errorf("fetch message: %w", err)
+			// Transient ошибка — логируем, ждём, повторяем.
+			// Reader сам переподключится при следующем вызове.
+			metrics.KafkaMessagesConsumed.WithLabelValues(topic, "error").Inc()
+			fmt.Printf("kafka fetch error: %v, retrying in %s\n", err, backoff)
+			if sleepWithCtx(ctx, backoff) {
+				return nil
+			}
+			backoff = nextBackoff(backoff)
+			continue
 		}
+		// Успешный fetch — сбрасываем backoff
+		backoff = minBackoff
 
 		// Извлекаем trace context из headers сообщения
 		// Это связывает спан consumer'а с трейсом producer'а
@@ -88,7 +130,11 @@ func (c *Consumer) Run(ctx context.Context, handler HandlerFunc) error {
 			if ctx.Err() != nil {
 				return nil
 			}
-			return fmt.Errorf("commit message: %w", err)
+			// Commit упал по transient причине — при at-least-once это безопасно:
+			// сообщение придёт ещё раз и обработается снова (idempotency на handler).
+			// Логируем и идём дальше — не убиваем процесс.
+			fmt.Printf("kafka commit error: %v (message will be redelivered)\n", err)
+			continue
 		}
 
 		metrics.KafkaMessagesConsumed.WithLabelValues(topic, "success").Inc()
