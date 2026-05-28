@@ -119,5 +119,54 @@ services:
   zookeeper:
     ports: !reset []
 
+  # ── Бэкап Postgres: локальные дампы с ротацией ──────────────────────────
+  # Делает pg_dump по расписанию, сжимает gzip, сам удаляет старые.
+  # Дампы складываются в ./backups на диске VM.
+  postgres-backup:
+    image: prodrigestivill/postgres-backup-local:16
+    container_name: pt_postgres_backup
+    restart: unless-stopped
+    volumes:
+      - ./backups:/backups
+    environment:
+      POSTGRES_HOST: postgres
+      POSTGRES_DB: tryberrybot
+      POSTGRES_USER: user
+      POSTGRES_PASSWORD: password
+      POSTGRES_EXTRA_OPTS: "-Z6 --blobs"   # gzip уровень 6
+      SCHEDULE: "@daily"                   # раз в сутки в полночь
+      BACKUP_KEEP_DAYS: 7                  # 7 дневных
+      BACKUP_KEEP_WEEKS: 4                 # 4 недельных
+      BACKUP_KEEP_MONTHS: 6                # 6 месячных
+      HEALTHCHECK_PORT: 8080
+      TZ: "Europe/Moscow"
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  # ── Синхронизация бэкапов в Yandex Object Storage (S3) ──────────────────
+  # Каждые 6 часов заливает ./backups в S3-бакет. Зеркалит локальную папку,
+  # то есть в S3 та же ротация что и локально (7d + 4w + 6m).
+  backup-s3-sync:
+    image: rclone/rclone:1.68
+    container_name: pt_backup_s3sync
+    restart: unless-stopped
+    volumes:
+      - ./backups:/backups:ro
+    environment:
+      RCLONE_CONFIG_YANDEX_TYPE: s3
+      RCLONE_CONFIG_YANDEX_PROVIDER: Other
+      RCLONE_CONFIG_YANDEX_ENV_AUTH: "false"
+      RCLONE_CONFIG_YANDEX_ACCESS_KEY_ID: "${S3_ACCESS_KEY_ID:?S3_ACCESS_KEY_ID must be set in .env}"
+      RCLONE_CONFIG_YANDEX_SECRET_ACCESS_KEY: "${S3_SECRET_ACCESS_KEY:?S3_SECRET_ACCESS_KEY must be set in .env}"
+      RCLONE_CONFIG_YANDEX_ENDPOINT: "https://storage.yandexcloud.net"
+      RCLONE_CONFIG_YANDEX_REGION: "ru-central1"
+    entrypoint: /bin/sh -c "trap exit TERM;
+      while :; do
+      rclone sync /backups yandex:${S3_BUCKET:-tryberry-backups} --log-level INFO;
+      sleep 6h & wait $${!}; done"
+    depends_on:
+      - postgres-backup
+
 volumes:
   nginx_logs:

@@ -18,3 +18,5 @@ Makefile
 # Production runtime — не должно попадать в build context
 nginx/certbot/
 nginx/.htpasswd
+
+backups/
