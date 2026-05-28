@@ -10,7 +10,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/cenkalti/backoff/v4"
 	"golang.org/x/time/rate"
 )
 
@@ -21,7 +20,9 @@ type WildberriesScraper struct {
 
 func NewWildberriesScraper(rps float64) *WildberriesScraper {
 	return &WildberriesScraper{
-		http:    &http.Client{Timeout: 10 * time.Second},
+		// basket CDN отвечает за доли секунды; 8s — щедрый потолок на случай
+		// сетевых задержек, но при норме мы укладываемся в <1s
+		http:    &http.Client{Timeout: 8 * time.Second},
 		limiter: rate.NewLimiter(rate.Limit(rps), 1),
 	}
 }
@@ -45,6 +46,17 @@ func ExtractArticleID(url string) (string, error) {
 	return m[1], nil
 }
 
+// Scrape получает данные о товаре напрямую из basket CDN Wildberries.
+//
+// Раньше код сначала дёргал card.wb.ru/cards/{v1,v2}/detail — но эти endpoint'ы
+// отдают 404 (API мёртв/изменился), и backoff крутил их по 3 раза каждый перед
+// fallback на basket → ~5s впустую на каждом скрейпе. Теперь basket — основной
+// и единственный путь: он быстрый (<1s), детерминированный (URL вычисляется из
+// article_id) и стабильный.
+//
+// Примечание: цена берётся из price-history.json (последняя запись). Она может
+// отставать от реальной цены на сайте на несколько часов — это компромисс,
+// т.к. real-time источник (card.wb.ru) больше недоступен.
 func (s *WildberriesScraper) Scrape(ctx context.Context, url string) (*Result, error) {
 	articleID, err := ExtractArticleID(url)
 	if err != nil {
@@ -55,85 +67,7 @@ func (s *WildberriesScraper) Scrape(ctx context.Context, url string) (*Result, e
 		return nil, err
 	}
 
-	endpoints := []string{
-		"https://card.wb.ru/cards/v2/detail?appType=1&curr=rub&dest=-1257786&spp=30&nm=%s",
-		"https://card.wb.ru/cards/v1/detail?appType=1&curr=rub&dest=-1257786&spp=30&nm=%s",
-	}
-
-	for _, tpl := range endpoints {
-		result, err := s.tryFetch(ctx, fmt.Sprintf(tpl, articleID))
-		if err == nil && result != nil {
-			return result, nil
-		}
-	}
-
-	// Fallback на basket CDN
 	return s.fetchFromBasket(ctx, articleID)
-}
-
-func (s *WildberriesScraper) tryFetch(ctx context.Context, url string) (*Result, error) {
-	var result *Result
-
-	op := func() error {
-		req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
-		if err != nil {
-			return backoff.Permanent(err)
-		}
-		req.Header.Set("User-Agent", "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36")
-		req.Header.Set("Accept", "*/*")
-		req.Header.Set("Accept-Language", "ru-RU,ru;q=0.9")
-		req.Header.Set("Origin", "https://www.wildberries.ru")
-		req.Header.Set("Referer", "https://www.wildberries.ru/")
-
-		resp, err := s.http.Do(req)
-		if err != nil {
-			return err
-		}
-		defer resp.Body.Close()
-
-		if resp.StatusCode != http.StatusOK {
-			return fmt.Errorf("status %d", resp.StatusCode)
-		}
-
-		var parsed wbCardResponse
-		if err := json.NewDecoder(resp.Body).Decode(&parsed); err != nil {
-			return backoff.Permanent(err)
-		}
-		if len(parsed.Data.Products) == 0 {
-			return backoff.Permanent(ErrProductNotFound)
-		}
-
-		p := parsed.Data.Products[0]
-		var price float64
-		for _, size := range p.Sizes {
-			for _, val := range []int64{size.Price.Product, size.Price.Total, size.Price.Basic} {
-				if val > 0 {
-					price = float64(val) / 100
-					break
-				}
-			}
-			if price > 0 {
-				break
-			}
-		}
-		if price == 0 {
-			return backoff.Permanent(fmt.Errorf("price is zero"))
-		}
-
-		var imageURL string
-		if len(p.Photos) > 0 {
-			imageURL = p.Photos[0].Big
-		}
-
-		result = &Result{Name: p.Name, Price: price, ImageURL: imageURL}
-		return nil
-	}
-
-	b := backoff.WithContext(backoff.WithMaxRetries(backoff.NewExponentialBackOff(), 3), ctx)
-	if err := backoff.Retry(op, b); err != nil {
-		return nil, err
-	}
-	return result, nil
 }
 
 func (s *WildberriesScraper) fetchFromBasket(ctx context.Context, articleID string) (*Result, error) {
@@ -148,19 +82,26 @@ func (s *WildberriesScraper) fetchFromBasket(ctx context.Context, articleID stri
 	base := fmt.Sprintf("https://basket-%02d.wbbasket.ru/vol%d/part%d/%s/info",
 		basket, vol, part, articleID)
 
-	name, imageURL := s.fetchBasketCard(ctx, base, articleID, basket, vol, part)
+	// Цена — обязательна. Если её нет, товар считаем не найденным.
 	price, err := s.fetchBasketPrice(ctx, base)
 	if err != nil {
 		return nil, fmt.Errorf("basket price: %w", err)
 	}
+
+	// Имя и картинка — желательны, но не критичны (best-effort)
+	name, imageURL := s.fetchBasketCard(ctx, base, articleID, basket, vol, part)
 
 	return &Result{Name: name, Price: price, ImageURL: imageURL}, nil
 }
 
 func (s *WildberriesScraper) fetchBasketCard(ctx context.Context, base, articleID string, basket, vol, part int64) (string, string) {
 	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, base+"/ru/card.json", nil)
+	req.Header.Set("User-Agent", wbUserAgent)
 	resp, err := s.http.Do(req)
 	if err != nil || resp.StatusCode != http.StatusOK {
+		if resp != nil {
+			resp.Body.Close()
+		}
 		return "Товар WB", ""
 	}
 	defer resp.Body.Close()
@@ -179,12 +120,17 @@ func (s *WildberriesScraper) fetchBasketCard(ctx context.Context, base, articleI
 
 func (s *WildberriesScraper) fetchBasketPrice(ctx context.Context, base string) (float64, error) {
 	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, base+"/price-history.json", nil)
+	req.Header.Set("User-Agent", wbUserAgent)
 	resp, err := s.http.Do(req)
 	if err != nil {
 		return 0, err
 	}
 	defer resp.Body.Close()
 
+	// 404 на price-history = товара нет в CDN (несуществующий/удалённый артикул)
+	if resp.StatusCode == http.StatusNotFound {
+		return 0, ErrProductNotFound
+	}
 	if resp.StatusCode != http.StatusOK {
 		return 0, fmt.Errorf("price-history status %d", resp.StatusCode)
 	}
@@ -208,6 +154,8 @@ func (s *WildberriesScraper) fetchBasketPrice(ctx context.Context, base string) 
 	return float64(raw) / 100, nil
 }
 
+const wbUserAgent = "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
+
 func wbBasketNumber(id int64) int64 {
 	vol := id / 100000
 	thresholds := []int64{
@@ -221,24 +169,4 @@ func wbBasketNumber(id int64) int64 {
 		}
 	}
 	return 32 + (vol-6438)/312
-}
-
-// ── Внутренние структуры WB API ──────────────────────────────────────────────
-
-type wbCardResponse struct {
-	Data struct {
-		Products []struct {
-			Name  string `json:"name"`
-			Sizes []struct {
-				Price struct {
-					Basic   int64 `json:"basic"`
-					Product int64 `json:"product"`
-					Total   int64 `json:"total"`
-				} `json:"price"`
-			} `json:"sizes"`
-			Photos []struct {
-				Big string `json:"big"`
-			} `json:"photos"`
-		} `json:"products"`
-	} `json:"data"`
 }
