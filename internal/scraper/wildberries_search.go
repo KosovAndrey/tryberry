@@ -13,39 +13,51 @@ import (
 )
 
 const (
-	// v18 — актуальная версия search API (подтверждено живым ответом, май 2026).
-	wbSearchAPIBase = "https://search.wb.ru/exactmatch/ru/common/v18/search"
+	// Эндпоинт, который реально отдаёт 200: same-origin реверс-прокси WB
+	// (www.wildberries.ru/__internal/u-search/...). Голый search.wb.ru режется
+	// wbaas-челленджем; этот же путь принимает cookie x_wbaas_token из браузера.
+	wbSearchAPIBase = "https://www.wildberries.ru/__internal/u-search/exactmatch/ru/common/v18/search"
 
-	wbSearchPageSize   = 100     // товаров на страницу выдачи
-	maxSearchBodyBytes = 8 << 20 // защита от неожиданно гигантского ответа
+	wbSearchPageSize   = 100
+	maxSearchBodyBytes = 8 << 20
 	maxBackoffDelay    = 8 * time.Second
+
+	// Дефолтный UA, если токен записан без UA. Должен совпадать с тем, под
+	// которым выписан токен (UA вшит в сам токен), иначе wbaas может отклонить.
+	defaultSearchUA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/144.0.0.0 YaBrowser/26.3.0.0 Safari/537.36"
 )
 
 // WildberriesSearchScraper — скрейпер поисковой выдачи WB.
 //
 // Встраивает товарный *WildberriesScraper, поэтому удовлетворяет и
-// MarketplaceScraper (карточка товара), и SearchScraper (выдача). Достаточно
-// зарегистрировать ОДИН этот скрейпер — он обслуживает оба типа WB-ссылок.
+// MarketplaceScraper, и SearchScraper. Аутентифицируется cookie-токеном wbaas,
+// который добывается в браузере и кладётся в Redis (см. scripts/wb-token-update.sh);
+// TokenProvider читает его перед запросами.
 type WildberriesSearchScraper struct {
-	*WildberriesScraper // товарный скрейпер (Marketplace/Matches/Scrape)
+	*WildberriesScraper
 
 	pool      *ProxyPool
+	tokens    TokenProvider
 	maxPages  int
 	pageDelay time.Duration
 }
 
 // NewWildberriesSearchScraper.
 //
-//	base      — товарный скрейпер (если nil — создаётся дефолтный);
-//	pool      — пул прокси (если nil — прямой клиент без прокси);
-//	maxPages  — сколько страниц максимум читать (<=0 → 5; каждая ≈100 товаров);
-//	pageDelay — пауза между страницами (вежливость + снижение риска 429).
-func NewWildberriesSearchScraper(base *WildberriesScraper, pool *ProxyPool, maxPages int, pageDelay time.Duration) *WildberriesSearchScraper {
+//	base      — товарный скрейпер (nil → дефолтный);
+//	pool      — пул прокси (nil → прямой клиент; для WB-поиска прокси не нужен);
+//	tokens    — провайдер cookie-токена wbaas (nil → пустой статический);
+//	maxPages  — макс. страниц (<=0 → 5);
+//	pageDelay — пауза между страницами.
+func NewWildberriesSearchScraper(base *WildberriesScraper, pool *ProxyPool, tokens TokenProvider, maxPages int, pageDelay time.Duration) *WildberriesSearchScraper {
 	if base == nil {
 		base = NewWildberriesScraper(5)
 	}
 	if pool == nil {
 		pool, _ = NewProxyPool(nil, 12*time.Second)
+	}
+	if tokens == nil {
+		tokens = StaticTokenProvider{}
 	}
 	if maxPages <= 0 {
 		maxPages = 5
@@ -56,18 +68,15 @@ func NewWildberriesSearchScraper(base *WildberriesScraper, pool *ProxyPool, maxP
 	return &WildberriesSearchScraper{
 		WildberriesScraper: base,
 		pool:               pool,
+		tokens:             tokens,
 		maxPages:           maxPages,
 		pageDelay:          pageDelay,
 	}
 }
 
-// Гарантия на этапе компиляции: тип реализует SearchScraper.
 var _ SearchScraper = (*WildberriesSearchScraper)(nil)
 
 // MatchesSearch — WB-ссылка с текстовым поиском (?search=...).
-//
-// MVP: только текстовый поиск. Категорийные/брендовые/продавцовые ссылки без
-// параметра search пока не поддерживаются (фильтры — отдельный шаг).
 func (s *WildberriesSearchScraper) MatchesSearch(rawURL string) bool {
 	u, err := url.Parse(rawURL)
 	if err != nil {
@@ -79,12 +88,7 @@ func (s *WildberriesSearchScraper) MatchesSearch(rawURL string) bool {
 	return strings.TrimSpace(u.Query().Get("search")) != ""
 }
 
-// NormalizeSearchURL — канонический ключ дедупликации.
-//
-// Сохраняем только семантику поиска (текст запроса + сортировка), отбрасывая
-// page/dest/spp/appType и прочий сессионный мусор. Текст приводим к нижнему
-// регистру и схлопываем пробелы — WB ищет регистронезависимо, так разные
-// пользователи с одинаковым по смыслу запросом дают один normalized_url.
+// NormalizeSearchURL — канонический ключ дедупликации (query + sort).
 func (s *WildberriesSearchScraper) NormalizeSearchURL(rawURL string) (string, error) {
 	query, sortMode, err := s.parseSearchParams(rawURL)
 	if err != nil {
@@ -93,7 +97,6 @@ func (s *WildberriesSearchScraper) NormalizeSearchURL(rawURL string) (string, er
 	canon := url.Values{}
 	canon.Set("query", strings.ToLower(query))
 	canon.Set("sort", sortMode)
-	// canon.Encode() сортирует ключи → стабильный порядок (query, sort).
 	return "https://www.wildberries.ru/catalog/0/search.aspx?" + canon.Encode(), nil
 }
 
@@ -103,6 +106,7 @@ func (s *WildberriesSearchScraper) ScrapeSearch(ctx context.Context, rawURL stri
 	if err != nil {
 		return nil, err
 	}
+	referer := "https://www.wildberries.ru/catalog/0/search.aspx?search=" + url.QueryEscape(query)
 
 	out := &SearchResultSet{}
 	position := 0
@@ -112,11 +116,10 @@ func (s *WildberriesSearchScraper) ScrapeSearch(ctx context.Context, rawURL stri
 			s.sleep(ctx, s.pageDelay)
 		}
 
-		body, err := s.fetchPage(ctx, buildSearchAPIURL(query, sortMode, page))
+		body, err := s.fetchPage(ctx, buildSearchAPIURL(query, sortMode, page), referer)
 		if err != nil {
 			if out.PagesRead > 0 {
-				// Уже что-то набрали — отдаём частичный результат, не роняя всё.
-				break
+				break // частичный результат лучше, чем ошибка на всё
 			}
 			return nil, err
 		}
@@ -133,38 +136,46 @@ func (s *WildberriesSearchScraper) ScrapeSearch(ctx context.Context, rawURL stri
 		if parsed.Total > 0 {
 			out.TotalFound = parsed.Total
 		}
-
 		if len(parsed.Products) == 0 {
-			break // выдача закончилась
+			break
 		}
 
 		for _, p := range parsed.Products {
 			position++
 			item := wbProductToItem(p, position)
 			if item.PriceKopecks == 0 {
-				// нет цены / нет в наличии — в выдачу не кладём
 				continue
 			}
 			out.Items = append(out.Items, item)
 		}
 
 		if len(parsed.Products) < wbSearchPageSize {
-			break // последняя страница (неполная)
+			break
 		}
 	}
 
 	return out, nil
 }
 
-// ── HTTP с ротацией прокси и backoff ─────────────────────────────────────────
+// ── HTTP с токеном, ротацией прокси и backoff ────────────────────────────────
 
-func (s *WildberriesSearchScraper) fetchPage(ctx context.Context, apiURL string) ([]byte, error) {
-	// Достаточно попыток, чтобы перебрать все прокси плюс пара повторов.
+func (s *WildberriesSearchScraper) fetchPage(ctx context.Context, apiURL, referer string) ([]byte, error) {
+	tok, err := s.tokens.Token(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("%w: token provider: %v", ErrMarketplaceBlocked, err)
+	}
+	if !tok.Valid() {
+		return nil, fmt.Errorf("%w: пустой wbaas-токен (обнови через scripts/wb-token-update.sh)", ErrMarketplaceBlocked)
+	}
+	ua := tok.UserAgent
+	if ua == "" {
+		ua = defaultSearchUA
+	}
+
 	maxAttempts := s.pool.Size() + 2
 	if maxAttempts < 3 {
 		maxAttempts = 3
 	}
-
 	delay := 500 * time.Millisecond
 	var lastErr error
 
@@ -175,12 +186,12 @@ func (s *WildberriesSearchScraper) fetchPage(ctx context.Context, apiURL string)
 		default:
 		}
 
-		pc := s.pool.next() // round-robin: следующая попытка — другой прокси
+		pc := s.pool.next()
 		req, err := http.NewRequestWithContext(ctx, http.MethodGet, apiURL, nil)
 		if err != nil {
 			return nil, err
 		}
-		s.setHeaders(req)
+		s.setHeaders(req, referer, tok.Cookie, ua)
 
 		resp, err := pc.client.Do(req)
 		if err != nil {
@@ -196,14 +207,11 @@ func (s *WildberriesSearchScraper) fetchPage(ctx context.Context, apiURL string)
 		switch {
 		case resp.StatusCode == http.StatusOK && readErr == nil:
 			return body, nil
-
 		case resp.StatusCode == http.StatusTooManyRequests:
-			// 429 — IP/частотный лимит. Следующая попытка уйдёт с другого
-			// прокси (pool.next), плюс выжидаем нарастающую паузу.
-			lastErr = fmt.Errorf("%w: 429 via %s", ErrMarketplaceBlocked, pc.label)
+			// 429 + server: wbaas — токен протух/невалиден или жёсткий лимит.
+			lastErr = fmt.Errorf("%w: 429 via %s (возможно протух токен)", ErrMarketplaceBlocked, pc.label)
 			s.sleep(ctx, delay)
 			delay = bumpDelay(delay)
-
 		default:
 			if readErr != nil {
 				lastErr = fmt.Errorf("read body (status %d) via %s: %w", resp.StatusCode, pc.label, readErr)
@@ -221,19 +229,16 @@ func (s *WildberriesSearchScraper) fetchPage(ctx context.Context, apiURL string)
 	return nil, lastErr
 }
 
-func (s *WildberriesSearchScraper) setHeaders(req *http.Request) {
-	// Заголовки, при которых запрос с сервера реально проходил (см. разведку):
-	// именно Accept-Language + браузерный UA + Referer/Origin отличали 200 от
-	// мгновенного 429. Accept-Encoding не ставим вручную — стандартный
-	// транспорт Go сам добавит gzip и прозрачно распакует ответ.
-	req.Header.Set("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36")
+func (s *WildberriesSearchScraper) setHeaders(req *http.Request, referer, cookie, ua string) {
+	// Близко к реальному запросу браузера к __internal/u-search.
 	req.Header.Set("Accept", "*/*")
-	req.Header.Set("Accept-Language", "ru-RU,ru;q=0.9")
-	req.Header.Set("Origin", "https://www.wildberries.ru")
-	req.Header.Set("Referer", "https://www.wildberries.ru/")
+	req.Header.Set("Accept-Language", "ru,en;q=0.9")
+	req.Header.Set("User-Agent", ua)
+	req.Header.Set("Cookie", cookie)
+	req.Header.Set("Referer", referer)
+	req.Header.Set("X-Requested-With", "XMLHttpRequest")
 }
 
-// sleep — пауза, прерываемая отменой контекста.
 func (s *WildberriesSearchScraper) sleep(ctx context.Context, d time.Duration) {
 	if d <= 0 {
 		return
@@ -256,7 +261,6 @@ func bumpDelay(d time.Duration) time.Duration {
 
 // ── Парсинг ──────────────────────────────────────────────────────────────────
 
-// parseSearchParams — вытащить из браузерного URL текст запроса и сортировку.
 func (s *WildberriesSearchScraper) parseSearchParams(rawURL string) (query, sortMode string, err error) {
 	u, err := url.Parse(rawURL)
 	if err != nil {
@@ -267,7 +271,7 @@ func (s *WildberriesSearchScraper) parseSearchParams(rawURL string) (query, sort
 	if query == "" {
 		return "", "", fmt.Errorf("%w: no search query in URL", ErrInvalidURL)
 	}
-	query = strings.Join(strings.Fields(query), " ") // схлопнуть кратные пробелы
+	query = strings.Join(strings.Fields(query), " ")
 	sortMode = strings.TrimSpace(strings.ToLower(q.Get("sort")))
 	if sortMode == "" {
 		sortMode = "popular"
@@ -275,23 +279,25 @@ func (s *WildberriesSearchScraper) parseSearchParams(rawURL string) (query, sort
 	return query, sortMode, nil
 }
 
-// buildSearchAPIURL — собрать URL запроса к search.wb.ru v18.
+// buildSearchAPIURL — URL запроса к u-search v18. Набор параметров —
+// семантически нейтральный минимум, проверенный на живом 200-ответе.
 func buildSearchAPIURL(query, sortMode string, page int) string {
 	q := url.Values{}
 	q.Set("appType", "1")
 	q.Set("curr", "rub")
 	q.Set("dest", "-1257786")
+	q.Set("inheritFilters", "false")
 	q.Set("lang", "ru")
+	q.Set("locale", "ru")
 	q.Set("page", strconv.Itoa(page))
 	q.Set("query", query)
 	q.Set("resultset", "catalog")
 	q.Set("sort", sortMode)
 	q.Set("spp", "30")
+	q.Set("suppressSpellcheck", "false")
 	return wbSearchAPIBase + "?" + q.Encode()
 }
 
-// wbProductToItem — товар WB → SearchItem. Цена: product (финальная), basic
-// (старая). Подстраховка total на случай дрейфа API в будущем.
 func wbProductToItem(p wbSearchProduct, position int) SearchItem {
 	var price, oldPrice int64
 	if len(p.Sizes) > 0 {
@@ -317,8 +323,6 @@ func wbProductToItem(p wbSearchProduct, position int) SearchItem {
 	}
 }
 
-// wbImageURL — URL картинки товара через basket-CDN (host-bucket по vol).
-// Использует общий с товарным скрейпером wbBasketNumber (wildberries.go).
 func wbImageURL(id int64) string {
 	vol := id / 100000
 	part := id / 1000
@@ -327,9 +331,7 @@ func wbImageURL(id int64) string {
 		basket, vol, part, id)
 }
 
-// ── Структуры ответа search.wb.ru v18 ────────────────────────────────────────
-// В v18 products лежат в КОРНЕ ответа (подтверждено живым ответом), в отличие
-// от card.wb.ru, где они под data.products.
+// ── Структуры ответа u-search v18 (products в КОРНЕ) ─────────────────────────
 
 type wbSearchResponse struct {
 	Total    int               `json:"total"`

@@ -8,7 +8,7 @@ import (
 )
 
 func newTestSearchScraper() *WildberriesSearchScraper {
-	return NewWildberriesSearchScraper(nil, nil, 5, 0)
+	return NewWildberriesSearchScraper(nil, nil, nil, 5, 0)
 }
 
 func TestMatchesSearch(t *testing.T) {
