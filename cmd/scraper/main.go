@@ -25,6 +25,8 @@ import (
 	"gitlab.com/KosovAndrey/tryberrybot/internal/repository/postgres"
 	redisrepo "gitlab.com/KosovAndrey/tryberrybot/internal/repository/redis"
 	"gitlab.com/KosovAndrey/tryberrybot/internal/scraper"
+	"gitlab.com/KosovAndrey/tryberrybot/internal/searchsub"
+	"gitlab.com/KosovAndrey/tryberrybot/internal/telegram"
 	"gitlab.com/KosovAndrey/tryberrybot/internal/tracing"
 )
 
@@ -101,6 +103,11 @@ func run(log *slog.Logger) error {
 	productRepo := postgres.NewProductRepo(pool)
 	priceHistoryRepo := postgres.NewPriceHistoryRepo(pool)
 
+	searchQueryRepo := postgres.NewSearchQueryRepo(pool)
+	searchSubRepo := postgres.NewSearchSubscriptionRepo(pool)
+	searchResultRepo := postgres.NewSearchResultRepo(pool)
+	searchNotifRepo := postgres.NewSearchNotificationRepo(pool)
+
 	var priceCache *redisrepo.PriceCache
 	if redisClient != nil {
 		priceCache = redisrepo.NewPriceCache(redisClient)
@@ -113,13 +120,68 @@ func run(log *slog.Logger) error {
 	producer := kafka.NewProducer(kafkaBrokers, "price-events")
 	defer producer.Close()
 
-	// ── WB клиент ────────────────────────────────────────────────────────────
-	registry := scraper.NewRegistry(
+	// ── Скрейперы ─────────────────────────────────────────────────────────────
+	// WB-поиск аутентифицируется cookie-токеном wbaas из Redis (обновляется
+	// вручную через scripts/wb-token-update.sh). Search-скрейпер встраивает
+	// товарный, поэтому обслуживает и карточки, и выдачи.
+	tokenProvider := scraper.TokenProviderFunc(func(ctx context.Context) (scraper.SearchToken, error) {
+		if redisClient == nil {
+			return scraper.SearchToken{}, fmt.Errorf("redis unavailable")
+		}
+		cookie, err := redisClient.Get(ctx, "wb:search:cookie").Result()
+		if err != nil {
+			return scraper.SearchToken{}, err
+		}
+		ua, _ := redisClient.Get(ctx, "wb:search:ua").Result()
+		return scraper.SearchToken{Cookie: cookie, UserAgent: ua}, nil
+	})
+
+	proxyPool, proxyErrs := scraper.NewProxyPool(splitCSV(getEnv("SEARCH_PROXY_URLS", "")), 12*time.Second)
+	for _, e := range proxyErrs {
+		log.Warn("bad search proxy, skipped", "err", e)
+	}
+
+	wbSearch := scraper.NewWildberriesSearchScraper(
 		scraper.NewWildberriesScraper(rpsWB),
+		proxyPool,
+		tokenProvider,
+		getEnvInt("SEARCH_MAX_PAGES", 5),
+		time.Duration(getEnvInt("SEARCH_PAGE_DELAY_MS", 700))*time.Millisecond,
+	)
+
+	registry := scraper.NewRegistry(
+		wbSearch,
 		scraper.NewOzonScraper(),
 		scraper.NewYandexMarketScraper(rpsYandex),
 	)
-	// ── Обработчик сообщений ─────────────────────────────────────────────────
+
+	// ── Поиск-планировщик (тикер рядом с consumer'ом цен) ─────────────────────
+	var searchNotifier searchsub.SearchNotifier
+	if tok := os.Getenv("TELEGRAM_BOT_TOKEN"); tok != "" {
+		searchNotifier = tgSearchNotifier{
+			n:    telegram.NewNotifier(tok),
+			topN: getEnvInt("SEARCH_NOTIFY_TOP_N", 10),
+		}
+		log.Info("search notifications via Telegram")
+	} else {
+		searchNotifier = logNotifier{log: log.With("component", "search_notify")}
+		log.Warn("TELEGRAM_BOT_TOKEN not set — search notifications go to log only")
+	}
+
+	sl := &searchLoop{
+		log:      log.With("component", "search_loop"),
+		registry: registry,
+		queries:  searchQueryRepo,
+		subs:     searchSubRepo,
+		results:  searchResultRepo,
+		notifs:   searchNotifRepo,
+		products: productRepo,
+		notifier: searchNotifier,
+	}
+	searchInterval := time.Duration(getEnvInt("SEARCH_SCRAPE_INTERVAL_MINUTES", 30)) * time.Minute
+	go runSearchLoop(ctx, sl, searchInterval)
+
+	// ── Обработчик сообщений (цены) ──────────────────────────────────────────
 	handler := makeHandler(log, registry, productRepo, priceHistoryRepo, priceCache, producer)
 
 	log.Info("scraper started, waiting for tasks...")
@@ -253,4 +315,20 @@ func getEnv(key, fallback string) string {
 		return v
 	}
 	return fallback
+}
+
+func getEnvInt(key string, fallback int) int {
+	if v := os.Getenv(key); v != "" {
+		if n, err := strconv.Atoi(v); err == nil {
+			return n
+		}
+	}
+	return fallback
+}
+
+func splitCSV(s string) []string {
+	if strings.TrimSpace(s) == "" {
+		return nil
+	}
+	return strings.Split(s, ",")
 }

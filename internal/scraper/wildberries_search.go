@@ -95,7 +95,7 @@ func (s *WildberriesSearchScraper) NormalizeSearchURL(rawURL string) (string, er
 		return "", err
 	}
 	canon := url.Values{}
-	canon.Set("query", strings.ToLower(query))
+	canon.Set("search", strings.ToLower(query))
 	canon.Set("sort", sortMode)
 	return "https://www.wildberries.ru/catalog/0/search.aspx?" + canon.Encode(), nil
 }

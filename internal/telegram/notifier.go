@@ -5,8 +5,10 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"html"
 	"math"
 	"net/http"
+	"strings"
 	"time"
 )
 
@@ -62,6 +64,67 @@ func (n *Notifier) SendPriceAlert(ctx context.Context, a PriceAlert) error {
 	return n.sendMessage(ctx, a.ChatID, caption, keyboard)
 }
 
+// ── Search-подписки: батч подешевевших товаров по одному запросу ─────────────
+
+type SearchAlertItem struct {
+	Name         string
+	URL          string
+	EffectiveRub float64 // цена с учётом баллов (что пользователь платит по факту)
+	OldRub       float64 // цена до скидки (basic), 0 если нет
+	PointsRub    float64 // баллы за отзыв в рублях, 0 если нет
+}
+
+type SearchAlert struct {
+	ChatID    int64
+	QueryText string
+	SearchURL string // ссылка на выдачу (кнопка «Открыть выдачу»)
+	TotalHits int    // сколько всего товаров подешевело (может быть > len(Items))
+	Items     []SearchAlertItem
+}
+
+// SendSearchAlert — одно сообщение на подписку: топ подешевевших товаров.
+// Если подходящих больше, чем в Items, добавляется приписка «нашлось больше».
+func (n *Notifier) SendSearchAlert(ctx context.Context, a SearchAlert) error {
+	if len(a.Items) == 0 {
+		return nil
+	}
+
+	var sb strings.Builder
+	q := html.EscapeString(a.QueryText)
+	if a.TotalHits > len(a.Items) {
+		fmt.Fprintf(&sb,
+			"🔎 По запросу «%s» подешевело <b>%d</b> товаров.\n"+
+				"Нашлось больше, чем нужно — показываю лучшие %d. Если ищешь что-то конкретное, сузь ссылку отслеживания.\n\n",
+			q, a.TotalHits, len(a.Items))
+	} else {
+		fmt.Fprintf(&sb, "🔎 По запросу «%s» подешевело <b>%d</b> товаров:\n\n", q, a.TotalHits)
+	}
+
+	for _, it := range a.Items {
+		name := html.EscapeString(it.Name)
+		fmt.Fprintf(&sb, "📉 <a href=\"%s\">%s</a>\n", it.URL, name)
+		if it.OldRub > it.EffectiveRub && it.OldRub > 0 {
+			fmt.Fprintf(&sb, "    <b>%.0f ₽</b>  (было %.0f ₽)", it.EffectiveRub, it.OldRub)
+		} else {
+			fmt.Fprintf(&sb, "    <b>%.0f ₽</b>", it.EffectiveRub)
+		}
+		if it.PointsRub > 0 {
+			fmt.Fprintf(&sb, "  +%.0f баллов", it.PointsRub)
+		}
+		sb.WriteString("\n\n")
+	}
+
+	var keyboard any
+	if a.SearchURL != "" {
+		keyboard = map[string]any{
+			"inline_keyboard": [][]map[string]any{
+				{{"text": "🔎 Открыть выдачу", "url": a.SearchURL}},
+			},
+		}
+	}
+	return n.sendMessage(ctx, a.ChatID, sb.String(), keyboard)
+}
+
 func (n *Notifier) sendPhoto(ctx context.Context, chatID int64, photo, caption string, keyboard any) error {
 	payload := map[string]any{
 		"chat_id":      chatID,
@@ -75,10 +138,11 @@ func (n *Notifier) sendPhoto(ctx context.Context, chatID int64, photo, caption s
 
 func (n *Notifier) sendMessage(ctx context.Context, chatID int64, text string, keyboard any) error {
 	payload := map[string]any{
-		"chat_id":      chatID,
-		"text":         text,
-		"parse_mode":   "HTML",
-		"reply_markup": keyboard,
+		"chat_id":                  chatID,
+		"text":                     text,
+		"parse_mode":               "HTML",
+		"reply_markup":             keyboard,
+		"disable_web_page_preview": true,
 	}
 	return n.call(ctx, "sendMessage", payload)
 }

@@ -9,6 +9,7 @@ import (
 	"strings"
 
 	tgbotapi "github.com/go-telegram-bot-api/telegram-bot-api/v5"
+	"github.com/redis/go-redis/v9"
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/codes"
@@ -27,6 +28,11 @@ type Bot struct {
 	subRepo  *postgres.SubscriptionRepo
 	prodRepo *postgres.ProductRepo
 	registry *scraper.Registry
+
+	// Поиск-подписки
+	searchQueryRepo *postgres.SearchQueryRepo
+	searchSubRepo   *postgres.SearchSubscriptionRepo
+	rdb             *redis.Client // FSM для ввода порога (может быть nil)
 }
 
 func NewBot(
@@ -36,18 +42,24 @@ func NewBot(
 	subRepo *postgres.SubscriptionRepo,
 	prodRepo *postgres.ProductRepo,
 	registry *scraper.Registry,
+	searchQueryRepo *postgres.SearchQueryRepo,
+	searchSubRepo *postgres.SearchSubscriptionRepo,
+	rdb *redis.Client,
 ) (*Bot, error) {
 	api, err := tgbotapi.NewBotAPI(token)
 	if err != nil {
 		return nil, fmt.Errorf("init bot api: %w", err)
 	}
 	return &Bot{
-		api:      api,
-		log:      log,
-		userRepo: userRepo,
-		subRepo:  subRepo,
-		prodRepo: prodRepo,
-		registry: registry,
+		api:             api,
+		log:             log,
+		userRepo:        userRepo,
+		subRepo:         subRepo,
+		prodRepo:        prodRepo,
+		registry:        registry,
+		searchQueryRepo: searchQueryRepo,
+		searchSubRepo:   searchSubRepo,
+		rdb:             rdb,
 	}, nil
 }
 
@@ -66,6 +78,8 @@ func (b *Bot) SetCommands() error {
 		{Command: "menu", Description: "Открыть меню"},
 		{Command: "track", Description: "Добавить товар — /track <ссылка>"},
 		{Command: "list", Description: "Мои подписки"},
+		{Command: "track_search", Description: "Отслеживать поиск — /track_search <ссылка>"},
+		{Command: "list_search", Description: "Мои поиск-подписки"},
 		{Command: "help", Description: "Помощь"},
 	}
 	cfg := tgbotapi.NewSetMyCommands(commands...)
@@ -90,13 +104,27 @@ func (b *Bot) HandleUpdate(ctx context.Context, update tgbotapi.Update) {
 func (b *Bot) handleMessage(ctx context.Context, msg *tgbotapi.Message) {
 	text := strings.TrimSpace(msg.Text)
 
-	// Проверяем через registry — поддерживается ли этот маркетплейс
+	user, err := b.userRepo.Upsert(ctx, msg.From.ID, msg.From.UserName)
+	if err != nil {
+		b.log.Error("upsert user", "err", err)
+		b.reply(msg.Chat.ID, "Произошла ошибка, попробуй позже.")
+		return
+	}
+
+	// 1. Ждём ли мы от пользователя число (порог/процент) для поиск-подписки?
+	if fsm, ok := b.getSearchFSM(ctx, msg.From.ID); ok {
+		b.handleSearchThreshold(ctx, msg.Chat.ID, msg.From.ID, text, user, fsm)
+		return
+	}
+
+	// 2. Поисковая ссылка WB (?search=...) → флоу поиск-подписки.
+	if b.isSearchURL(text) {
+		b.startSearchTrack(ctx, msg.Chat.ID, text, user)
+		return
+	}
+
+	// 3. Ссылка на товар → существующая логика.
 	if _, err := b.registry.FindByURL(text); err == nil {
-		user, err := b.userRepo.Upsert(ctx, msg.From.ID, msg.From.UserName)
-		if err != nil {
-			b.reply(msg.Chat.ID, "Произошла ошибка, попробуй позже.")
-			return
-		}
 		b.doTrack(ctx, msg.Chat.ID, text, user)
 		return
 	}
@@ -107,6 +135,9 @@ func (b *Bot) handleMessage(ctx context.Context, msg *tgbotapi.Message) {
 // ── Commands ──────────────────────────────────────────────────────────────────
 
 func (b *Bot) handleCommand(ctx context.Context, msg *tgbotapi.Message) {
+	// Любая команда прерывает незавершённый ввод порога поиск-подписки.
+	b.clearSearchFSM(ctx, msg.From.ID)
+
 	user, err := b.userRepo.Upsert(ctx, msg.From.ID, msg.From.UserName)
 	if err != nil {
 		b.log.Error("upsert user", "err", err)
@@ -130,6 +161,17 @@ func (b *Bot) handleCommand(ctx context.Context, msg *tgbotapi.Message) {
 		b.doTrack(ctx, msg.Chat.ID, args, user)
 	case "list":
 		b.handleList(ctx, msg.Chat.ID, user)
+	case "track_search":
+		args := strings.TrimSpace(msg.CommandArguments())
+		if args == "" {
+			b.reply(msg.Chat.ID,
+				"Отправь <b>поисковую</b> ссылку Wildberries прямо в чат (с параметром поиска), и я предложу настроить уведомление.\n\n"+
+					"Например:\n<code>https://www.wildberries.ru/catalog/0/search.aspx?search=наушники</code>")
+			return
+		}
+		b.startSearchTrack(ctx, msg.Chat.ID, args, user)
+	case "list_search":
+		b.handleListSearch(ctx, msg.Chat.ID, user)
 	case "help":
 		b.sendHelpMenu(msg.Chat.ID, 0, false)
 	case "untrack":
@@ -152,6 +194,9 @@ func (b *Bot) sendMainMenu(ctx context.Context, chatID int64, messageID int, edi
 		),
 		tgbotapi.NewInlineKeyboardRow(
 			tgbotapi.NewInlineKeyboardButtonData("➕ Добавить товар", "menu:add"),
+		),
+		tgbotapi.NewInlineKeyboardRow(
+			tgbotapi.NewInlineKeyboardButtonData("🔎 Поиск по ссылке", "menu:search"),
 		),
 		tgbotapi.NewInlineKeyboardRow(
 			tgbotapi.NewInlineKeyboardButtonData("❓ Помощь", "menu:help"),
@@ -189,12 +234,15 @@ func (b *Bot) sendHelpMenu(chatID int64, messageID int, edit bool) {
 	text := "❓ <b>Помощь</b>\n\n" +
 		"<b>Как добавить товар:</b>\n" +
 		"Просто отправь ссылку с Wildberries прямо в чат — без команд.\n\n" +
+		"<b>Поиск по ссылке:</b>\n" +
+		"Отправь ссылку на поисковую выдачу WB (с параметром поиска) — выберешь тип уведомления, и я буду следить за всей выдачей.\n\n" +
 		"<b>Как работают уведомления:</b>\n" +
-		"Цены проверяются каждые 15 минут. Когда цена падает ниже той что была при подписке — " +
-		"получишь уведомление с фото товара и кнопками управления.\n\n" +
+		"Цены проверяются регулярно. Когда цена падает — получишь уведомление.\n\n" +
 		"<b>Команды:</b>\n" +
 		"<code>/track &lt;ссылка&gt;</code> — добавить товар\n" +
 		"<code>/list</code> — мои подписки\n" +
+		"<code>/track_search &lt;ссылка&gt;</code> — отслеживать поиск\n" +
+		"<code>/list_search</code> — мои поиск-подписки\n" +
 		"<code>/menu</code> — главное меню\n\n" +
 		"<b>Вопросы и предложения — пиши разработчику 👇</b>"
 
@@ -268,7 +316,6 @@ func (b *Bot) buildListView(subs []*domain.Subscription) (string, tgbotapi.Inlin
 		)
 	}
 
-	// Кнопки: ссылка + отмена для каждой подписки
 	var rows [][]tgbotapi.InlineKeyboardButton
 	for i, sub := range subs {
 		rows = append(rows, tgbotapi.NewInlineKeyboardRow(
@@ -326,14 +373,11 @@ func (b *Bot) doTrack(ctx context.Context, chatID int64, rawURL string, user *do
 	)
 	defer span.End()
 
-	// Находим подходящий скрейпер
 	s, err := b.registry.FindByURL(rawURL)
 	if err != nil {
 		span.RecordError(err)
-		span.SetStatus(codes.Error, "no scraper matches URL")
 		span.SetStatus(codes.Error, err.Error())
 		metrics.TrackCommands.WithLabelValues("error").Inc()
-		// ... остальной код без изменений
 		supported := b.registry.SupportedMarketplaces()
 		b.reply(chatID, fmt.Sprintf(
 			"Не могу распознать ссылку.\n\nПоддерживаемые маркетплейсы: %v\n\n"+
@@ -352,7 +396,6 @@ func (b *Bot) doTrack(ctx context.Context, chatID int64, rawURL string, user *do
 	result, err := s.Scrape(ctx, rawURL)
 	if err != nil {
 		span.RecordError(err)
-		span.SetStatus(codes.Error, "scrape failed")
 		span.SetStatus(codes.Error, err.Error())
 		metrics.TrackCommands.WithLabelValues("error").Inc()
 		b.log.Error("scrape on track", "url", rawURL, "marketplace", s.Marketplace(), "err", err)
@@ -376,7 +419,6 @@ func (b *Bot) doTrack(ctx context.Context, chatID int64, rawURL string, user *do
 	product, err := b.prodRepo.Upsert(ctx, rawURL, result.Name, result.ImageURL, string(s.Marketplace()))
 	if err != nil {
 		span.RecordError(err)
-		span.SetStatus(codes.Error, "upsert product failed")
 		span.SetStatus(codes.Error, err.Error())
 		metrics.TrackCommands.WithLabelValues("error").Inc()
 		b.log.Error("upsert product", "err", err)
@@ -387,7 +429,6 @@ func (b *Bot) doTrack(ctx context.Context, chatID int64, rawURL string, user *do
 	_, created, err := b.subRepo.Upsert(ctx, user.ID, product.ID, result.Price)
 	if err != nil {
 		span.RecordError(err)
-		span.SetStatus(codes.Error, "upsert subscription failed")
 		span.SetStatus(codes.Error, err.Error())
 		metrics.TrackCommands.WithLabelValues("error").Inc()
 		b.log.Error("upsert subscription", "err", err)
@@ -397,7 +438,6 @@ func (b *Bot) doTrack(ctx context.Context, chatID int64, rawURL string, user *do
 
 	span.SetAttributes(attribute.Bool("subscription.created", created))
 
-	// ... остальной код responseText без изменений
 	var responseText string
 	if created {
 		metrics.TrackCommands.WithLabelValues("success").Inc()
@@ -472,11 +512,20 @@ func (b *Bot) handleCallback(ctx context.Context, cb *tgbotapi.CallbackQuery) {
 	case cb.Data == "menu:add":
 		b.sendAddMenu(chatID, messageID)
 
+	case cb.Data == "menu:search":
+		b.sendSearchMenu(chatID, messageID)
+
 	case cb.Data == "menu:help":
 		b.sendHelpMenu(chatID, messageID, true)
 
 	case strings.HasPrefix(cb.Data, "untrack:"):
 		b.callbackUntrack(ctx, cb)
+
+	case strings.HasPrefix(cb.Data, "strack:"):
+		b.handleSearchTriggerCallback(ctx, cb)
+
+	case strings.HasPrefix(cb.Data, "suntrack:"):
+		b.callbackUntrackSearch(ctx, cb)
 
 	case strings.HasPrefix(cb.Data, "keep:"):
 		b.answerCallback(cb.ID, "Продолжаем следить 👍")
@@ -497,7 +546,6 @@ func (b *Bot) callbackUntrack(ctx context.Context, cb *tgbotapi.CallbackQuery) {
 		return
 	}
 
-	// Обновляем список подписок в том же сообщении
 	user, err := b.userRepo.GetByTelegramID(ctx, cb.From.ID)
 	if err == nil {
 		subs, err := b.subRepo.GetActiveByUserID(ctx, user.ID)
@@ -509,7 +557,6 @@ func (b *Bot) callbackUntrack(ctx context.Context, cb *tgbotapi.CallbackQuery) {
 		}
 	}
 
-	// Подписок не осталось — показываем меню
 	b.sendMainMenu(ctx, cb.Message.Chat.ID, cb.Message.MessageID, true)
 	b.answerCallback(cb.ID, "✅ Отслеживание отменено")
 }

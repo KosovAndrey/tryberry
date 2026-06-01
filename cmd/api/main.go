@@ -44,7 +44,6 @@ func run(log *slog.Logger) error {
 	ctx, cancel := signal.NotifyContext(context.Background(), syscall.SIGTERM, syscall.SIGINT)
 	defer cancel()
 
-	// ── Config ───────────────────────────────────────────────────────────────
 	databaseURL := mustEnv("DATABASE_URL")
 	redisURL := mustEnv("REDIS_URL")
 	botToken := mustEnv("TELEGRAM_BOT_TOKEN")
@@ -52,7 +51,6 @@ func run(log *slog.Logger) error {
 	port := getEnv("PORT", "8081")
 	otlpEndpoint := getEnv("OTLP_ENDPOINT", "jaeger:4317")
 
-	// ── Подключения ──────────────────────────────────────────────────────────
 	shutdownTracing, err := tracing.Init(ctx, "api", otlpEndpoint)
 	if err != nil {
 		log.Warn("tracing init failed, continuing without", "err", err)
@@ -74,31 +72,34 @@ func run(log *slog.Logger) error {
 	redisClient, err := db.NewRedisClient(ctx, redisURL)
 	if err != nil {
 		log.Warn("redis unavailable", "err", err)
+		redisClient = nil
 	}
 
-	// ── Партиции ─────────────────────────────────────────────────────────────
 	pm := partition.NewManager(pool)
 	if err := pm.EnsurePartitions(ctx, 2); err != nil {
 		return fmt.Errorf("ensure partitions: %w", err)
 	}
 
-	// ── Репозитории ──────────────────────────────────────────────────────────
 	userRepo := postgres.NewUserRepo(pool)
 	subRepo := postgres.NewSubscriptionRepo(pool)
 	prodRepo := postgres.NewProductRepo(pool)
+	searchQueryRepo := postgres.NewSearchQueryRepo(pool)
+	searchSubRepo := postgres.NewSearchSubscriptionRepo(pool)
 
-	_ = redisURL
-	_ = redisClient
-
-	// ── WB клиент ────────────────────────────────────────────────────────────
+	// Search-скрейпер встраивает товарный, поэтому служит и FindByURL (товар),
+	// и FindSearchByURL (выдача). Боту токен не нужен — он зовёт только разбор
+	// URL (NormalizeSearchURL/MatchesSearch), не ScrapeSearch.
+	wbSearch := scraper.NewWildberriesSearchScraper(scraper.NewWildberriesScraper(5), nil, nil, 5, 0)
 	registry := scraper.NewRegistry(
-		scraper.NewWildberriesScraper(5),
-		scraper.NewOzonScraper(), // заглушка
+		wbSearch,
+		scraper.NewOzonScraper(),
 		scraper.NewYandexMarketScraper(2),
 	)
 
-	// ── Telegram бот ─────────────────────────────────────────────────────────
-	bot, err := telegram.NewBot(botToken, log, userRepo, subRepo, prodRepo, registry)
+	bot, err := telegram.NewBot(
+		botToken, log, userRepo, subRepo, prodRepo, registry,
+		searchQueryRepo, searchSubRepo, redisClient,
+	)
 	if err != nil {
 		return fmt.Errorf("init bot: %w", err)
 	}
@@ -115,9 +116,7 @@ func run(log *slog.Logger) error {
 		log.Info("webhook disabled, skipping registration")
 	}
 
-	// ── HTTP сервер ───────────────────────────────────────────────────────────
 	mux := http.NewServeMux()
-
 	healthChecker := health.New(pool, redisClient)
 
 	webhookHandler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -142,12 +141,8 @@ func run(log *slog.Logger) error {
 	mux.HandleFunc("/live", health.LivenessHandler())
 	mux.Handle("/metrics", promhttp.Handler())
 
-	srv := &http.Server{
-		Addr:    ":" + port,
-		Handler: mux,
-	}
+	srv := &http.Server{Addr: ":" + port, Handler: mux}
 
-	// Запускаем планировщик
 	go runScheduler(ctx, log, pool, botToken)
 
 	log.Info("api started", "port", port)
@@ -170,7 +165,6 @@ func runMetricsUpdater(ctx context.Context, log *slog.Logger, pool *pgxpool.Pool
 		ctxQ, cancel := context.WithTimeout(ctx, 5*time.Second)
 		defer cancel()
 
-		// Общие счётчики
 		var total int
 		if err := pool.QueryRow(ctxQ,
 			`SELECT COUNT(*) FROM subscriptions WHERE active = TRUE`).Scan(&total); err == nil {
@@ -183,7 +177,6 @@ func runMetricsUpdater(ctx context.Context, log *slog.Logger, pool *pgxpool.Pool
 			metrics.TotalUsers.Set(float64(users))
 		}
 
-		// Подписки по маркетплейсам
 		rows, err := pool.Query(ctxQ, `
         SELECT p.marketplace, COUNT(*)
         FROM subscriptions s
@@ -192,7 +185,6 @@ func runMetricsUpdater(ctx context.Context, log *slog.Logger, pool *pgxpool.Pool
         GROUP BY p.marketplace`)
 		if err == nil {
 			defer rows.Close()
-			// Сбрасываем чтобы убрать маркетплейсы у которых стало 0
 			metrics.SubscriptionsByMarketplace.Reset()
 			for rows.Next() {
 				var mp string

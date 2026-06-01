@@ -22,3 +22,9 @@ func RuleFromSubscription(s *domain.SearchSubscription) Rule {
 	}
 	return r
 }
+
+// Kopecks — рубли (NUMERIC из БД) → копейки, с округлением.
+func Kopecks(rubles float64) int64 { return int64(math.Round(rubles * 100)) }
+
+// Rubles — копейки → рубли.
+func Rubles(kopecks int64) float64 { return float64(kopecks) / 100 }
