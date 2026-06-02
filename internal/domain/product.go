@@ -9,6 +9,11 @@ type User struct {
 	TelegramID int64
 	Username   string
 	CreatedAt  time.Time
+
+	// Тариф/лимиты
+	Plan          string     // free | trial | basic | pro | unlimited
+	PlanExpiresAt *time.Time // срок действия плана (nil = бессрочно)
+	TrialUsed     bool       // триал уже активировался
 }
 
 type Product struct {
@@ -22,10 +27,26 @@ type Product struct {
 }
 
 type Subscription struct {
-	ID                 int64
-	UserID             int64
-	ProductID          int64
-	BaselinePrice      float64
+	ID        int64
+	UserID    int64
+	ProductID int64
+
+	// BaselinePrice — «последняя опорная цена». При подписке = FirstSeenPrice,
+	// после каждого уведомления обновляется на цену уведомления. Для повторных
+	// срабатываний играет роль «цены последнего уведомления».
+	BaselinePrice float64
+	// FirstSeenPrice — НЕИЗМЕННАЯ цена на момент подписки. База ПЕРВОГО
+	// срабатывания для any_drop и discount_pct (порог скидки не «уплывает»).
+	FirstSeenPrice float64
+
+	// Стратегия триггера (как у поиск-подписок).
+	TriggerType TriggerType // below_target | any_drop | discount_pct
+	TargetPrice *float64    // для below_target
+	DiscountPct *int16      // для discount_pct (1..99)
+	// Notified — было ли уже хоть одно уведомление по подписке (фаза первого vs
+	// повторного срабатывания).
+	Notified bool
+
 	Active             bool
 	CreatedAt          time.Time
 	UpdatedAt          time.Time

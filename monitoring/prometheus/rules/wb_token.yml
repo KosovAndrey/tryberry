@@ -1,0 +1,47 @@
+# Алерты по ПУЛУ WB-токенов (этап 2).
+#
+# Источник метрик — redis-exporter (REDIS_EXPORTER_CHECK_SINGLE_KEYS):
+#   redis_key_value{key="wb:search:pool:healthy"}          — живых токенов в пуле
+#   redis_key_value{key="wb:search:pool:oldest_mined_at"}  — самый старый mined_at (unix)
+#
+# Майнер держит пул из WB_TOKEN_POOL_SIZE (по умолчанию 5) живых токенов,
+# проверяет/доливает раз в ~5 мин, каждый токен живёт ~72ч.
+# ВНИМАНИЕ: порог "< 5" в WBSearchPoolDegraded должен совпадать с размером пула.
+groups:
+  - name: tryberrybot_wb_token_pool
+    interval: 30s
+    rules:
+      # Совсем нет живых токенов (или метрика пропала): поиск-скрейпер встаёт.
+      - alert: WBSearchPoolEmpty
+        expr: |
+          (redis_key_value{key="wb:search:pool:healthy"} == 0)
+          or absent(redis_key_value{key="wb:search:pool:healthy"})
+        for: 5m
+        labels:
+          severity: critical
+          service: token-miner
+        annotations:
+          summary: "Пул WB-токенов пуст"
+          description: "В пуле нет ни одного живого токена (или метрика отсутствует) 5+ мин — поиск-скрейпер не работает. Проверь: docker logs pt_token_miner."
+
+      # Пул не полный: часть токенов битая / ещё не домайнена.
+      - alert: WBSearchPoolDegraded
+        expr: redis_key_value{key="wb:search:pool:healthy"} < 5
+        for: 15m
+        labels:
+          severity: warning
+          service: token-miner
+        annotations:
+          summary: "Пул WB-токенов неполный ({{ $value }} из 5)"
+          description: "Живых токенов меньше размера пула дольше 15 мин. Майнер не успевает доливать замену битым/истекающим. Проверь pt_token_miner."
+
+      # Самый старый живой токен слишком стар — майнер давно не обновлял пул.
+      - alert: WBSearchPoolStale
+        expr: time() - redis_key_value{key="wb:search:pool:oldest_mined_at"} > 50400
+        for: 15m
+        labels:
+          severity: warning
+          service: token-miner
+        annotations:
+          summary: "Самый старый WB-токен старше 14ч"
+          description: "Самый старый токен в пуле намайнен {{ $value | humanizeDuration }} назад — майнер, вероятно, залип. Проверь pt_token_miner."

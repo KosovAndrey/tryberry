@@ -30,3 +30,7 @@ nginx/certbot/
 
 # Бэкапы БД — не коммитить
 backups/
+
+# transfer artifacts
+*.tar.gz
+_claude_reference/

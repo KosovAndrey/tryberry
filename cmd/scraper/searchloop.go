@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"gitlab.com/KosovAndrey/tryberrybot/internal/domain"
+	"gitlab.com/KosovAndrey/tryberrybot/internal/metrics"
 	"gitlab.com/KosovAndrey/tryberrybot/internal/repository/postgres"
 	"gitlab.com/KosovAndrey/tryberrybot/internal/scraper"
 	"gitlab.com/KosovAndrey/tryberrybot/internal/searchsub"
@@ -88,15 +89,18 @@ func (sl *searchLoop) scrapeQuery(ctx context.Context, q *domain.SearchQuery) er
 
 	set, err := ss.ScrapeSearch(ctx, q.NormalizedURL)
 	if err != nil {
+		metrics.SearchScrapes.WithLabelValues("error").Inc()
 		return fmt.Errorf("scrape: %w", err)
 	}
 	if err := sl.queries.UpdateLastScraped(ctx, q.ID); err != nil {
 		sl.log.Warn("update last_scraped", "query_id", q.ID, "err", err)
 	}
 	if len(set.Items) == 0 {
+		metrics.SearchScrapes.WithLabelValues("empty").Inc()
 		sl.log.Warn("empty search result", "query_id", q.ID, "pages", set.PagesRead)
 		return nil
 	}
+	metrics.SearchScrapes.WithLabelValues("success").Inc()
 
 	// Апсерт товаров и текущей выдачи.
 	entries := make([]entry, 0, len(set.Items))
@@ -198,6 +202,7 @@ func (sl *searchLoop) evaluateSubscription(ctx context.Context, q *domain.Search
 		}
 	}
 	sl.log.Info("search notification sent", "sub_id", sub.ID, "telegram_id", sub.TelegramID, "items", len(n.Items))
+	metrics.SearchNotificationsSent.WithLabelValues(string(sub.TriggerType)).Inc()
 	return nil
 }
 

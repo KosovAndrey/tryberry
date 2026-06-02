@@ -67,6 +67,56 @@ var (
 	)
 )
 
+// ── Поиск-подписки ───────────────────────────────────────────────────────────
+
+var (
+	// SearchScrapes — циклы скрейпа поисковой выдачи по статусу.
+	SearchScrapes = promauto.NewCounterVec(
+		prometheus.CounterOpts{
+			Namespace: namespace,
+			Name:      "search_scrapes_total",
+			Help:      "Total search-result scrape cycles by status",
+		},
+		[]string{"status"}, // success | empty | error
+	)
+
+	// SearchNotificationsSent — отправленные батч-уведомления по поиск-подпискам,
+	// сгруппированные по типу триггера.
+	SearchNotificationsSent = promauto.NewCounterVec(
+		prometheus.CounterOpts{
+			Namespace: namespace,
+			Name:      "search_notifications_sent_total",
+			Help:      "Total search-subscription notifications sent, by trigger type",
+		},
+		[]string{"trigger"}, // below_target | any_drop | discount_pct
+	)
+
+	// ActiveSearchSubscriptions — текущее число активных поиск-подписок.
+	ActiveSearchSubscriptions = promauto.NewGauge(
+		prometheus.GaugeOpts{
+			Namespace: namespace,
+			Name:      "active_search_subscriptions",
+			Help:      "Current number of active search subscriptions",
+		},
+	)
+)
+
+// ── Тарифы ───────────────────────────────────────────────────────────────────
+
+var (
+	// UsersByPlan — распределение пользователей по тарифу (значение столбца plan
+	// в БД; истёкшие триалы здесь считаются как 'trial', эффективный план
+	// вычисляется в рантайме отдельно).
+	UsersByPlan = promauto.NewGaugeVec(
+		prometheus.GaugeOpts{
+			Namespace: namespace,
+			Name:      "users_by_plan",
+			Help:      "Registered users grouped by stored plan name",
+		},
+		[]string{"plan"}, // free | trial | basic | pro | unlimited
+	)
+)
+
 // ── Scraper ──────────────────────────────────────────────────────────────────
 
 var (

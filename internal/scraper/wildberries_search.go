@@ -160,19 +160,12 @@ func (s *WildberriesSearchScraper) ScrapeSearch(ctx context.Context, rawURL stri
 // ── HTTP с токеном, ротацией прокси и backoff ────────────────────────────────
 
 func (s *WildberriesSearchScraper) fetchPage(ctx context.Context, apiURL, referer string) ([]byte, error) {
-	tok, err := s.tokens.Token(ctx)
-	if err != nil {
-		return nil, fmt.Errorf("%w: token provider: %v", ErrMarketplaceBlocked, err)
-	}
-	if !tok.Valid() {
-		return nil, fmt.Errorf("%w: пустой wbaas-токен (обнови через scripts/wb-token-update.sh)", ErrMarketplaceBlocked)
-	}
-	ua := tok.UserAgent
-	if ua == "" {
-		ua = defaultSearchUA
-	}
-
 	maxAttempts := s.pool.Size() + 2
+	if tp, ok := s.tokens.(interface{ PoolSize() int }); ok {
+		if n := tp.PoolSize() + 2; n > maxAttempts {
+			maxAttempts = n
+		}
+	}
 	if maxAttempts < 3 {
 		maxAttempts = 3
 	}
@@ -184,6 +177,24 @@ func (s *WildberriesSearchScraper) fetchPage(ctx context.Context, apiURL, refere
 		case <-ctx.Done():
 			return nil, ctx.Err()
 		default:
+		}
+
+		tok, err := s.tokens.Token(ctx)
+		if err != nil {
+			lastErr = fmt.Errorf("%w: token provider: %v", ErrMarketplaceBlocked, err)
+			s.sleep(ctx, delay)
+			delay = bumpDelay(delay)
+			continue
+		}
+		if !tok.Valid() {
+			lastErr = fmt.Errorf("%w: пустой wbaas-токен (майнер не наполнил пул)", ErrMarketplaceBlocked)
+			s.sleep(ctx, delay)
+			delay = bumpDelay(delay)
+			continue
+		}
+		ua := tok.UserAgent
+		if ua == "" {
+			ua = defaultSearchUA
 		}
 
 		pc := s.pool.next()
@@ -206,10 +217,14 @@ func (s *WildberriesSearchScraper) fetchPage(ctx context.Context, apiURL, refere
 
 		switch {
 		case resp.StatusCode == http.StatusOK && readErr == nil:
+			s.tokens.MarkGood(ctx, tok.Slot)
 			return body, nil
 		case resp.StatusCode == http.StatusTooManyRequests:
-			// 429 + server: wbaas — токен протух/невалиден или жёсткий лимит.
-			lastErr = fmt.Errorf("%w: 429 via %s (возможно протух токен)", ErrMarketplaceBlocked, pc.label)
+			// 429 + server: wbaas — токен протух/невалиден. После 2 подряд 429 на
+			// слоте провайдер выводит его из ротации; следующая попытка (round-robin)
+			// берёт другой токен из пула.
+			s.tokens.MarkBad(ctx, tok.Slot)
+			lastErr = fmt.Errorf("%w: 429 via %s (slot %d, возможно протух токен)", ErrMarketplaceBlocked, pc.label, tok.Slot)
 			s.sleep(ctx, delay)
 			delay = bumpDelay(delay)
 		default:

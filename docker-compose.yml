@@ -19,6 +19,8 @@ services:
       WEBHOOK_ENABLED: "${WEBHOOK_ENABLED:-false}"
       OTLP_ENDPOINT: "jaeger:4317"
       PORT: "8081"
+      ADMIN_IDS: "${ADMIN_IDS}"
+      SCRAPE_INTERVAL_MINUTES: "10"
     depends_on:
       postgres:
         condition: service_healthy
@@ -47,8 +49,11 @@ services:
       REDIS_URL: "redis://redis:6379"
       KAFKA_BROKERS: "kafka:29092"
       KAFKA_GROUP_ID: "price-tracker"
+      TELEGRAM_BOT_TOKEN: "${TELEGRAM_BOT_TOKEN}"
+      WB_TOKEN_POOL_SIZE: "5"
       SCRAPER_RATE_LIMIT_RPS: "5"
       SCRAPER_HEALTH_PORT: "8090"
+      SEARCH_SCRAPE_INTERVAL_MINUTES: "20"
       OTLP_ENDPOINT: "jaeger:4317"
     depends_on:
       postgres:
@@ -92,6 +97,31 @@ services:
     labels:
       logging: "promtail"
       service: "notifier"
+
+  token-miner:
+      build:
+        context: ./token-miner
+        dockerfile: Dockerfile
+      container_name: pt_token_miner
+      init: true
+      environment:
+        REDIS_URL: "redis://redis:6379"
+        WB_TOKEN_POOL_SIZE: "5"
+        WB_SEARCH_QUERY: "телефон"
+        MINE_INTERVAL_HOURS: "12"
+        MINE_RETRY_MINUTES: "10"
+        MINE_MAX_RELOADS: "2"
+        MINE_TIMEOUT_SECONDS: "150"
+        WB_TOKEN_PROXY_URL: "http://lte2c8614d8-country-ru:wBD7AR4ndi1Q@resext-ru.lteboost.com:8989"
+        HEADLESS: "false"
+        LOG_LEVEL: "INFO"
+      shm_size: "1gb"
+      depends_on:
+        redis:
+          condition: service_healthy
+      labels:
+        logging: "promtail"
+        service: "token-miner"
 
   postgres:
     image: postgres:16
@@ -211,8 +241,9 @@ services:
     container_name: pt_redis_exporter
     ports:
       - "9121:9121"
-    environment:
-      REDIS_ADDR: "redis://redis:6379"
+    command:
+      - '--redis.addr=redis://redis:6379'
+      - '--check-single-keys=wb:search:token:mined_at,wb:search:token:exp,wb:search:pool:healthy,wb:search:pool:oldest_mined_at'
     depends_on:
       redis:
         condition: service_healthy

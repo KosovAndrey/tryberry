@@ -124,17 +124,8 @@ func run(log *slog.Logger) error {
 	// WB-поиск аутентифицируется cookie-токеном wbaas из Redis (обновляется
 	// вручную через scripts/wb-token-update.sh). Search-скрейпер встраивает
 	// товарный, поэтому обслуживает и карточки, и выдачи.
-	tokenProvider := scraper.TokenProviderFunc(func(ctx context.Context) (scraper.SearchToken, error) {
-		if redisClient == nil {
-			return scraper.SearchToken{}, fmt.Errorf("redis unavailable")
-		}
-		cookie, err := redisClient.Get(ctx, "wb:search:cookie").Result()
-		if err != nil {
-			return scraper.SearchToken{}, err
-		}
-		ua, _ := redisClient.Get(ctx, "wb:search:ua").Result()
-		return scraper.SearchToken{Cookie: cookie, UserAgent: ua}, nil
-	})
+	poolSize := getEnvInt("WB_TOKEN_POOL_SIZE", 5)
+	tokenProvider := scraper.NewRedisSearchTokenPool(redisClient, poolSize, log)
 
 	proxyPool, proxyErrs := scraper.NewProxyPool(splitCSV(getEnv("SEARCH_PROXY_URLS", "")), 12*time.Second)
 	for _, e := range proxyErrs {

@@ -2,11 +2,18 @@ package partition
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"time"
 
+	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
+
+// pgDuplicateTable — код ошибки PostgreSQL 42P07 (duplicate_table). Возникает,
+// если таблица/партиция уже создана параллельным процессом между нашей
+// проверкой существования и CREATE TABLE.
+const pgDuplicateTable = "42P07"
 
 type Manager struct {
 	db *pgxpool.Pool
@@ -17,7 +24,7 @@ func NewManager(db *pgxpool.Pool) *Manager {
 }
 
 // EnsurePartitions создаёт партиции для текущего месяца и следующих n месяцев.
-// Безопасно вызывать повторно — использует IF NOT EXISTS.
+// Безопасно вызывать повторно и из нескольких процессов одновременно.
 func (m *Manager) EnsurePartitions(ctx context.Context, monthsAhead int) error {
 	now := time.Now().UTC()
 
@@ -52,7 +59,14 @@ func (m *Manager) ensureOne(ctx context.Context, t time.Time) error {
 		return nil
 	}
 
-	// Создаём партицию
+	// Создаём партицию.
+	//
+	// ВАЖНО: `CREATE TABLE IF NOT EXISTS ... PARTITION OF` НЕ идемпотентна под
+	// гонкой. Если между нашим SELECT EXISTS и этим CREATE другой процесс
+	// (вторая реплика scraper'а или параллельный старт api/notifier) уже создал
+	// партицию, PostgreSQL вернёт 42P07 (duplicate_table), а `IF NOT EXISTS`
+	// эту гонку не закрывает для partition-of. Поэтому 42P07 трактуем как успех:
+	// партиция существует — ровно то, что нам нужно.
 	createQ := fmt.Sprintf(`
 		CREATE TABLE IF NOT EXISTS %s PARTITION OF price_history
 		FOR VALUES FROM ('%s') TO ('%s')`,
@@ -62,6 +76,11 @@ func (m *Manager) ensureOne(ctx context.Context, t time.Time) error {
 	)
 
 	if _, err := m.db.Exec(ctx, createQ); err != nil {
+		var pgErr *pgconn.PgError
+		if errors.As(err, &pgErr) && pgErr.Code == pgDuplicateTable {
+			// Кто-то опередил нас — партиция уже есть, это не ошибка.
+			return nil
+		}
 		return fmt.Errorf("create partition %s: %w", tableName, err)
 	}
 

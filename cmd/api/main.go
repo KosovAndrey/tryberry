@@ -8,6 +8,8 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"strconv"
+	"strings"
 	"syscall"
 	"time"
 
@@ -98,7 +100,7 @@ func run(log *slog.Logger) error {
 
 	bot, err := telegram.NewBot(
 		botToken, log, userRepo, subRepo, prodRepo, registry,
-		searchQueryRepo, searchSubRepo, redisClient,
+		searchQueryRepo, searchSubRepo, redisClient, parseAdminIDs(getEnv("ADMIN_IDS", "")),
 	)
 	if err != nil {
 		return fmt.Errorf("init bot: %w", err)
@@ -194,6 +196,26 @@ func runMetricsUpdater(ctx context.Context, log *slog.Logger, pool *pgxpool.Pool
 				}
 			}
 		}
+
+		var searchSubs int
+		if err := pool.QueryRow(ctxQ,
+			`SELECT COUNT(*) FROM search_subscriptions WHERE active = TRUE`).Scan(&searchSubs); err == nil {
+			metrics.ActiveSearchSubscriptions.Set(float64(searchSubs))
+		}
+
+		planRows, err := pool.Query(ctxQ,
+			`SELECT plan, COUNT(*) FROM users GROUP BY plan`)
+		if err == nil {
+			defer planRows.Close()
+			metrics.UsersByPlan.Reset()
+			for planRows.Next() {
+				var plan string
+				var count int
+				if err := planRows.Scan(&plan, &count); err == nil {
+					metrics.UsersByPlan.WithLabelValues(plan).Set(float64(count))
+				}
+			}
+		}
 	}
 
 	tick()
@@ -223,4 +245,19 @@ func getEnv(key, fallback string) string {
 		return v
 	}
 	return fallback
+}
+
+// parseAdminIDs — "123,456" → множество telegram_id админов.
+func parseAdminIDs(s string) map[int64]bool {
+	out := map[int64]bool{}
+	for _, part := range strings.Split(s, ",") {
+		part = strings.TrimSpace(part)
+		if part == "" {
+			continue
+		}
+		if id, err := strconv.ParseInt(part, 10, 64); err == nil {
+			out[id] = true
+		}
+	}
+	return out
 }

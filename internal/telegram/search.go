@@ -87,7 +87,21 @@ func (b *Bot) sendSearchMenu(chatID int64, messageID int) {
 
 // ── Старт подписки: ссылка → выбор типа триггера ──────────────────────────────
 
-func (b *Bot) startSearchTrack(ctx context.Context, chatID int64, rawURL string, _ *domain.User) {
+func (b *Bot) startSearchTrack(ctx context.Context, chatID int64, rawURL string, user *domain.User) {
+	// Фейл-фаст: если поиск на тарифе недоступен или лимит исчерпан —
+	// не показываем кнопки, сразу объясняем.
+	plan := user.EffectivePlan(time.Now())
+	cnt, err := b.searchSubRepo.CountActiveByUserID(ctx, user.ID)
+	if err != nil {
+		b.log.Error("count search subs", "err", err)
+		b.reply(chatID, "Произошла ошибка, попробуй позже.")
+		return
+	}
+	if cnt >= plan.MaxSearch {
+		b.reply(chatID, b.searchLimitText(plan, cnt))
+		return
+	}
+
 	ss, err := b.registry.FindSearchByURL(rawURL)
 	if err != nil {
 		b.reply(chatID, "Это не похоже на поисковую ссылку Wildberries. Нужна ссылка с параметром поиска.")
@@ -201,6 +215,13 @@ func (b *Bot) handleSearchThreshold(ctx context.Context, chatID, tgID int64, tex
 
 // createSearchSub — создать поиск-подписку и зафиксировать стартовые цены.
 func (b *Bot) createSearchSub(ctx context.Context, chatID int64, user *domain.User, queryID int64, trigger domain.TriggerType, target *float64, pct *int16) {
+	// Жёсткий guard на случай гонки/обхода фейл-фаста.
+	plan := user.EffectivePlan(time.Now())
+	if cnt, err := b.searchSubRepo.CountActiveByUserID(ctx, user.ID); err == nil && cnt >= plan.MaxSearch {
+		b.reply(chatID, b.searchLimitText(plan, cnt))
+		return
+	}
+
 	sub, err := b.searchSubRepo.Create(ctx, &domain.SearchSubscription{
 		UserID:        user.ID,
 		SearchQueryID: queryID,
@@ -378,4 +399,25 @@ func parsePct(s string) (int16, error) {
 func htmlEscape(s string) string {
 	r := strings.NewReplacer("&", "&amp;", "<", "&lt;", ">", "&gt;")
 	return r.Replace(s)
+}
+
+// ── Тексты отказов по лимитам тарифа ─────────────────────────────────────────
+
+func productLimitText(plan domain.Plan, used int) string {
+	return fmt.Sprintf(
+		"🚫 Достигнут лимит тарифа <b>%s</b>: товаров %d из %d.\n\n"+
+			"Чтобы отслеживать больше — отмени ненужное в /list или напиши @kosov_andrey про расширение тарифа.",
+		plan.Title, used, plan.MaxProduct)
+}
+
+func (b *Bot) searchLimitText(plan domain.Plan, used int) string {
+	if plan.MaxSearch == 0 {
+		return "🔎 Поиск-подписки на твоём тарифе пока недоступны.\n\n" +
+			"Поиск по ссылке есть на тарифе <b>Pro</b>. Также можно попробовать бесплатный триал на 3 дня — команда /trial.\n\n" +
+			"По вопросам — @kosov_andrey."
+	}
+	return fmt.Sprintf(
+		"🚫 Достигнут лимит поиск-подписок тарифа <b>%s</b>: %d из %d.\n\n"+
+			"Отмени ненужное в /list_search или напиши @kosov_andrey про расширение.",
+		plan.Title, used, plan.MaxSearch)
 }

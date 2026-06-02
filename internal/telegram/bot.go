@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"strconv"
 	"strings"
+	"time"
 
 	tgbotapi "github.com/go-telegram-bot-api/telegram-bot-api/v5"
 	"github.com/redis/go-redis/v9"
@@ -33,6 +34,8 @@ type Bot struct {
 	searchQueryRepo *postgres.SearchQueryRepo
 	searchSubRepo   *postgres.SearchSubscriptionRepo
 	rdb             *redis.Client // FSM для ввода порога (может быть nil)
+
+	adminIDs map[int64]bool // кто может выдавать тарифы
 }
 
 func NewBot(
@@ -45,6 +48,7 @@ func NewBot(
 	searchQueryRepo *postgres.SearchQueryRepo,
 	searchSubRepo *postgres.SearchSubscriptionRepo,
 	rdb *redis.Client,
+	adminIDs map[int64]bool,
 ) (*Bot, error) {
 	api, err := tgbotapi.NewBotAPI(token)
 	if err != nil {
@@ -60,6 +64,7 @@ func NewBot(
 		searchQueryRepo: searchQueryRepo,
 		searchSubRepo:   searchSubRepo,
 		rdb:             rdb,
+		adminIDs:        adminIDs,
 	}, nil
 }
 
@@ -80,6 +85,8 @@ func (b *Bot) SetCommands() error {
 		{Command: "list", Description: "Мои подписки"},
 		{Command: "track_search", Description: "Отслеживать поиск — /track_search <ссылка>"},
 		{Command: "list_search", Description: "Мои поиск-подписки"},
+		{Command: "trial", Description: "🎁 Триал поиска (3 дня)"},
+		{Command: "myplan", Description: "Мой тариф и лимиты"},
 		{Command: "help", Description: "Помощь"},
 	}
 	cfg := tgbotapi.NewSetMyCommands(commands...)
@@ -111,7 +118,13 @@ func (b *Bot) handleMessage(ctx context.Context, msg *tgbotapi.Message) {
 		return
 	}
 
-	// 1. Ждём ли мы от пользователя число (порог/процент) для поиск-подписки?
+	// 1a. Ждём ли число (порог/процент) для ТОВАРНОЙ подписки?
+	if fsm, ok := b.getTrackFSM(ctx, msg.From.ID); ok {
+		b.handleTrackThreshold(ctx, msg.Chat.ID, msg.From.ID, text, fsm)
+		return
+	}
+
+	// 1b. Ждём ли мы от пользователя число (порог/процент) для поиск-подписки?
 	if fsm, ok := b.getSearchFSM(ctx, msg.From.ID); ok {
 		b.handleSearchThreshold(ctx, msg.Chat.ID, msg.From.ID, text, user, fsm)
 		return
@@ -135,8 +148,9 @@ func (b *Bot) handleMessage(ctx context.Context, msg *tgbotapi.Message) {
 // ── Commands ──────────────────────────────────────────────────────────────────
 
 func (b *Bot) handleCommand(ctx context.Context, msg *tgbotapi.Message) {
-	// Любая команда прерывает незавершённый ввод порога поиск-подписки.
+	// Любая команда прерывает незавершённый ввод порога (поиск- и товарных подписок).
 	b.clearSearchFSM(ctx, msg.From.ID)
+	b.clearTrackFSM(ctx, msg.From.ID)
 
 	user, err := b.userRepo.Upsert(ctx, msg.From.ID, msg.From.UserName)
 	if err != nil {
@@ -172,6 +186,18 @@ func (b *Bot) handleCommand(ctx context.Context, msg *tgbotapi.Message) {
 		b.startSearchTrack(ctx, msg.Chat.ID, args, user)
 	case "list_search":
 		b.handleListSearch(ctx, msg.Chat.ID, user)
+	case "trial":
+		b.handleTrial(ctx, msg.Chat.ID, user)
+	case "myplan":
+		b.handleMyPlan(ctx, msg.Chat.ID, user)
+	case "grant":
+		b.handleGrant(ctx, msg)
+	case "revoke":
+		b.handleRevoke(ctx, msg)
+	case "users":
+		b.handleUsers(ctx, msg)
+	case "whois":
+		b.handleWhois(ctx, msg)
 	case "help":
 		b.sendHelpMenu(msg.Chat.ID, 0, false)
 	case "untrack":
@@ -197,6 +223,10 @@ func (b *Bot) sendMainMenu(ctx context.Context, chatID int64, messageID int, edi
 		),
 		tgbotapi.NewInlineKeyboardRow(
 			tgbotapi.NewInlineKeyboardButtonData("🔎 Поиск по ссылке", "menu:search"),
+		),
+		tgbotapi.NewInlineKeyboardRow(
+			tgbotapi.NewInlineKeyboardButtonData("ℹ️ Мой тариф", "menu:myplan"),
+			tgbotapi.NewInlineKeyboardButtonData("🎁 Триал 3 дня", "menu:trial"),
 		),
 		tgbotapi.NewInlineKeyboardRow(
 			tgbotapi.NewInlineKeyboardButtonData("❓ Помощь", "menu:help"),
@@ -303,7 +333,7 @@ func (b *Bot) buildListView(subs []*domain.Subscription) (string, tgbotapi.Inlin
 
 	for i, sub := range subs {
 		priceEmoji := ""
-		if sub.CurrentPrice > 0 && sub.CurrentPrice < sub.BaselinePrice {
+		if sub.CurrentPrice > 0 && sub.CurrentPrice < sub.FirstSeenPrice {
 			priceEmoji = "📉 "
 		}
 		currentPriceStr := "нет данных"
@@ -311,8 +341,9 @@ func (b *Bot) buildListView(subs []*domain.Subscription) (string, tgbotapi.Inlin
 			currentPriceStr = fmt.Sprintf("%s%.0f ₽", priceEmoji, sub.CurrentPrice)
 		}
 
-		fmt.Fprintf(&sb, "%d. %s <b>%s</b>\n   сейчас %s  |  при подписке %.0f ₽\n\n",
-			i+1, marketplaceIcon(sub.ProductMarketplace), sub.ProductName, currentPriceStr, sub.BaselinePrice,
+		fmt.Fprintf(&sb, "%d. %s <b>%s</b>\n   сейчас %s  |  при подписке %.0f ₽\n   %s\n\n",
+			i+1, marketplaceIcon(sub.ProductMarketplace), sub.ProductName, currentPriceStr, sub.FirstSeenPrice,
+			triggerDescription(sub.TriggerType, sub.TargetPrice, sub.DiscountPct),
 		)
 	}
 
@@ -426,7 +457,34 @@ func (b *Bot) doTrack(ctx context.Context, chatID int64, rawURL string, user *do
 		return
 	}
 
-	_, created, err := b.subRepo.Upsert(ctx, user.ID, product.ID, result.Price)
+	// Лимит тарифа на товарные подписки. Повторная ссылка на уже
+	// отслеживаемый товар лимит не расходует (это обновление, не новая).
+	plan := user.EffectivePlan(time.Now())
+	active, err := b.subRepo.GetActiveByUserID(ctx, user.ID)
+	if err != nil {
+		span.RecordError(err)
+		b.log.Error("count active subs", "err", err)
+		edit := tgbotapi.NewEditMessageText(chatID, sent.MessageID, "Произошла ошибка, попробуй позже.")
+		edit.ParseMode = "HTML"
+		b.api.Send(edit) //nolint:errcheck
+		return
+	}
+	alreadyTracked := false
+	for _, sub := range active {
+		if sub.ProductID == product.ID {
+			alreadyTracked = true
+			break
+		}
+	}
+	if !alreadyTracked && len(active) >= plan.MaxProduct {
+		metrics.TrackCommands.WithLabelValues("limit").Inc()
+		edit := tgbotapi.NewEditMessageText(chatID, sent.MessageID, productLimitText(plan, len(active)))
+		edit.ParseMode = "HTML"
+		b.api.Send(edit) //nolint:errcheck
+		return
+	}
+
+	sub, created, err := b.subRepo.Upsert(ctx, user.ID, product.ID, result.Price)
 	if err != nil {
 		span.RecordError(err)
 		span.SetStatus(codes.Error, err.Error())
@@ -445,7 +503,7 @@ func (b *Bot) doTrack(ctx context.Context, chatID int64, rawURL string, user *do
 			"✅ <b>Добавил в отслеживание!</b>\n\n"+
 				"<b>%s</b>\n"+
 				"💰 Текущая цена: <b>%.0f ₽</b>\n\n"+
-				"Уведомлю когда цена снизится 🔔",
+				"🔔 Сейчас уведомлю при <b>любом снижении</b>. Можно сменить тип уведомления кнопками ниже 👇",
 			result.Name, result.Price,
 		)
 	} else {
@@ -453,17 +511,13 @@ func (b *Bot) doTrack(ctx context.Context, chatID int64, rawURL string, user *do
 		responseText = fmt.Sprintf(
 			"🔄 <b>Отслеживание возобновлено!</b>\n\n"+
 				"<b>%s</b>\n"+
-				"💰 Текущая цена: <b>%.0f ₽</b>",
+				"💰 Текущая цена: <b>%.0f ₽</b>\n\n"+
+				"🔔 Тип уведомления: <b>любое снижение</b>. Сменить — кнопками ниже 👇",
 			result.Name, result.Price,
 		)
 	}
 
-	keyboard := tgbotapi.NewInlineKeyboardMarkup(
-		tgbotapi.NewInlineKeyboardRow(
-			tgbotapi.NewInlineKeyboardButtonData("📋 Мои подписки", "menu:list"),
-			tgbotapi.NewInlineKeyboardButtonData("◀️ В меню", "menu:main"),
-		),
-	)
+	keyboard := trackTriggerKeyboard(sub.ID, domain.TriggerAnyDrop)
 
 	edit := tgbotapi.NewEditMessageText(chatID, sent.MessageID, responseText)
 	edit.ParseMode = "HTML"
@@ -515,11 +569,55 @@ func (b *Bot) handleCallback(ctx context.Context, cb *tgbotapi.CallbackQuery) {
 	case cb.Data == "menu:search":
 		b.sendSearchMenu(chatID, messageID)
 
+	case cb.Data == "menu:lsearch":
+		user, err := b.userRepo.GetByTelegramID(ctx, cb.From.ID)
+		if err != nil {
+			b.answerCallback(cb.ID, "Ошибка")
+			return
+		}
+		subs, err := b.searchSubRepo.GetActiveByUserID(ctx, user.ID)
+		if err != nil {
+			b.answerCallback(cb.ID, "Ошибка")
+			return
+		}
+		if len(subs) == 0 {
+			b.editMenu(chatID, messageID,
+				"🔎 У тебя пока нет поиск-подписок.\n\nОтправь ссылку на поисковую выдачу Wildberries прямо в чат.",
+				tgbotapi.NewInlineKeyboardMarkup(
+					tgbotapi.NewInlineKeyboardRow(
+						tgbotapi.NewInlineKeyboardButtonData("◀️ В меню", "menu:main"),
+					),
+				),
+			)
+			return
+		}
+		text, keyboard := b.buildSearchListView(subs)
+		b.editMenu(chatID, messageID, text, keyboard)
+
+	case cb.Data == "menu:trial":
+		user, err := b.userRepo.GetByTelegramID(ctx, cb.From.ID)
+		if err != nil {
+			b.answerCallback(cb.ID, "Ошибка")
+			return
+		}
+		b.handleTrial(ctx, chatID, user)
+
+	case cb.Data == "menu:myplan":
+		user, err := b.userRepo.GetByTelegramID(ctx, cb.From.ID)
+		if err != nil {
+			b.answerCallback(cb.ID, "Ошибка")
+			return
+		}
+		b.handleMyPlan(ctx, chatID, user)
+
 	case cb.Data == "menu:help":
 		b.sendHelpMenu(chatID, messageID, true)
 
 	case strings.HasPrefix(cb.Data, "untrack:"):
 		b.callbackUntrack(ctx, cb)
+
+	case strings.HasPrefix(cb.Data, "ptrack:"):
+		b.handleTrackTriggerCallback(ctx, cb)
 
 	case strings.HasPrefix(cb.Data, "strack:"):
 		b.handleSearchTriggerCallback(ctx, cb)

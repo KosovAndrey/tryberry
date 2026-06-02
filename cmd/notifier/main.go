@@ -24,6 +24,7 @@ import (
 	"gitlab.com/KosovAndrey/tryberrybot/internal/kafka"
 	"gitlab.com/KosovAndrey/tryberrybot/internal/repository/postgres"
 	redisrepo "gitlab.com/KosovAndrey/tryberrybot/internal/repository/redis"
+	"gitlab.com/KosovAndrey/tryberrybot/internal/searchsub"
 	"gitlab.com/KosovAndrey/tryberrybot/internal/telegram"
 )
 
@@ -128,7 +129,7 @@ func makeHandler(
 			return nil
 		}
 
-		// Получаем актуальную цену для /list (из Redis или PostgreSQL)
+		// Получаем актуальную цену (из Redis или PostgreSQL)
 		currentPrice := event.NewPrice
 		if priceCache != nil {
 			if cached, err := priceCache.Get(ctx, event.ProductID); err == nil {
@@ -142,8 +143,19 @@ func makeHandler(
 		}
 
 		for _, sub := range subs {
-			// Проверяем: цена упала ниже baseline?
-			if currentPrice >= sub.BaselinePrice {
+			// Решение о срабатывании — общий движок поиск-подписок:
+			//   first_seen_price  — база первого срабатывания (any_drop/discount_pct),
+			//   baseline_price    — цена последнего уведомления (повторные срабатывания),
+			//   notified          — фаза (первое vs повторное).
+			rule := searchsub.RuleFromProductSub(sub)
+			state := searchsub.ProductState{
+				ProductID:           sub.ProductID,
+				CurrentKopecks:      searchsub.Kopecks(currentPrice),
+				BaselineKopecks:     searchsub.Kopecks(sub.FirstSeenPrice),
+				LastNotifiedKopecks: searchsub.Kopecks(sub.BaselinePrice),
+				HasNotified:         sub.Notified,
+			}
+			if !searchsub.Decide(rule, state) {
 				continue
 			}
 
@@ -174,7 +186,7 @@ func makeHandler(
 				return fmt.Errorf("send telegram notification: %w", err)
 			}
 
-			// Обновляем baseline_price
+			// Фиксируем цену последнего уведомления (+ notified=TRUE)
 			if err := subRepo.UpdateBaseline(ctx, sub.ID, event.NewPrice); err != nil {
 				return fmt.Errorf("update baseline: %w", err)
 			}
@@ -192,6 +204,7 @@ func makeHandler(
 			log.Info("notification sent",
 				"subscription_id", sub.ID,
 				"user_id", sub.UserID,
+				"trigger", string(sub.TriggerType),
 				"old_price", sub.BaselinePrice,
 				"new_price", event.NewPrice,
 			)

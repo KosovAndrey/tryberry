@@ -19,24 +19,33 @@ func NewSubscriptionRepo(db *pgxpool.Pool) *SubscriptionRepo {
 }
 
 // Upsert — подписать пользователя на товар.
-// Если подписка уже активна — возвращает ErrAlreadySubscribed.
-// Если была отменена — переактивирует и обновляет baseline_price.
+// Если подписка уже активна — переактивирует/обновляет и возвращает inserted=false.
+// При вставке и при реактивации стратегия сбрасывается на дефолт (any_drop),
+// first_seen_price фиксируется на текущей цене, notified сбрасывается.
 func (r *SubscriptionRepo) Upsert(ctx context.Context, userID, productID int64, baselinePrice float64) (*domain.Subscription, bool, error) {
 	const q = `
-		INSERT INTO subscriptions (user_id, product_id, baseline_price)
-		VALUES ($1, $2, $3)
+		INSERT INTO subscriptions (user_id, product_id, baseline_price, first_seen_price)
+		VALUES ($1, $2, $3, $3)
 		ON CONFLICT (user_id, product_id) DO UPDATE
-			SET active         = TRUE,
-			    baseline_price = EXCLUDED.baseline_price,
-			    updated_at     = NOW()
-		RETURNING id, user_id, product_id, baseline_price, active, created_at, updated_at,
+			SET active           = TRUE,
+			    baseline_price   = EXCLUDED.baseline_price,
+			    first_seen_price = EXCLUDED.baseline_price,
+			    trigger_type     = 'any_drop',
+			    target_price     = NULL,
+			    discount_pct     = NULL,
+			    notified         = FALSE,
+			    updated_at       = NOW()
+		RETURNING id, user_id, product_id, baseline_price, first_seen_price,
+		          trigger_type, target_price, discount_pct, notified,
+		          active, created_at, updated_at,
 		          (xmax = 0) AS inserted`
 
 	s := &domain.Subscription{}
 	var inserted bool
 	err := withSpan(ctx, "upsert_subscription", func(ctx context.Context) error {
 		return r.db.QueryRow(ctx, q, userID, productID, baselinePrice).
-			Scan(&s.ID, &s.UserID, &s.ProductID, &s.BaselinePrice,
+			Scan(&s.ID, &s.UserID, &s.ProductID, &s.BaselinePrice, &s.FirstSeenPrice,
+				&s.TriggerType, &s.TargetPrice, &s.DiscountPct, &s.Notified,
 				&s.Active, &s.CreatedAt, &s.UpdatedAt, &inserted)
 	})
 	if err != nil {
@@ -47,12 +56,15 @@ func (r *SubscriptionRepo) Upsert(ctx context.Context, userID, productID int64, 
 
 func (r *SubscriptionRepo) GetByID(ctx context.Context, id int64) (*domain.Subscription, error) {
 	const q = `
-		SELECT id, user_id, product_id, baseline_price, active, created_at, updated_at
+		SELECT id, user_id, product_id, baseline_price, first_seen_price,
+		       trigger_type, target_price, discount_pct, notified,
+		       active, created_at, updated_at
 		FROM subscriptions WHERE id = $1`
 
 	s := &domain.Subscription{}
 	err := r.db.QueryRow(ctx, q, id).
-		Scan(&s.ID, &s.UserID, &s.ProductID, &s.BaselinePrice,
+		Scan(&s.ID, &s.UserID, &s.ProductID, &s.BaselinePrice, &s.FirstSeenPrice,
+			&s.TriggerType, &s.TargetPrice, &s.DiscountPct, &s.Notified,
 			&s.Active, &s.CreatedAt, &s.UpdatedAt)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, domain.ErrNotFound
@@ -65,8 +77,9 @@ func (r *SubscriptionRepo) GetByID(ctx context.Context, id int64) (*domain.Subsc
 
 func (r *SubscriptionRepo) GetActiveByUserID(ctx context.Context, userID int64) ([]*domain.Subscription, error) {
 	const q = `
-		SELECT s.id, s.user_id, s.product_id, s.baseline_price, s.active,
-		       s.created_at, s.updated_at,
+		SELECT s.id, s.user_id, s.product_id, s.baseline_price, s.first_seen_price,
+		       s.trigger_type, s.target_price, s.discount_pct, s.notified,
+		       s.active, s.created_at, s.updated_at,
 		       p.name, p.url,
 		       COALESCE(p.image_url, ''),
 		       p.marketplace,
@@ -91,8 +104,9 @@ func (r *SubscriptionRepo) GetActiveByUserID(ctx context.Context, userID int64) 
 	for rows.Next() {
 		s := &domain.Subscription{}
 		if err := rows.Scan(
-			&s.ID, &s.UserID, &s.ProductID, &s.BaselinePrice, &s.Active,
-			&s.CreatedAt, &s.UpdatedAt,
+			&s.ID, &s.UserID, &s.ProductID, &s.BaselinePrice, &s.FirstSeenPrice,
+			&s.TriggerType, &s.TargetPrice, &s.DiscountPct, &s.Notified,
+			&s.Active, &s.CreatedAt, &s.UpdatedAt,
 			&s.ProductName, &s.ProductURL, &s.ProductImageURL,
 			&s.ProductMarketplace,
 			&s.CurrentPrice,
@@ -106,8 +120,9 @@ func (r *SubscriptionRepo) GetActiveByUserID(ctx context.Context, userID int64) 
 
 func (r *SubscriptionRepo) GetActiveByProductIDWithTelegramID(ctx context.Context, productID int64) ([]*domain.Subscription, error) {
 	const q = `
-		SELECT s.id, s.user_id, s.product_id, s.baseline_price, s.active,
-		       s.created_at, s.updated_at,
+		SELECT s.id, s.user_id, s.product_id, s.baseline_price, s.first_seen_price,
+		       s.trigger_type, s.target_price, s.discount_pct, s.notified,
+		       s.active, s.created_at, s.updated_at,
 		       p.name, p.url, COALESCE(p.image_url, ''), p.marketplace,
 		       u.telegram_id
 		FROM subscriptions s
@@ -125,8 +140,9 @@ func (r *SubscriptionRepo) GetActiveByProductIDWithTelegramID(ctx context.Contex
 	for rows.Next() {
 		s := &domain.Subscription{}
 		if err := rows.Scan(
-			&s.ID, &s.UserID, &s.ProductID, &s.BaselinePrice, &s.Active,
-			&s.CreatedAt, &s.UpdatedAt,
+			&s.ID, &s.UserID, &s.ProductID, &s.BaselinePrice, &s.FirstSeenPrice,
+			&s.TriggerType, &s.TargetPrice, &s.DiscountPct, &s.Notified,
+			&s.Active, &s.CreatedAt, &s.UpdatedAt,
 			&s.ProductName, &s.ProductURL, &s.ProductImageURL, &s.ProductMarketplace,
 			&s.TelegramID,
 		); err != nil {
@@ -139,8 +155,9 @@ func (r *SubscriptionRepo) GetActiveByProductIDWithTelegramID(ctx context.Contex
 
 func (r *SubscriptionRepo) GetActiveByProductID(ctx context.Context, productID int64) ([]*domain.Subscription, error) {
 	const q = `
-		SELECT s.id, s.user_id, s.product_id, s.baseline_price, s.active,
-		       s.created_at, s.updated_at,
+		SELECT s.id, s.user_id, s.product_id, s.baseline_price, s.first_seen_price,
+		       s.trigger_type, s.target_price, s.discount_pct, s.notified,
+		       s.active, s.created_at, s.updated_at,
 		       p.name, p.url, COALESCE(p.image_url, '')
 		FROM subscriptions s
 		JOIN products p ON p.id = s.product_id
@@ -156,8 +173,9 @@ func (r *SubscriptionRepo) GetActiveByProductID(ctx context.Context, productID i
 	for rows.Next() {
 		s := &domain.Subscription{}
 		if err := rows.Scan(
-			&s.ID, &s.UserID, &s.ProductID, &s.BaselinePrice, &s.Active,
-			&s.CreatedAt, &s.UpdatedAt,
+			&s.ID, &s.UserID, &s.ProductID, &s.BaselinePrice, &s.FirstSeenPrice,
+			&s.TriggerType, &s.TargetPrice, &s.DiscountPct, &s.Notified,
+			&s.Active, &s.CreatedAt, &s.UpdatedAt,
 			&s.ProductName, &s.ProductURL, &s.ProductImageURL,
 		); err != nil {
 			return nil, err
@@ -183,12 +201,34 @@ func (r *SubscriptionRepo) Deactivate(ctx context.Context, id int64) error {
 	return nil
 }
 
+// UpdateBaseline — зафиксировать цену последнего уведомления.
+// Вызывается ТОЛЬКО после успешной отправки уведомления, поэтому здесь же
+// помечаем подписку как notified=TRUE (переводит в фазу повторных срабатываний).
 func (r *SubscriptionRepo) UpdateBaseline(ctx context.Context, id int64, newPrice float64) error {
 	const q = `
 		UPDATE subscriptions
-		SET baseline_price = $2, updated_at = NOW()
+		SET baseline_price = $2, notified = TRUE, updated_at = NOW()
 		WHERE id = $1`
 
 	_, err := r.db.Exec(ctx, q, id, newPrice)
 	return err
+}
+
+// SetTrigger — сменить стратегию триггера товарной подписки.
+// target и pct передаются только для соответствующих типов (иначе nil).
+// CHECK-констрейнты в БД гарантируют согласованность.
+func (r *SubscriptionRepo) SetTrigger(ctx context.Context, id int64, trigger string, target *float64, pct *int16) error {
+	const q = `
+		UPDATE subscriptions
+		SET trigger_type = $2, target_price = $3, discount_pct = $4, updated_at = NOW()
+		WHERE id = $1`
+
+	tag, err := r.db.Exec(ctx, q, id, trigger, target, pct)
+	if err != nil {
+		return err
+	}
+	if tag.RowsAffected() == 0 {
+		return domain.ErrNotFound
+	}
+	return nil
 }
