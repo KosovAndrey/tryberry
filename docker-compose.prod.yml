@@ -82,6 +82,9 @@ services:
     restart: unless-stopped
     ports: !reset []
 
+  scheduler:
+    restart: unless-stopped
+
   grafana:
     ports: !reset []
     environment:

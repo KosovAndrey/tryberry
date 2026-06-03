@@ -21,6 +21,8 @@ services:
       PORT: "8081"
       ADMIN_IDS: "${ADMIN_IDS}"
       SCRAPE_INTERVAL_MINUTES: "10"
+      HTTPS_PROXY: "${TELEGRAM_PROXY_URL}"
+      NO_PROXY: "postgres,redis,kafka,jaeger,localhost,127.0.0.1"
     depends_on:
       postgres:
         condition: service_healthy
@@ -85,6 +87,8 @@ services:
       TELEGRAM_BOT_TOKEN: "${TELEGRAM_BOT_TOKEN}"
       NOTIFIER_HEALTH_PORT: "8091"
       OTLP_ENDPOINT: "jaeger:4317"
+      HTTPS_PROXY: "${TELEGRAM_PROXY_URL}"
+      NO_PROXY: "postgres,redis,kafka,jaeger,localhost,127.0.0.1"
     depends_on:
       postgres:
         condition: service_healthy
@@ -122,6 +126,30 @@ services:
       labels:
         logging: "promtail"
         service: "token-miner"
+
+  scheduler:
+      build:
+        context: .
+        dockerfile: Dockerfile
+        args:
+          SERVICE: scheduler
+      container_name: pt_scheduler
+      environment:
+        DATABASE_URL: "postgres://user:password@postgres:5432/tryberrybot?sslmode=disable"
+        KAFKA_BROKERS: "kafka:29092"
+        SCRAPE_INTERVAL_MINUTES: "15"
+        SCHEDULER_HEALTH_PORT: "8092"
+        OTLP_ENDPOINT: "jaeger:4317"
+      depends_on:
+        postgres:
+          condition: service_healthy
+        kafka:
+          condition: service_healthy
+        jaeger:
+          condition: service_started
+      labels:
+        logging: "promtail"
+        service: "scheduler"
 
   postgres:
     image: postgres:16
