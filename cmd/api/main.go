@@ -49,7 +49,8 @@ func run(log *slog.Logger) error {
 	databaseURL := mustEnv("DATABASE_URL")
 	redisURL := mustEnv("REDIS_URL")
 	botToken := mustEnv("TELEGRAM_BOT_TOKEN")
-	webhookURL := mustEnv("TELEGRAM_WEBHOOK_URL")
+	// В polling-режиме webhook URL не нужен, поэтому больше не mustEnv.
+	webhookURL := getEnv("TELEGRAM_WEBHOOK_URL", "")
 	port := getEnv("PORT", "8081")
 	otlpEndpoint := getEnv("OTLP_ENDPOINT", "jaeger:4317")
 
@@ -98,10 +99,15 @@ func run(log *slog.Logger) error {
 		scraper.NewYandexMarketScraper(2),
 	)
 
-	bot, err := telegram.NewBot(
-		botToken, log, userRepo, subRepo, prodRepo, registry,
-		searchQueryRepo, searchSubRepo, redisClient, parseAdminIDs(getEnv("ADMIN_IDS", "")),
-	)
+	// getMe внутри NewBot ходит наружу к Telegram. На RU-хостинге канал флапает
+	// (РКН-троттлинг), поэтому единичный таймаут НЕ должен ронять сервис в петлю
+	// рестартов — ретраим с backoff'ом до успеха или отмены ctx.
+	bot, err := newBotWithRetry(ctx, log, func() (*telegram.Bot, error) {
+		return telegram.NewBot(
+			botToken, log, userRepo, subRepo, prodRepo, registry,
+			searchQueryRepo, searchSubRepo, redisClient, parseAdminIDs(getEnv("ADMIN_IDS", "")),
+		)
+	})
 	if err != nil {
 		return fmt.Errorf("init bot: %w", err)
 	}
@@ -109,13 +115,27 @@ func run(log *slog.Logger) error {
 		log.Warn("set commands failed", "err", err)
 	}
 
+	// WEBHOOK_ENABLED=true  → webhook (Telegram стучится к нам; нужен доступный
+	//                          входящий путь Telegram→RU-IP).
+	// WEBHOOK_ENABLED=false → long-polling (бот сам ходит наружу через прокси).
+	//                          Используем, пока РКН режет входящие webhook'и.
 	if getEnv("WEBHOOK_ENABLED", "true") == "true" {
+		if webhookURL == "" {
+			return fmt.Errorf("WEBHOOK_ENABLED=true requires TELEGRAM_WEBHOOK_URL")
+		}
 		if err := bot.SetWebhook(webhookURL); err != nil {
 			return fmt.Errorf("set webhook: %w", err)
 		}
 		log.Info("webhook set", "url", webhookURL)
 	} else {
-		log.Info("webhook disabled, skipping registration")
+		// Polling крутится в фоне; HTTP-сервер ниже продолжает отдавать
+		// /health, /metrics, /live. Маршрут /webhook остаётся, но не задействован.
+		go func() {
+			if err := bot.RunPolling(ctx); err != nil {
+				log.Error("polling stopped with error", "err", err)
+			}
+		}()
+		log.Info("polling mode enabled (getUpdates via proxy)")
 	}
 
 	mux := http.NewServeMux()
@@ -145,8 +165,6 @@ func run(log *slog.Logger) error {
 
 	srv := &http.Server{Addr: ":" + port, Handler: mux}
 
-	go runScheduler(ctx, log, pool, botToken)
-
 	log.Info("api started", "port", port)
 
 	go runMetricsUpdater(ctx, log, pool)
@@ -160,6 +178,37 @@ func run(log *slog.Logger) error {
 		return fmt.Errorf("http server: %w", err)
 	}
 	return nil
+}
+
+// newBotWithRetry повторяет инициализацию бота (getMe ходит наружу к Telegram)
+// с экспоненциальным backoff'ом. Возвращает ошибку только при отмене ctx —
+// иначе временная недоступность Telegram (флап РКН/прокси) не валит api, а ждёт
+// восстановления канала. Это устраняет петлю рестартов на старте.
+func newBotWithRetry(ctx context.Context, log *slog.Logger, build func() (*telegram.Bot, error)) (*telegram.Bot, error) {
+	const maxBackoff = 30 * time.Second
+	backoff := time.Second
+	for attempt := 1; ; attempt++ {
+		bot, err := build()
+		if err == nil {
+			if attempt > 1 {
+				log.Info("telegram init ok after retries", "attempts", attempt)
+			}
+			return bot, nil
+		}
+		log.Warn("telegram init failed (getMe), retrying",
+			"attempt", attempt, "backoff", backoff.String(), "err", err)
+		select {
+		case <-ctx.Done():
+			return nil, fmt.Errorf("cancelled after %d attempts: %w", attempt, err)
+		case <-time.After(backoff):
+		}
+		if backoff < maxBackoff {
+			backoff *= 2
+			if backoff > maxBackoff {
+				backoff = maxBackoff
+			}
+		}
+	}
 }
 
 func runMetricsUpdater(ctx context.Context, log *slog.Logger, pool *pgxpool.Pool) {

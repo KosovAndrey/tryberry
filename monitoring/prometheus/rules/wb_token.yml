@@ -37,11 +37,11 @@ groups:
 
       # Самый старый живой токен слишком стар — майнер давно не обновлял пул.
       - alert: WBSearchPoolStale
-        expr: time() - redis_key_value{key="wb:search:pool:oldest_mined_at"} > 50400
+        expr: time() - redis_key_value{key="wb:search:pool:oldest_mined_at"} > 176400
         for: 15m
         labels:
           severity: warning
           service: token-miner
         annotations:
-          summary: "Самый старый WB-токен старше 14ч"
+          summary: "Самый старый WB-токен старше 49ч"
           description: "Самый старый токен в пуле намайнен {{ $value | humanizeDuration }} назад — майнер, вероятно, залип. Проверь pt_token_miner."

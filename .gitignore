@@ -34,3 +34,5 @@ backups/
 # transfer artifacts
 *.tar.gz
 _claude_reference/
+.env.save*
+*.bak
