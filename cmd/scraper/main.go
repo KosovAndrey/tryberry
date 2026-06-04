@@ -25,8 +25,6 @@ import (
 	"gitlab.com/KosovAndrey/tryberrybot/internal/repository/postgres"
 	redisrepo "gitlab.com/KosovAndrey/tryberrybot/internal/repository/redis"
 	"gitlab.com/KosovAndrey/tryberrybot/internal/scraper"
-	"gitlab.com/KosovAndrey/tryberrybot/internal/searchsub"
-	"gitlab.com/KosovAndrey/tryberrybot/internal/telegram"
 	"gitlab.com/KosovAndrey/tryberrybot/internal/tracing"
 )
 
@@ -114,16 +112,24 @@ func run(log *slog.Logger) error {
 	}
 
 	// ── Kafka ────────────────────────────────────────────────────────────────
+	// Товарный путь: scrape-tasks → (этот consumer) → price-events.
 	consumer := kafka.NewConsumer(kafkaBrokers, "scrape-tasks", kafkaGroupID)
 	defer consumer.Close()
 
 	producer := kafka.NewProducer(kafkaBrokers, "price-events")
 	defer producer.Close()
 
+	// Поисковый путь (M1b): search-tasks → (search worker) → search-events.
+	searchConsumer := kafka.NewConsumer(kafkaBrokers, "search-tasks", "search-workers")
+	defer searchConsumer.Close()
+
+	searchEvents := kafka.NewProducer(kafkaBrokers, "search-events")
+	defer searchEvents.Close()
+
 	// ── Скрейперы ─────────────────────────────────────────────────────────────
-	// WB-поиск аутентифицируется cookie-токеном wbaas из Redis (обновляется
-	// вручную через scripts/wb-token-update.sh). Search-скрейпер встраивает
-	// товарный, поэтому обслуживает и карточки, и выдачи.
+	// WB-поиск аутентифицируется cookie-токеном wbaas из пула в Redis (майнит
+	// token-miner). Search-скрейпер встраивает товарный, поэтому обслуживает и
+	// карточки, и выдачи.
 	poolSize := getEnvInt("WB_TOKEN_POOL_SIZE", 5)
 	tokenProvider := scraper.NewRedisSearchTokenPool(redisClient, poolSize, log)
 
@@ -146,33 +152,26 @@ func run(log *slog.Logger) error {
 		scraper.NewYandexMarketScraper(rpsYandex),
 	)
 
-	// ── Поиск-планировщик (тикер рядом с consumer'ом цен) ─────────────────────
-	var searchNotifier searchsub.SearchNotifier
-	if tok := os.Getenv("TELEGRAM_BOT_TOKEN"); tok != "" {
-		searchNotifier = tgSearchNotifier{
-			n:    telegram.NewNotifier(tok),
-			topN: getEnvInt("SEARCH_NOTIFY_TOP_N", 10),
-		}
-		log.Info("search notifications via Telegram")
-	} else {
-		searchNotifier = logNotifier{log: log.With("component", "search_notify")}
-		log.Warn("TELEGRAM_BOT_TOKEN not set — search notifications go to log only")
-	}
-
-	sl := &searchLoop{
-		log:      log.With("component", "search_loop"),
+	// ── Поиск-воркер (consumer search-tasks; уведомления уходят событием в
+	//    notifier через топик search-events) ───────────────────────────────────
+	sw := &searchWorker{
+		log:      log.With("component", "search_worker"),
 		registry: registry,
 		queries:  searchQueryRepo,
 		subs:     searchSubRepo,
 		results:  searchResultRepo,
 		notifs:   searchNotifRepo,
 		products: productRepo,
-		notifier: searchNotifier,
+		events:   searchEvents,
 	}
-	searchInterval := time.Duration(getEnvInt("SEARCH_SCRAPE_INTERVAL_MINUTES", 30)) * time.Minute
-	go runSearchLoop(ctx, sl, searchInterval)
+	go func() {
+		log.Info("search worker started (consuming search-tasks)")
+		if err := searchConsumer.Run(ctx, sw.makeHandler()); err != nil {
+			log.Error("search consumer stopped", "err", err)
+		}
+	}()
 
-	// ── Обработчик сообщений (цены) ──────────────────────────────────────────
+	// ── Обработчик сообщений (цены) — блокирующий основной цикл ────────────────
 	handler := makeHandler(log, registry, productRepo, priceHistoryRepo, priceCache, producer)
 
 	log.Info("scraper started, waiting for tasks...")

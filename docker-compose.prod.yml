@@ -71,7 +71,7 @@ services:
     restart: unless-stopped
     ports: !reset []
     environment:
-      WEBHOOK_ENABLED: "true"
+      WEBHOOK_ENABLED: "false"
       TELEGRAM_WEBHOOK_URL: "https://tryberry.ru/webhook"
 
   scraper:
