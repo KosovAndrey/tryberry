@@ -27,6 +27,10 @@ func NewProducer(brokers []string, topic string) *Producer {
 			RequiredAcks: kafka.RequireOne,
 			WriteTimeout: 10 * time.Second,
 			Async:        false, // синхронная запись — знаем что сообщение дошло
+			// Первый продюс в ещё не существующий топик создаёт его, а не падает
+			// с UnknownTopicOrPartition. Раньше первый тик scheduler по новому
+			// топику (search-tasks) терял задачи до авто-создания брокером.
+			AllowAutoTopicCreation: true,
 		},
 	}
 }
