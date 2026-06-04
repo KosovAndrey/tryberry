@@ -17,23 +17,30 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/joho/godotenv"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
-	"gitlab.com/KosovAndrey/tryberrybot/internal/health"
-	"gitlab.com/KosovAndrey/tryberrybot/internal/metrics"
-	"gitlab.com/KosovAndrey/tryberrybot/internal/tracing"
 	"go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp"
 
 	"gitlab.com/KosovAndrey/tryberrybot/internal/db"
-	"gitlab.com/KosovAndrey/tryberrybot/internal/partition"
-	"gitlab.com/KosovAndrey/tryberrybot/internal/repository/postgres"
-	"gitlab.com/KosovAndrey/tryberrybot/internal/scraper"
+	"gitlab.com/KosovAndrey/tryberrybot/internal/health"
+	"gitlab.com/KosovAndrey/tryberrybot/internal/kafka"
+	"gitlab.com/KosovAndrey/tryberrybot/internal/metrics"
 	"gitlab.com/KosovAndrey/tryberrybot/internal/telegram"
+	"gitlab.com/KosovAndrey/tryberrybot/internal/tracing"
 )
+
+// api в роли INGESTOR (Шаг 2a): принимает апдейты (polling/webhook за флагом
+// WEBHOOK_ENABLED) и публикует сырой Update в Kafka topic telegram-updates с
+// ключом = user ID (порядок диалога одного юзера сохраняется в партиции →
+// один bot-worker обрабатывает их последовательно). Обработка и ответы переехали
+// в сервис bot-worker.
+//
+// Подключение к БД сохранено НАМЕРЕННО — ради бизнес-метрик (runMetricsUpdater)
+// и health, которые Prometheus уже скрейпит с api:/metrics. Репозитории/registry
+// и FSM здесь больше не нужны.
 
 func main() {
 	log := slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{
 		Level: slog.LevelInfo,
 	}))
-
 	if err := run(log); err != nil {
 		log.Error("api failed", "err", err)
 		os.Exit(1)
@@ -49,7 +56,7 @@ func run(log *slog.Logger) error {
 	databaseURL := mustEnv("DATABASE_URL")
 	redisURL := mustEnv("REDIS_URL")
 	botToken := mustEnv("TELEGRAM_BOT_TOKEN")
-	// В polling-режиме webhook URL не нужен, поэтому больше не mustEnv.
+	kafkaBrokers := strings.Split(mustEnv("KAFKA_BROKERS"), ",")
 	webhookURL := getEnv("TELEGRAM_WEBHOOK_URL", "")
 	port := getEnv("PORT", "8081")
 	otlpEndpoint := getEnv("OTLP_ENDPOINT", "jaeger:4317")
@@ -78,60 +85,44 @@ func run(log *slog.Logger) error {
 		redisClient = nil
 	}
 
-	pm := partition.NewManager(pool)
-	if err := pm.EnsurePartitions(ctx, 2); err != nil {
-		return fmt.Errorf("ensure partitions: %w", err)
-	}
-
-	userRepo := postgres.NewUserRepo(pool)
-	subRepo := postgres.NewSubscriptionRepo(pool)
-	prodRepo := postgres.NewProductRepo(pool)
-	searchQueryRepo := postgres.NewSearchQueryRepo(pool)
-	searchSubRepo := postgres.NewSearchSubscriptionRepo(pool)
-
-	// Search-скрейпер встраивает товарный, поэтому служит и FindByURL (товар),
-	// и FindSearchByURL (выдача). Боту токен не нужен — он зовёт только разбор
-	// URL (NormalizeSearchURL/MatchesSearch), не ScrapeSearch.
-	wbSearch := scraper.NewWildberriesSearchScraper(scraper.NewWildberriesScraper(5), nil, nil, 5, 0)
-	registry := scraper.NewRegistry(
-		wbSearch,
-		scraper.NewOzonScraper(),
-		scraper.NewYandexMarketScraper(2),
-	)
-
-	// getMe внутри NewBot ходит наружу к Telegram. На RU-хостинге канал флапает
-	// (РКН-троттлинг), поэтому единичный таймаут НЕ должен ронять сервис в петлю
-	// рестартов — ретраим с backoff'ом до успеха или отмены ctx.
-	bot, err := newBotWithRetry(ctx, log, func() (*telegram.Bot, error) {
-		return telegram.NewBot(
-			botToken, log, userRepo, subRepo, prodRepo, registry,
-			searchQueryRepo, searchSubRepo, redisClient, parseAdminIDs(getEnv("ADMIN_IDS", "")),
-		)
+	// getMe ходит наружу к Telegram (через HTTPS_PROXY). Канал флапает — ретраим
+	// с backoff'ом, чтобы старт не падал в петлю.
+	receiver, err := initWithRetry(ctx, log, func() (*telegram.Receiver, error) {
+		return telegram.NewReceiver(botToken, log)
 	})
 	if err != nil {
-		return fmt.Errorf("init bot: %w", err)
+		return fmt.Errorf("init receiver: %w", err)
 	}
-	if err := bot.SetCommands(); err != nil {
+	if err := receiver.SetCommands(); err != nil {
 		log.Warn("set commands failed", "err", err)
 	}
 
-	// WEBHOOK_ENABLED=true  → webhook (Telegram стучится к нам; нужен доступный
-	//                          входящий путь Telegram→RU-IP).
-	// WEBHOOK_ENABLED=false → long-polling (бот сам ходит наружу через прокси).
-	//                          Используем, пока РКН режет входящие webhook'и.
+	producer := kafka.NewProducer(kafkaBrokers, "telegram-updates")
+	defer producer.Close()
+
+	// publish — публикует апдейт в Kafka. Ключ = user ID, чтобы апдейты одного
+	// пользователя шли в одну партицию (порядок диалога сохраняется).
+	publish := func(ctx context.Context, update tgbotapi.Update) {
+		key := ""
+		if u := update.SentFrom(); u != nil {
+			key = strconv.FormatInt(u.ID, 10)
+		}
+		if err := producer.Send(ctx, key, update); err != nil {
+			log.Error("publish update", "err", err)
+		}
+	}
+
 	if getEnv("WEBHOOK_ENABLED", "true") == "true" {
 		if webhookURL == "" {
 			return fmt.Errorf("WEBHOOK_ENABLED=true requires TELEGRAM_WEBHOOK_URL")
 		}
-		if err := bot.SetWebhook(webhookURL); err != nil {
+		if err := receiver.SetWebhook(webhookURL); err != nil {
 			return fmt.Errorf("set webhook: %w", err)
 		}
 		log.Info("webhook set", "url", webhookURL)
 	} else {
-		// Polling крутится в фоне; HTTP-сервер ниже продолжает отдавать
-		// /health, /metrics, /live. Маршрут /webhook остаётся, но не задействован.
 		go func() {
-			if err := bot.RunPolling(ctx); err != nil {
+			if err := receiver.RunPolling(ctx, publish); err != nil {
 				log.Error("polling stopped with error", "err", err)
 			}
 		}()
@@ -152,7 +143,7 @@ func run(log *slog.Logger) error {
 			w.WriteHeader(http.StatusBadRequest)
 			return
 		}
-		bot.HandleUpdate(r.Context(), update)
+		publish(r.Context(), update)
 		w.WriteHeader(http.StatusOK)
 	})
 
@@ -165,7 +156,7 @@ func run(log *slog.Logger) error {
 
 	srv := &http.Server{Addr: ":" + port, Handler: mux}
 
-	log.Info("api started", "port", port)
+	log.Info("ingestor started", "port", port)
 
 	go runMetricsUpdater(ctx, log, pool)
 
@@ -180,26 +171,25 @@ func run(log *slog.Logger) error {
 	return nil
 }
 
-// newBotWithRetry повторяет инициализацию бота (getMe ходит наружу к Telegram)
-// с экспоненциальным backoff'ом. Возвращает ошибку только при отмене ctx —
-// иначе временная недоступность Telegram (флап РКН/прокси) не валит api, а ждёт
-// восстановления канала. Это устраняет петлю рестартов на старте.
-func newBotWithRetry(ctx context.Context, log *slog.Logger, build func() (*telegram.Bot, error)) (*telegram.Bot, error) {
+// initWithRetry повторяет инициализацию с backoff'ом до успеха или отмены ctx
+// (getMe на старте ходит к Telegram, канал нестабилен).
+func initWithRetry[T any](ctx context.Context, log *slog.Logger, build func() (T, error)) (T, error) {
 	const maxBackoff = 30 * time.Second
 	backoff := time.Second
 	for attempt := 1; ; attempt++ {
-		bot, err := build()
+		v, err := build()
 		if err == nil {
 			if attempt > 1 {
 				log.Info("telegram init ok after retries", "attempts", attempt)
 			}
-			return bot, nil
+			return v, nil
 		}
 		log.Warn("telegram init failed (getMe), retrying",
 			"attempt", attempt, "backoff", backoff.String(), "err", err)
 		select {
 		case <-ctx.Done():
-			return nil, fmt.Errorf("cancelled after %d attempts: %w", attempt, err)
+			var zero T
+			return zero, fmt.Errorf("cancelled after %d attempts: %w", attempt, err)
 		case <-time.After(backoff):
 		}
 		if backoff < maxBackoff {
@@ -294,19 +284,4 @@ func getEnv(key, fallback string) string {
 		return v
 	}
 	return fallback
-}
-
-// parseAdminIDs — "123,456" → множество telegram_id админов.
-func parseAdminIDs(s string) map[int64]bool {
-	out := map[int64]bool{}
-	for _, part := range strings.Split(s, ",") {
-		part = strings.TrimSpace(part)
-		if part == "" {
-			continue
-		}
-		if id, err := strconv.ParseInt(part, 10, 64); err == nil {
-			out[id] = true
-		}
-	}
-	return out
 }

@@ -1,3 +1,4 @@
+
 services:
 
   api:
@@ -22,6 +23,7 @@ services:
       ADMIN_IDS: "${ADMIN_IDS}"
       SCRAPE_INTERVAL_MINUTES: "10"
       HTTPS_PROXY: "${TELEGRAM_PROXY_URL}"
+      TELEGRAM_POLL_TIMEOUT_SECONDS: "${TELEGRAM_POLL_TIMEOUT_SECONDS:-1}"
       NO_PROXY: "postgres,redis,kafka,jaeger,localhost,127.0.0.1"
     depends_on:
       postgres:
@@ -36,6 +38,37 @@ services:
       # Лейблы для Promtail — он по ним группирует логи в Loki
       logging: "promtail"
       service: "api"
+
+  bot-worker:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      args:
+        SERVICE: bot-worker
+    container_name: pt_bot_worker
+    environment:
+      DATABASE_URL: "postgres://user:password@postgres:5432/tryberrybot?sslmode=disable"
+      REDIS_URL: "redis://redis:6379"
+      KAFKA_BROKERS: "kafka:29092"
+      KAFKA_GROUP_ID: "bot-workers"
+      TELEGRAM_BOT_TOKEN: "${TELEGRAM_BOT_TOKEN}"
+      BOT_WORKER_HEALTH_PORT: "8093"
+      OTLP_ENDPOINT: "jaeger:4317"
+      HTTPS_PROXY: "${TELEGRAM_PROXY_URL}"
+      NO_PROXY: "postgres,redis,kafka,jaeger,localhost,127.0.0.1"
+      ADMIN_IDS: "${ADMIN_IDS}"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      kafka:
+        condition: service_healthy
+      jaeger:
+        condition: service_started
+    labels:
+      logging: "promtail"
+      service: "bot-worker"
 
   scraper:
     build:
