@@ -14,8 +14,11 @@
 
 services:
   token-miner:
-      restart: unless-stopped
-  # ── Reverse proxy + TLS ────────────────────────────────────────────────
+    restart: unless-stopped
+  bot-worker:
+    restart: unless-stopped
+
+# ── Reverse proxy + TLS ────────────────────────────────────────────────
   nginx:
     image: nginx:1.27-alpine
     container_name: tryberry_nginx
