@@ -2,15 +2,14 @@
 //
 // scheduler — СИНГЛТОН-планировщик задач скрейпинга.
 //
-// Вынесен из api (раньше жил в cmd/api/scheduler.go как `go runScheduler`).
-// Причина: тикер, кладущий задачи в Kafka, должен работать ровно в ОДНОМ
-// процессе — иначе при репликации api пошли бы дубли задач. Теперь api/scraper/
-// notifier можно реплицировать свободно, а уникальность планирования держит
-// этот сервис (deploy с replicas=1).
+// Должен работать ровно в ОДНОМ процессе (replicas=1) — иначе пойдут дубли
+// задач в Kafka. Благодаря этому api/scraper/notifier реплицируются свободно.
 //
-// M1a: переносит только ТОВАРНЫЙ тик (scrape-tasks) без изменения поведения.
-// M1b добавит сюда же поиск-тик (search-tasks) — отдельным тикером с другим
-// интервалом (SEARCH_SCRAPE_INTERVAL_MINUTES).
+// Два независимых тикера:
+//   • товарный  → топик scrape-tasks  (интервал SCRAPE_INTERVAL_MINUTES)
+//   • поисковый → топик search-tasks  (интервал SEARCH_SCRAPE_INTERVAL_MINUTES)
+// Поисковый тикер (M1b) заменил in-process runSearchLoop, который раньше жил в
+// scraper и мешал его репликации.
 package main
 
 import (
@@ -54,14 +53,13 @@ func run(log *slog.Logger) error {
 	ctx, cancel := signal.NotifyContext(context.Background(), syscall.SIGTERM, syscall.SIGINT)
 	defer cancel()
 
-	// ── Config из env ────────────────────────────────────────────────────────
 	databaseURL := mustEnv("DATABASE_URL")
 	brokers := strings.Split(mustEnv("KAFKA_BROKERS"), ",")
 	otlpEndpoint := getEnv("OTLP_ENDPOINT", "jaeger:4317")
 	healthPort := getEnv("SCHEDULER_HEALTH_PORT", "8092")
 	productInterval := time.Duration(getEnvInt("SCRAPE_INTERVAL_MINUTES", 15)) * time.Minute
+	searchInterval := time.Duration(getEnvInt("SEARCH_SCRAPE_INTERVAL_MINUTES", 20)) * time.Minute
 
-	// ── Tracing ──────────────────────────────────────────────────────────────
 	shutdownTracing, err := tracing.Init(ctx, "scheduler", otlpEndpoint)
 	if err != nil {
 		log.Warn("tracing init failed, continuing without", "err", err)
@@ -74,10 +72,6 @@ func run(log *slog.Logger) error {
 		log.Info("tracing initialized", "endpoint", otlpEndpoint)
 	}
 
-	// ── Подключения ──────────────────────────────────────────────────────────
-	// Redis планировщику не нужен — он только читает продукты из Postgres и
-	// кладёт задачи в Kafka. health.New принимает nil-redis (как в scraper при
-	// недоступном Redis).
 	pool, err := db.NewPostgresPool(ctx, databaseURL)
 	if err != nil {
 		return fmt.Errorf("postgres: %w", err)
@@ -86,19 +80,27 @@ func run(log *slog.Logger) error {
 
 	go runHealthServer(ctx, log, pool, healthPort)
 
-	// ── Репозитории / Kafka ───────────────────────────────────────────────────
 	productRepo := postgres.NewProductRepo(pool)
+	searchQueryRepo := postgres.NewSearchQueryRepo(pool)
 
-	producer := kafka.NewProducer(brokers, "scrape-tasks")
-	defer producer.Close()
+	productProducer := kafka.NewProducer(brokers, "scrape-tasks")
+	defer productProducer.Close()
+	searchProducer := kafka.NewProducer(brokers, "search-tasks")
+	defer searchProducer.Close()
 
-	log.Info("scheduler started", "product_interval", productInterval.String())
-	runProductScheduler(ctx, log, productRepo, producer, productInterval)
+	log.Info("scheduler started",
+		"product_interval", productInterval.String(),
+		"search_interval", searchInterval.String())
+
+	go runProductScheduler(ctx, log, productRepo, productProducer, productInterval)
+	go runSearchScheduler(ctx, log, searchQueryRepo, searchProducer, searchInterval)
+
+	<-ctx.Done()
 	return nil
 }
 
-// runProductScheduler — тикер товарного планировщика. Логика тика перенесена
-// без изменений из cmd/api/scheduler.go (schedulerTick).
+// ── Товарный планировщик (перенесён из cmd/api/scheduler.go, M1a) ────────────
+
 func runProductScheduler(
 	ctx context.Context,
 	log *slog.Logger,
@@ -111,12 +113,9 @@ func runProductScheduler(
 			log.Error("product scheduler tick failed", "err", err)
 		}
 	}
-
-	tick() // прогон сразу при старте, потом по таймеру
-
+	tick()
 	timer := time.NewTicker(interval)
 	defer timer.Stop()
-
 	for {
 		select {
 		case <-ctx.Done():
@@ -149,12 +148,7 @@ func productSchedulerTick(
 			log.Error("get product", "id", id, "err", err)
 			continue
 		}
-
-		task := domain.ScrapeTask{
-			ProductID: product.ID,
-			URL:       product.URL,
-		}
-
+		task := domain.ScrapeTask{ProductID: product.ID, URL: product.URL}
 		key := strconv.FormatInt(product.ID, 10)
 		if err := producer.Send(ctx, key, task); err != nil {
 			log.Error("send scrape task", "product_id", id, "err", err)
@@ -162,8 +156,67 @@ func productSchedulerTick(
 		}
 		sent++
 	}
-
 	log.Info("scheduler tick done", "total", len(productIDs), "sent", sent)
+	return nil
+}
+
+// ── Поисковый планировщик (M1b: заменяет in-process runSearchLoop) ───────────
+
+func runSearchScheduler(
+	ctx context.Context,
+	log *slog.Logger,
+	queryRepo *postgres.SearchQueryRepo,
+	producer *kafka.Producer,
+	interval time.Duration,
+) {
+	tick := func() {
+		if err := searchSchedulerTick(ctx, log, queryRepo, producer); err != nil {
+			log.Error("search scheduler tick failed", "err", err)
+		}
+	}
+	tick()
+	timer := time.NewTicker(interval)
+	defer timer.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-timer.C:
+			tick()
+		}
+	}
+}
+
+func searchSchedulerTick(
+	ctx context.Context,
+	log *slog.Logger,
+	queryRepo *postgres.SearchQueryRepo,
+	producer *kafka.Producer,
+) error {
+	queries, err := queryRepo.GetScrapable(ctx)
+	if err != nil {
+		return fmt.Errorf("get scrapable: %w", err)
+	}
+	if len(queries) == 0 {
+		log.Info("search scheduler: no scrapable queries")
+		return nil
+	}
+
+	sent := 0
+	for _, q := range queries {
+		task := domain.SearchTask{
+			QueryID:   q.ID,
+			URL:       q.NormalizedURL,
+			QueryText: q.QueryText,
+		}
+		key := strconv.FormatInt(q.ID, 10)
+		if err := producer.Send(ctx, key, task); err != nil {
+			log.Error("send search task", "query_id", q.ID, "err", err)
+			continue
+		}
+		sent++
+	}
+	log.Info("search scheduler tick done", "total", len(queries), "sent", sent)
 	return nil
 }
 

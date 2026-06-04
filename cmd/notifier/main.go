@@ -7,6 +7,8 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"sort"
+	"strconv"
 	"strings"
 	"syscall"
 	"time"
@@ -84,6 +86,7 @@ func run(log *slog.Logger) error {
 	subRepo := postgres.NewSubscriptionRepo(pool)
 	notifRepo := postgres.NewNotificationRepo(pool)
 	priceHistoryRepo := postgres.NewPriceHistoryRepo(pool)
+	searchNotifRepo := postgres.NewSearchNotificationRepo(pool)
 
 	var priceCache *redisrepo.PriceCache
 	if redisClient != nil {
@@ -91,11 +94,26 @@ func run(log *slog.Logger) error {
 	}
 
 	// ── Telegram ─────────────────────────────────────────────────────────────
+	// Исходящие в Telegram идут через HTTPS_PROXY (см. compose) — поэтому и
+	// товарные, и поиск-уведомления пробиваются с RU-хостинга.
 	tgNotifier := telegram.NewNotifier(botToken)
 
 	// ── Kafka ────────────────────────────────────────────────────────────────
+	// Товарный путь: price-events.
 	consumer := kafka.NewConsumer(kafkaBrokers, "price-events", kafkaGroupID)
 	defer consumer.Close()
+
+	// Поисковый путь (M1b): search-events.
+	searchConsumer := kafka.NewConsumer(kafkaBrokers, "search-events", "search-notifier")
+	defer searchConsumer.Close()
+
+	topN := getEnvInt("SEARCH_NOTIFY_TOP_N", 10)
+	go func() {
+		log.Info("search-events consumer started")
+		if err := searchConsumer.Run(ctx, makeSearchHandler(log, searchNotifRepo, tgNotifier, topN)); err != nil {
+			log.Error("search-events consumer stopped", "err", err)
+		}
+	}()
 
 	handler := makeHandler(log, subRepo, notifRepo, priceHistoryRepo, priceCache, tgNotifier)
 
@@ -214,6 +232,79 @@ func makeHandler(
 	}
 }
 
+// makeSearchHandler — обработчик событий из search-events (поиск-уведомления).
+// Сортирует подешевевшие товары по размеру скидки, шлёт топ-N одним сообщением,
+// и ТОЛЬКО после успешной отправки фиксирует search_notifications (last-notified).
+// Если отправка не удалась — offset не коммитится, событие перечитается (retry);
+// при этом запись в БД не делается, так что baseline повторных срабатываний не
+// исказится.
+func makeSearchHandler(
+	log *slog.Logger,
+	searchNotifRepo *postgres.SearchNotificationRepo,
+	tgNotifier *telegram.Notifier,
+	topN int,
+) kafka.HandlerFunc {
+	return func(ctx context.Context, msg kafka.Message) error {
+		ev, err := kafka.Decode[domain.SearchHitEvent](msg)
+		if err != nil {
+			log.Error("decode search hit event", "err", err)
+			return nil // poison pill — пропускаем
+		}
+		if len(ev.Items) == 0 {
+			return nil
+		}
+
+		// Больше скидка (old − effective) → выше в списке.
+		items := make([]domain.SearchHitItem, len(ev.Items))
+		copy(items, ev.Items)
+		sort.SliceStable(items, func(i, j int) bool {
+			return (items[i].OldPriceKopecks - items[i].EffectiveKopecks) >
+				(items[j].OldPriceKopecks - items[j].EffectiveKopecks)
+		})
+
+		total := len(items)
+		top := topN
+		if top <= 0 {
+			top = 10
+		}
+		shown := items
+		if len(shown) > top {
+			shown = shown[:top]
+		}
+
+		alert := telegram.SearchAlert{
+			ChatID:    ev.TelegramID,
+			QueryText: ev.QueryText,
+			SearchURL: ev.SearchURL,
+			TotalHits: total,
+		}
+		for _, it := range shown {
+			alert.Items = append(alert.Items, telegram.SearchAlertItem{
+				Name:         it.Name,
+				URL:          it.URL,
+				EffectiveRub: searchsub.Rubles(it.EffectiveKopecks),
+				OldRub:       searchsub.Rubles(it.OldPriceKopecks),
+				PointsRub:    searchsub.Rubles(it.FeedbackPointsKopecks),
+			})
+		}
+
+		// Сначала отправляем; запись — только при успехе.
+		if err := tgNotifier.SendSearchAlert(ctx, alert); err != nil {
+			return fmt.Errorf("send search alert: %w", err)
+		}
+		// Фиксируем last-notified по ВСЕМ сработавшим товарам (не только показанным).
+		for _, it := range ev.Items {
+			if err := searchNotifRepo.Insert(ctx, ev.SubID, it.ProductID, searchsub.Rubles(it.EffectiveKopecks)); err != nil {
+				log.Error("insert search notification", "sub_id", ev.SubID, "product_id", it.ProductID, "err", err)
+			}
+		}
+		metrics.SearchNotificationsSent.WithLabelValues(ev.TriggerType).Inc()
+		log.Info("search notification sent",
+			"sub_id", ev.SubID, "telegram_id", ev.TelegramID, "items", len(alert.Items), "total_hits", total)
+		return nil
+	}
+}
+
 func runHealthServer(ctx context.Context, log *slog.Logger, pool *pgxpool.Pool, redisClient *redis.Client, port string) {
 	healthChecker := health.New(pool, redisClient)
 	mux := http.NewServeMux()
@@ -240,4 +331,13 @@ func mustEnv(key string) string {
 		panic(fmt.Sprintf("env %s is required", key))
 	}
 	return v
+}
+
+func getEnvInt(key string, fallback int) int {
+	if v := os.Getenv(key); v != "" {
+		if n, err := strconv.Atoi(v); err == nil {
+			return n
+		}
+	}
+	return fallback
 }

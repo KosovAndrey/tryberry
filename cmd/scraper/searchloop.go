@@ -1,28 +1,32 @@
+// cmd/scraper/searchloop.go
+//
+// Поиск-воркер: consumer топика search-tasks. На каждую задачу (одна выдача)
+// делает скрейп → апсерт товаров/результатов → baseline новым товарам →
+// оценку триггеров по подпискам. На сработавшие триггеры НЕ шлёт в Telegram сам,
+// а продюсит SearchHitEvent в топик search-events. Отправку и запись
+// search_notifications (после успешной доставки) делает notifier — как в
+// товарном пути. Раньше тут жил in-process тикер runSearchLoop; теперь
+// планирование вынесено в scheduler (топик search-tasks), а воркер
+// реплицируется как consumer group.
 package main
 
 import (
 	"context"
 	"fmt"
 	"log/slog"
-	"sort"
-	"time"
+	"strconv"
 
 	"gitlab.com/KosovAndrey/tryberrybot/internal/domain"
+	"gitlab.com/KosovAndrey/tryberrybot/internal/kafka"
 	"gitlab.com/KosovAndrey/tryberrybot/internal/metrics"
 	"gitlab.com/KosovAndrey/tryberrybot/internal/repository/postgres"
 	"gitlab.com/KosovAndrey/tryberrybot/internal/scraper"
 	"gitlab.com/KosovAndrey/tryberrybot/internal/searchsub"
-	"gitlab.com/KosovAndrey/tryberrybot/internal/telegram"
 )
 
 const wbMarketplace = "wildberries"
 
-// searchLoop — конвейер поиск-подписок: скрейп выдач → апсерт товаров/результатов
-// → baseline новым товарам → триггеры по подпискам → батч-уведомления.
-//
-// Живёт отдельным тикером в scraper-сервисе рядом с consumer'ом цен (выдач
-// немного, конвейер выполняется синхронно по очереди запросов).
-type searchLoop struct {
+type searchWorker struct {
 	log      *slog.Logger
 	registry *scraper.Registry
 	queries  *postgres.SearchQueryRepo
@@ -30,48 +34,32 @@ type searchLoop struct {
 	results  *postgres.SearchResultRepo
 	notifs   *postgres.SearchNotificationRepo
 	products *postgres.ProductRepo
-	notifier searchsub.SearchNotifier
+	events   *kafka.Producer // топик search-events
 }
 
-func runSearchLoop(ctx context.Context, sl *searchLoop, interval time.Duration) {
-	sl.log.Info("search loop started", "interval", interval.String())
-	tick := func() {
-		if err := sl.tick(ctx); err != nil {
-			sl.log.Error("search tick failed", "err", err)
+// makeHandler — обработчик одной задачи из search-tasks.
+//
+// При ошибке возвращаем nil (offset коммитится, задача дропается): следующий
+// тик планировщика (~20 мин) переотправит её. Так бережём WB и пул токенов —
+// иначе at-least-once гонял бы тяжёлый скрейп в плотном цикле повторов.
+func (w *searchWorker) makeHandler() kafka.HandlerFunc {
+	return func(ctx context.Context, msg kafka.Message) error {
+		task, err := kafka.Decode[domain.SearchTask](msg)
+		if err != nil {
+			w.log.Error("decode search task", "err", err)
+			return nil
 		}
-	}
-	tick()
-	t := time.NewTicker(interval)
-	defer t.Stop()
-	for {
-		select {
-		case <-ctx.Done():
-			return
-		case <-t.C:
-			tick()
+		// scrapeQuery нужны только ID/URL/QueryText — собираем частичный SearchQuery.
+		q := &domain.SearchQuery{
+			ID:            task.QueryID,
+			NormalizedURL: task.URL,
+			QueryText:     task.QueryText,
 		}
-	}
-}
-
-func (sl *searchLoop) tick(ctx context.Context) error {
-	queries, err := sl.queries.GetScrapable(ctx)
-	if err != nil {
-		return fmt.Errorf("get scrapable: %w", err)
-	}
-	if len(queries) == 0 {
-		sl.log.Info("search tick: no active queries")
+		if err := w.scrapeQuery(ctx, q); err != nil {
+			w.log.Error("scrape query failed", "query_id", q.ID, "text", q.QueryText, "err", err)
+		}
 		return nil
 	}
-	sl.log.Info("search tick", "queries", len(queries))
-	for _, q := range queries {
-		if ctx.Err() != nil {
-			return ctx.Err()
-		}
-		if err := sl.scrapeQuery(ctx, q); err != nil {
-			sl.log.Error("scrape query failed", "query_id", q.ID, "text", q.QueryText, "err", err)
-		}
-	}
-	return nil
 }
 
 // entry — товар выдачи после апсерта (с product_id и эфф. ценой в копейках).
@@ -81,8 +69,8 @@ type entry struct {
 	eff  int64
 }
 
-func (sl *searchLoop) scrapeQuery(ctx context.Context, q *domain.SearchQuery) error {
-	ss, err := sl.registry.FindSearchByURL(q.NormalizedURL)
+func (w *searchWorker) scrapeQuery(ctx context.Context, q *domain.SearchQuery) error {
+	ss, err := w.registry.FindSearchByURL(q.NormalizedURL)
 	if err != nil {
 		return fmt.Errorf("no search scraper: %w", err)
 	}
@@ -92,12 +80,12 @@ func (sl *searchLoop) scrapeQuery(ctx context.Context, q *domain.SearchQuery) er
 		metrics.SearchScrapes.WithLabelValues("error").Inc()
 		return fmt.Errorf("scrape: %w", err)
 	}
-	if err := sl.queries.UpdateLastScraped(ctx, q.ID); err != nil {
-		sl.log.Warn("update last_scraped", "query_id", q.ID, "err", err)
+	if err := w.queries.UpdateLastScraped(ctx, q.ID); err != nil {
+		w.log.Warn("update last_scraped", "query_id", q.ID, "err", err)
 	}
 	if len(set.Items) == 0 {
 		metrics.SearchScrapes.WithLabelValues("empty").Inc()
-		sl.log.Warn("empty search result", "query_id", q.ID, "pages", set.PagesRead)
+		w.log.Warn("empty search result", "query_id", q.ID, "pages", set.PagesRead)
 		return nil
 	}
 	metrics.SearchScrapes.WithLabelValues("success").Inc()
@@ -105,37 +93,37 @@ func (sl *searchLoop) scrapeQuery(ctx context.Context, q *domain.SearchQuery) er
 	// Апсерт товаров и текущей выдачи.
 	entries := make([]entry, 0, len(set.Items))
 	for _, it := range set.Items {
-		p, err := sl.products.Upsert(ctx, it.URL, it.Name, it.ImageURL, wbMarketplace)
+		p, err := w.products.Upsert(ctx, it.URL, it.Name, it.ImageURL, wbMarketplace)
 		if err != nil {
-			sl.log.Error("upsert product", "art", it.ArticleID, "err", err)
+			w.log.Error("upsert product", "art", it.ArticleID, "err", err)
 			continue
 		}
 		eff := it.EffectivePriceKopecks()
-		if _, err := sl.results.Upsert(ctx, q.ID, p.ID, it.Position, searchsub.Rubles(eff)); err != nil {
-			sl.log.Error("upsert result", "product_id", p.ID, "err", err)
+		if _, err := w.results.Upsert(ctx, q.ID, p.ID, it.Position, searchsub.Rubles(eff)); err != nil {
+			w.log.Error("upsert result", "product_id", p.ID, "err", err)
 			continue
 		}
 		entries = append(entries, entry{item: it, pid: p.ID, eff: eff})
 	}
 
-	sl.log.Info("query scraped",
+	w.log.Info("query scraped",
 		"query_id", q.ID, "text", q.QueryText,
 		"items", len(entries), "pages", set.PagesRead, "total_found", set.TotalFound)
 
 	// Триггеры по каждой активной подписке.
-	subs, err := sl.subs.GetActiveByQueryID(ctx, q.ID)
+	subs, err := w.subs.GetActiveByQueryID(ctx, q.ID)
 	if err != nil {
 		return fmt.Errorf("active subs: %w", err)
 	}
 	for _, sub := range subs {
-		if err := sl.evaluateSubscription(ctx, q, sub, entries); err != nil {
-			sl.log.Error("evaluate subscription", "sub_id", sub.ID, "err", err)
+		if err := w.evaluateSubscription(ctx, q, sub, entries); err != nil {
+			w.log.Error("evaluate subscription", "sub_id", sub.ID, "err", err)
 		}
 	}
 	return nil
 }
 
-func (sl *searchLoop) evaluateSubscription(ctx context.Context, q *domain.SearchQuery, sub *domain.SearchSubscription, entries []entry) error {
+func (w *searchWorker) evaluateSubscription(ctx context.Context, q *domain.SearchQuery, sub *domain.SearchSubscription, entries []entry) error {
 	rule := searchsub.RuleFromSubscription(sub)
 
 	byID := make(map[int64]entry, len(entries))
@@ -144,22 +132,21 @@ func (sl *searchLoop) evaluateSubscription(ctx context.Context, q *domain.Search
 	for _, e := range entries {
 		byID[e.pid] = e
 
-		baseRub, ok, err := sl.subs.GetBaseline(ctx, sub.ID, e.pid)
+		baseRub, ok, err := w.subs.GetBaseline(ctx, sub.ID, e.pid)
 		if err != nil {
 			return fmt.Errorf("get baseline: %w", err)
 		}
 		if !ok {
-			// Товар впервые виден этой подпиской — фиксируем стартовую
-			// (эффективную) цену и используем её как baseline уже в этом цикле.
-			// below_target (абсолютный порог) сработает сразу; any_drop и
-			// discount_pct — нет, т.к. current == baseline (нужно реальное падение).
-			if err := sl.subs.UpsertBaseline(ctx, sub.ID, e.pid, searchsub.Rubles(e.eff)); err != nil {
-				sl.log.Error("upsert baseline", "sub_id", sub.ID, "product_id", e.pid, "err", err)
+			// Товар впервые виден этой подпиской — фиксируем стартовую (эфф.)
+			// цену как baseline и используем её уже в этом цикле. below_target
+			// сработает сразу; any_drop и discount_pct — нет (current == baseline).
+			if err := w.subs.UpsertBaseline(ctx, sub.ID, e.pid, searchsub.Rubles(e.eff)); err != nil {
+				w.log.Error("upsert baseline", "sub_id", sub.ID, "product_id", e.pid, "err", err)
 			}
 			baseRub = searchsub.Rubles(e.eff)
 		}
 
-		lastRub, hasNotif, err := sl.notifs.GetLastNotifiedPrice(ctx, sub.ID, e.pid)
+		lastRub, hasNotif, err := w.notifs.GetLastNotifiedPrice(ctx, sub.ID, e.pid)
 		if err != nil {
 			return fmt.Errorf("get last notified: %w", err)
 		}
@@ -178,10 +165,20 @@ func (sl *searchLoop) evaluateSubscription(ctx context.Context, q *domain.Search
 		return nil
 	}
 
-	n := searchsub.Notification{TelegramID: sub.TelegramID, QueryText: q.QueryText, SearchURL: q.NormalizedURL}
+	// Формируем событие. Отправку в Telegram и запись search_notifications
+	// (только при успешной доставке) делает notifier — единое место, как в
+	// товарном пути; заодно идёт через уже настроенный там HTTPS_PROXY.
+	ev := domain.SearchHitEvent{
+		SubID:       sub.ID,
+		TelegramID:  sub.TelegramID,
+		QueryText:   q.QueryText,
+		SearchURL:   q.NormalizedURL,
+		TriggerType: string(sub.TriggerType),
+	}
 	for _, h := range hits {
 		e := byID[h.ProductID]
-		n.Items = append(n.Items, searchsub.NotifyItem{
+		ev.Items = append(ev.Items, domain.SearchHitItem{
+			ProductID:             e.pid,
 			Name:                  e.item.Name,
 			URL:                   e.item.URL,
 			PriceKopecks:          e.item.PriceKopecks,
@@ -191,81 +188,12 @@ func (sl *searchLoop) evaluateSubscription(ctx context.Context, q *domain.Search
 		})
 	}
 
-	// Сначала отправляем; запись в search_notifications — только при успехе,
-	// иначе исказится baseline повторных срабатываний.
-	if err := sl.notifier.Notify(ctx, n); err != nil {
-		return fmt.Errorf("notify: %w", err)
+	key := strconv.FormatInt(sub.TelegramID, 10)
+	if err := w.events.Send(ctx, key, ev); err != nil {
+		// Событие не ушло — notifier ничего не запишет, значит на следующем
+		// скрейпе те же хиты сработают снова и переотправятся. Самовосстановление.
+		return fmt.Errorf("send search hit event: %w", err)
 	}
-	for _, h := range hits {
-		if err := sl.notifs.Insert(ctx, sub.ID, h.ProductID, searchsub.Rubles(h.CurrentKopecks)); err != nil {
-			sl.log.Error("insert notification", "sub_id", sub.ID, "product_id", h.ProductID, "err", err)
-		}
-	}
-	sl.log.Info("search notification sent", "sub_id", sub.ID, "telegram_id", sub.TelegramID, "items", len(n.Items))
-	metrics.SearchNotificationsSent.WithLabelValues(string(sub.TriggerType)).Inc()
+	w.log.Info("search hits queued", "sub_id", sub.ID, "telegram_id", sub.TelegramID, "items", len(ev.Items))
 	return nil
-}
-
-// logNotifier — временная заглушка отправки (до бота/нотифаера): пишет в лог,
-// что отправил бы. Позволяет прогнать конвейер end-to-end без Telegram.
-type logNotifier struct{ log *slog.Logger }
-
-func (l logNotifier) Notify(_ context.Context, n searchsub.Notification) error {
-	l.log.Info("SEARCH NOTIFY (заглушка, отправили бы в Telegram)",
-		"telegram_id", n.TelegramID, "query", n.QueryText, "items", len(n.Items))
-	for _, it := range n.Items {
-		l.log.Info("  → товар",
-			"name", it.Name,
-			"price_rub", searchsub.Rubles(it.PriceKopecks),
-			"old_rub", searchsub.Rubles(it.OldPriceKopecks),
-			"points_rub", searchsub.Rubles(it.FeedbackPointsKopecks),
-			"effective_rub", searchsub.Rubles(it.EffectiveKopecks),
-			"url", it.URL)
-	}
-	return nil
-}
-
-// tgSearchNotifier — реальная отправка поиск-уведомлений в Telegram.
-// Сортирует подешевевшие товары по размеру скидки и шлёт топ-N одним
-// сообщением; остаток отражается числом «нашлось больше».
-type tgSearchNotifier struct {
-	n    *telegram.Notifier
-	topN int
-}
-
-func (t tgSearchNotifier) Notify(ctx context.Context, n searchsub.Notification) error {
-	items := make([]searchsub.NotifyItem, len(n.Items))
-	copy(items, n.Items)
-
-	// Больше скидка (old − effective) → выше в списке.
-	sort.SliceStable(items, func(i, j int) bool {
-		return (items[i].OldPriceKopecks - items[i].EffectiveKopecks) >
-			(items[j].OldPriceKopecks - items[j].EffectiveKopecks)
-	})
-
-	total := len(items)
-	top := t.topN
-	if top <= 0 {
-		top = 10
-	}
-	if len(items) > top {
-		items = items[:top]
-	}
-
-	alert := telegram.SearchAlert{
-		ChatID:    n.TelegramID,
-		QueryText: n.QueryText,
-		SearchURL: n.SearchURL,
-		TotalHits: total,
-	}
-	for _, it := range items {
-		alert.Items = append(alert.Items, telegram.SearchAlertItem{
-			Name:         it.Name,
-			URL:          it.URL,
-			EffectiveRub: searchsub.Rubles(it.EffectiveKopecks),
-			OldRub:       searchsub.Rubles(it.OldPriceKopecks),
-			PointsRub:    searchsub.Rubles(it.FeedbackPointsKopecks),
-		})
-	}
-	return t.n.SendSearchAlert(ctx, alert)
 }
