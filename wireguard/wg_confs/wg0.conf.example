@@ -1,0 +1,28 @@
+# WireGuard client config — НЕ-RU exit для выхода к Telegram.
+#
+# Скопировать в wireguard/wg_confs/wg0.conf и заполнить реальными ключами/пиром.
+# Реальный wg0.conf — СЕКРЕТ, он в .gitignore и НЕ коммитится.
+#
+# Этот туннель поднимает контейнер wg-proxy (linuxserver/wireguard). tinyproxy
+# делит его netns и проксирует HTTP CONNECT на :8888 → весь его egress уходит
+# в туннель к не-RU exit, минуя блокировки РКН.
+
+[Interface]
+# Приватный ключ клиента (выдаёт администратор exit-узла).
+PrivateKey = <CLIENT_PRIVATE_KEY>
+# Адрес клиента внутри туннеля (как назначил exit-узел).
+Address = 10.8.0.2/32
+# DNS внутри туннеля — резолв api.telegram.org идёт через не-RU.
+DNS = 1.1.1.1
+
+[Peer]
+# Публичный ключ exit-сервера.
+PublicKey = <SERVER_PUBLIC_KEY>
+# Адрес и порт exit-сервера (не-RU IP).
+Endpoint = <EXIT_HOST>:51820
+# 0.0.0.0/0 → весь исходящий трафик контейнера в туннель.
+# Подсеть docker-bridge остаётся connected-маршрутом, поэтому wg-proxy:8888
+# и доступ к внутренним сервисам не ломаются.
+AllowedIPs = 0.0.0.0/0
+# Держим NAT открытым (важно, если exit за NAT/файрволом).
+PersistentKeepalive = 25

@@ -1,6 +1,54 @@
 
 services:
 
+  # ── Выход к Telegram через WireGuard ────────────────────────────────────
+  # На RU-хостинге РКН режет Telegram в обе стороны. Long-polling (api/ingestor)
+  # ходит наружу за апдейтами, а ответы шлют bot-worker/notifier — весь этот
+  # egress уводится в не-RU exit через WireGuard-туннель.
+  #   wg-proxy   — держит туннель wg0 (linuxserver/wireguard).
+  #   tinyproxy  — HTTP CONNECT прокси в netns wg-proxy, слушает :8888.
+  # Сервисы ходят к Telegram через http://wg-proxy:8888 (HTTPS_PROXY).
+  # Конфиг туннеля: ./wireguard/wg_confs/wg0.conf (секрет, см. wg0.conf.example).
+  wg-proxy:
+    image: lscr.io/linuxserver/wireguard:latest
+    container_name: pt_wg_proxy
+    cap_add:
+      - NET_ADMIN
+      - SYS_MODULE            # загрузка модуля wireguard, если не вкомпилен в ядро
+    sysctls:
+      - net.ipv4.conf.all.src_valid_mark=1
+    environment:
+      PUID: "1000"
+      PGID: "1000"
+      TZ: "Europe/Moscow"
+    volumes:
+      - ./wireguard:/config           # клиентский конфиг в ./wireguard/wg_confs/wg0.conf
+      - /lib/modules:/lib/modules:ro
+    restart: unless-stopped
+    healthcheck:
+      # туннель поднят, если интерфейс wg0 существует
+      test: ["CMD-SHELL", "wg show wg0 >/dev/null 2>&1"]
+      interval: 30s
+      timeout: 5s
+      retries: 5
+      start_period: 15s
+    labels:
+      logging: "promtail"
+      service: "wg-proxy"
+
+  # HTTP CONNECT-прокси внутри netns wg-proxy → весь его исходящий идёт в туннель.
+  # Образ читает конфиг из /etc/tinyproxy/tinyproxy.conf.
+  tinyproxy:
+    image: vimagick/tinyproxy:latest
+    container_name: pt_tinyproxy
+    network_mode: "service:wg-proxy"  # делит сетевой стек с туннелем
+    volumes:
+      - ./wireguard/tinyproxy.conf:/etc/tinyproxy/tinyproxy.conf:ro
+    depends_on:
+      wg-proxy:
+        condition: service_started
+    restart: unless-stopped
+
   api:
     build:
       context: .
@@ -22,8 +70,10 @@ services:
       PORT: "8081"
       ADMIN_IDS: "${ADMIN_IDS}"
       SCRAPE_INTERVAL_MINUTES: "10"
-      HTTPS_PROXY: "${TELEGRAM_PROXY_URL}"
-      TELEGRAM_POLL_TIMEOUT_SECONDS: "${TELEGRAM_POLL_TIMEOUT_SECONDS:-1}"
+      # Egress к Telegram через WireGuard (wg-proxy + tinyproxy). Внутренние
+      # сервисы — мимо прокси (NO_PROXY). TELEGRAM_PROXY_URL больше не используется.
+      HTTPS_PROXY: "http://wg-proxy:8888"
+      TELEGRAM_POLL_TIMEOUT_SECONDS: "${TELEGRAM_POLL_TIMEOUT_SECONDS:-10}"
       NO_PROXY: "postgres,redis,kafka,jaeger,localhost,127.0.0.1"
     depends_on:
       postgres:
@@ -33,6 +83,8 @@ services:
       kafka:
         condition: service_healthy
       jaeger:
+        condition: service_started
+      wg-proxy:
         condition: service_started
     labels:
       # Лейблы для Promtail — он по ним группирует логи в Loki
@@ -54,7 +106,8 @@ services:
       TELEGRAM_BOT_TOKEN: "${TELEGRAM_BOT_TOKEN}"
       BOT_WORKER_HEALTH_PORT: "8093"
       OTLP_ENDPOINT: "jaeger:4317"
-      HTTPS_PROXY: "${TELEGRAM_PROXY_URL}"
+      # Egress к Telegram (ответы) через WireGuard (wg-proxy + tinyproxy).
+      HTTPS_PROXY: "http://wg-proxy:8888"
       NO_PROXY: "postgres,redis,kafka,jaeger,localhost,127.0.0.1"
       ADMIN_IDS: "${ADMIN_IDS}"
     depends_on:
@@ -65,6 +118,8 @@ services:
       kafka:
         condition: service_healthy
       jaeger:
+        condition: service_started
+      wg-proxy:
         condition: service_started
     labels:
       logging: "promtail"
@@ -120,7 +175,8 @@ services:
       TELEGRAM_BOT_TOKEN: "${TELEGRAM_BOT_TOKEN}"
       NOTIFIER_HEALTH_PORT: "8091"
       OTLP_ENDPOINT: "jaeger:4317"
-      HTTPS_PROXY: "${TELEGRAM_PROXY_URL}"
+      # Egress к Telegram (уведомления) через WireGuard (wg-proxy + tinyproxy).
+      HTTPS_PROXY: "http://wg-proxy:8888"
       NO_PROXY: "postgres,redis,kafka,jaeger,localhost,127.0.0.1"
     depends_on:
       postgres:
@@ -130,6 +186,8 @@ services:
       kafka:
         condition: service_healthy
       jaeger:
+        condition: service_started
+      wg-proxy:
         condition: service_started
     labels:
       logging: "promtail"

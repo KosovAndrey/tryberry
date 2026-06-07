@@ -28,6 +28,10 @@ monitoring/alertmanager/alertmanager.yml
 nginx/.htpasswd
 nginx/certbot/
 
+# WireGuard — приватный клиентский конфиг туннеля (секрет), НЕ коммитить.
+# Шаблон wg0.conf.example и tinyproxy.conf коммитятся.
+wireguard/wg_confs/wg0.conf
+
 # Бэкапы БД — не коммитить
 backups/
 
@@ -36,3 +40,4 @@ backups/
 _claude_reference/
 .env.save*
 *.bak
+tryberrybot-HANDOFF.md
