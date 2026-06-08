@@ -42,7 +42,19 @@ func NewReceiver(token string, log *slog.Logger) (*Receiver, error) {
 // Таймаут ДОЛЖЕН превышать серверный long-poll timeout, иначе режет здоровые
 // поллы: берём poll timeout + запас.
 func pollHTTPClient() *http.Client {
-	return &http.Client{Timeout: time.Duration(pollTimeoutSeconds()+15) * time.Second}
+	// DisableKeepAlives: каждый getUpdates/Send открывает СВЕЖИЙ CONNECT-туннель
+	// через tinyproxy+WireGuard. Переиспользование keep-alive соединения в цикле
+	// long-poll'а ловит "unexpected EOF"/"context deadline exceeded" — прокси или
+	// туннель роняет удержанное соединение, а пул Go подсовывает его снова.
+	// Разовые запросы (wget, notifier) работают именно потому, что коннект свежий.
+	// Proxy берём из окружения (HTTPS_PROXY=http://wg-proxy:8888).
+	return &http.Client{
+		Timeout: time.Duration(pollTimeoutSeconds()+15) * time.Second,
+		Transport: &http.Transport{
+			Proxy:             http.ProxyFromEnvironment,
+			DisableKeepAlives: true,
+		},
+	}
 }
 
 func (r *Receiver) SetWebhook(webhookURL string) error {
