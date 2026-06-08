@@ -17,6 +17,12 @@ services:
       - SYS_MODULE            # загрузка модуля wireguard, если не вкомпилен в ядро
     sysctls:
       - net.ipv4.conf.all.src_valid_mark=1
+    # DNS задаём на уровне docker, а не строкой DNS= в wg0.conf: в контейнере
+    # resolvconf часто не пишет /etc/resolv.conf → "bad address". tinyproxy
+    # делит netns (network_mode: service:wg-proxy) и наследует этот resolv.conf.
+    dns:
+      - 1.1.1.1
+      - 8.8.8.8
     environment:
       PUID: "1000"
       PGID: "1000"
@@ -26,12 +32,17 @@ services:
       - /lib/modules:/lib/modules:ro
     restart: unless-stopped
     healthcheck:
-      # туннель поднят, если интерфейс wg0 существует
-      test: ["CMD-SHELL", "wg show wg0 >/dev/null 2>&1"]
-      interval: 30s
+      # Egress реально готов, только если: (1) с пиром есть handshake и
+      # (2) дефолтный маршрут идёт через wg0 (его ставит PostUp в wg0.conf,
+      # Table=off). Старая проверка "wg show wg0" зеленела даже при сломанной
+      # маршрутизации — из-за чего tinyproxy стартовал на нерабочем туннеле.
+      test:
+        - "CMD-SHELL"
+        - "wg show wg0 latest-handshakes | awk '{if($2+0>0) f=1} END{exit !f}' && ip route show default | grep -q 'dev wg0'"
+      interval: 15s
       timeout: 5s
       retries: 5
-      start_period: 15s
+      start_period: 30s
     labels:
       logging: "promtail"
       service: "wg-proxy"
@@ -45,9 +56,18 @@ services:
     volumes:
       - ./wireguard/tinyproxy.conf:/etc/tinyproxy/tinyproxy.conf:ro
     depends_on:
+      # Стартуем только когда туннель реально готов (handshake + маршрут).
+      # Так tinyproxy не поднимается на «мёртвом» netns после пересоздания wg-proxy.
       wg-proxy:
-        condition: service_started
+        condition: service_healthy
     restart: unless-stopped
+    healthcheck:
+      # tinyproxy слушает :8888 в netns wg-proxy — зависимые сервисы ждут этого.
+      test: ["CMD-SHELL", "netstat -ltn 2>/dev/null | grep -q ':8888 ' || ss -ltn 2>/dev/null | grep -q ':8888 '"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
 
   api:
     build:
@@ -84,8 +104,8 @@ services:
         condition: service_healthy
       jaeger:
         condition: service_started
-      wg-proxy:
-        condition: service_started
+      tinyproxy:
+        condition: service_healthy
     labels:
       # Лейблы для Promtail — он по ним группирует логи в Loki
       logging: "promtail"
@@ -119,8 +139,8 @@ services:
         condition: service_healthy
       jaeger:
         condition: service_started
-      wg-proxy:
-        condition: service_started
+      tinyproxy:
+        condition: service_healthy
     labels:
       logging: "promtail"
       service: "bot-worker"
@@ -187,8 +207,8 @@ services:
         condition: service_healthy
       jaeger:
         condition: service_started
-      wg-proxy:
-        condition: service_started
+      tinyproxy:
+        condition: service_healthy
     labels:
       logging: "promtail"
       service: "notifier"
