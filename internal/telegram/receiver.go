@@ -49,10 +49,17 @@ func pollHTTPClient() *http.Client {
 	// Разовые запросы (wget, notifier) работают именно потому, что коннект свежий.
 	// Proxy берём из окружения (HTTPS_PROXY=http://wg-proxy:8888).
 	return &http.Client{
-		Timeout: time.Duration(pollTimeoutSeconds()+15) * time.Second,
+		// Узкий запас над серверным long-poll timeout. На нестабильном egress'е к
+		// Telegram удержанный long-poll иногда тихо умирает — ответ не придёт, и
+		// запрос висит ровно Client.Timeout. Большой запас (+15) превращал каждый
+		// такой висяк в 20с просадку; +3 рвёт мёртвый полл быстро (здоровый отдаёт
+		// на poll-й секунде, доставка ~0.3с), бот переполливает и забирает апдейт.
+		Timeout: time.Duration(pollTimeoutSeconds()+3) * time.Second,
 		Transport: &http.Transport{
 			Proxy:             http.ProxyFromEnvironment,
 			DisableKeepAlives: true,
+			// Зависший TLS-хендшейк к origin падает быстро, а не висит до Client.Timeout.
+			TLSHandshakeTimeout: 5 * time.Second,
 		},
 	}
 }
