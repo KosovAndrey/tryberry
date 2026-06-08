@@ -129,9 +129,9 @@ func (n *Notifier) SendSearchAlert(ctx context.Context, a SearchAlert) error {
 // паузе. Зовётся reconciler'ом в момент постановки на паузу. chatID = telegram_id.
 func (n *Notifier) SendPlanPausedNotice(ctx context.Context, chatID int64) error {
 	text := "⏳ <b>Триал закончился</b>\n\n" +
-		"Твои поиск-подписки <b>приостановлены</b>. Я сохраню их настройки ещё " +
-		"<b>7 дней</b> — оформи подписку за это время, и я верну все поиски и " +
-		"продолжу следить за ценами. Потом они удалятся.\n\n" +
+		"Часть твоих подписок <b>приостановлена</b> (вышли за лимит бесплатного " +
+		"тарифа). Я сохраню их настройки ещё <b>7 дней</b> — оформи подписку за это " +
+		"время, и я верну их и продолжу следить за ценами. Потом они удалятся.\n\n" +
 		"Твой тариф и лимиты: /myplan"
 	keyboard := map[string]any{
 		"inline_keyboard": [][]map[string]any{

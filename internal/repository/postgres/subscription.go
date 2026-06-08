@@ -3,6 +3,7 @@ package postgres
 import (
 	"context"
 	"errors"
+	"time"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -231,4 +232,136 @@ func (r *SubscriptionRepo) SetTrigger(ctx context.Context, id int64, trigger str
 		return domain.ErrNotFound
 	}
 	return nil
+}
+
+// ── Grace-период плана (reconciler в notifier) ───────────────────────────────
+
+// ProductSubForReconcile — товарная подписка с планом владельца для reconcile.
+// Лимиты (MaxProduct) живут в коде (domain.Plans), поэтому решения о паузе/возврате
+// считаем в Go. ActiveCount заполняется только при выборке паузных (для возврата
+// ровно до лимита с учётом уже активных), иначе 0.
+type ProductSubForReconcile struct {
+	ID            int64
+	UserID        int64
+	TelegramID    int64
+	Plan          string
+	PlanExpiresAt *time.Time
+	CreatedAt     time.Time
+	ActiveCount   int
+}
+
+// ListActiveOfExpiredUsers — активные товарные подписки пользователей с истёкшим
+// планом (effective = free, MaxProduct=10 → избыток сверх лимита на паузу).
+// Упорядочено (user_id, created_at): вызывающий оставляет старые, гасит лишние.
+func (r *SubscriptionRepo) ListActiveOfExpiredUsers(ctx context.Context) ([]ProductSubForReconcile, error) {
+	const q = `
+		SELECT s.id, s.user_id, u.telegram_id, u.plan, u.plan_expires_at, s.created_at
+		FROM subscriptions s
+		JOIN users u ON u.id = s.user_id
+		WHERE s.active = TRUE AND s.paused_at IS NULL
+		  AND u.plan_expires_at IS NOT NULL AND u.plan_expires_at < NOW()
+		ORDER BY s.user_id, s.created_at`
+
+	rows, err := r.db.Query(ctx, q)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var out []ProductSubForReconcile
+	for rows.Next() {
+		var p ProductSubForReconcile
+		if err := rows.Scan(&p.ID, &p.UserID, &p.TelegramID, &p.Plan, &p.PlanExpiresAt, &p.CreatedAt); err != nil {
+			return nil, err
+		}
+		out = append(out, p)
+	}
+	return out, rows.Err()
+}
+
+// PauseProductSubs ставит подписки на паузу (active=FALSE, paused_at=NOW()).
+func (r *SubscriptionRepo) PauseProductSubs(ctx context.Context, ids []int64) error {
+	if len(ids) == 0 {
+		return nil
+	}
+	const q = `
+		UPDATE subscriptions
+		SET active = FALSE, paused_at = NOW(), updated_at = NOW()
+		WHERE id = ANY($1)`
+	_, err := r.db.Exec(ctx, q, ids)
+	return err
+}
+
+// ListPausedWithinGrace — паузные товарные подписки в пределах grace
+// (paused_at >= cutoff), с планом владельца и текущим числом активных подписок
+// (чтобы вернуть ровно до лимита нового плана). Упорядочено (user_id, created_at).
+func (r *SubscriptionRepo) ListPausedWithinGrace(ctx context.Context, cutoff time.Time) ([]ProductSubForReconcile, error) {
+	const q = `
+		SELECT s.id, s.user_id, u.telegram_id, u.plan, u.plan_expires_at, s.created_at,
+		       (SELECT count(*) FROM subscriptions a WHERE a.user_id = s.user_id AND a.active) AS active_count
+		FROM subscriptions s
+		JOIN users u ON u.id = s.user_id
+		WHERE s.paused_at IS NOT NULL AND s.paused_at >= $1
+		ORDER BY s.user_id, s.created_at`
+
+	rows, err := r.db.Query(ctx, q, cutoff)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var out []ProductSubForReconcile
+	for rows.Next() {
+		var p ProductSubForReconcile
+		if err := rows.Scan(&p.ID, &p.UserID, &p.TelegramID, &p.Plan, &p.PlanExpiresAt, &p.CreatedAt, &p.ActiveCount); err != nil {
+			return nil, err
+		}
+		out = append(out, p)
+	}
+	return out, rows.Err()
+}
+
+// Reactivate возвращает паузные подписки в работу (active=TRUE, paused_at=NULL).
+func (r *SubscriptionRepo) Reactivate(ctx context.Context, ids []int64) error {
+	if len(ids) == 0 {
+		return nil
+	}
+	const q = `
+		UPDATE subscriptions
+		SET active = TRUE, paused_at = NULL, updated_at = NOW()
+		WHERE id = ANY($1)`
+	_, err := r.db.Exec(ctx, q, ids)
+	return err
+}
+
+// DeleteExpiredGraceProductSubs удаляет паузные подписки старше grace
+// (paused_at < cutoff). У notifications нет ON DELETE CASCADE на subscription_id,
+// поэтому зависимые строки удаляем в одной транзакции: сначала notifications,
+// затем subscriptions. Возвращает число удалённых подписок.
+func (r *SubscriptionRepo) DeleteExpiredGraceProductSubs(ctx context.Context, cutoff time.Time) (int64, error) {
+	tx, err := r.db.Begin(ctx)
+	if err != nil {
+		return 0, err
+	}
+	defer tx.Rollback(ctx)
+
+	const delNotif = `
+		DELETE FROM notifications
+		WHERE subscription_id IN (
+			SELECT id FROM subscriptions WHERE paused_at IS NOT NULL AND paused_at < $1
+		)`
+	if _, err := tx.Exec(ctx, delNotif, cutoff); err != nil {
+		return 0, err
+	}
+
+	const delSubs = `DELETE FROM subscriptions WHERE paused_at IS NOT NULL AND paused_at < $1`
+	tag, err := tx.Exec(ctx, delSubs, cutoff)
+	if err != nil {
+		return 0, err
+	}
+
+	if err := tx.Commit(ctx); err != nil {
+		return 0, err
+	}
+	return tag.RowsAffected(), nil
 }
