@@ -11,6 +11,8 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"net/http"
+	"time"
 
 	tgbotapi "github.com/go-telegram-bot-api/telegram-bot-api/v5"
 )
@@ -23,11 +25,24 @@ type Receiver struct {
 // NewReceiver делает getMe (ходит наружу к Telegram). Оборачивать ретраями —
 // на стороне вызывающего (ingestor), как и для NewBot.
 func NewReceiver(token string, log *slog.Logger) (*Receiver, error) {
-	api, err := tgbotapi.NewBotAPI(token)
+	api, err := tgbotapi.NewBotAPIWithClient(token, tgbotapi.APIEndpoint, pollHTTPClient())
 	if err != nil {
 		return nil, fmt.Errorf("init bot api: %w", err)
 	}
 	return &Receiver{api: api, log: log}, nil
+}
+
+// pollHTTPClient — HTTP-клиент для long-poll getUpdates через HTTPS_PROXY
+// (tinyproxy+WireGuard). КРИТИЧНО иметь таймаут: дефолтный tgbotapi.NewBotAPI
+// создаёт http.Client БЕЗ него, и тогда запрос по «полумёртвому» keep-alive
+// соединению к прокси висит до idle-таймаута tinyproxy (~10 мин). Цикл
+// GetUpdatesChan однопоточный — пока запрос висит, апдейты копятся на стороне
+// Telegram и бот отвечает с многоминутной задержкой.
+//
+// Таймаут ДОЛЖЕН превышать серверный long-poll timeout, иначе режет здоровые
+// поллы: берём poll timeout + запас.
+func pollHTTPClient() *http.Client {
+	return &http.Client{Timeout: time.Duration(pollTimeoutSeconds()+15) * time.Second}
 }
 
 func (r *Receiver) SetWebhook(webhookURL string) error {
