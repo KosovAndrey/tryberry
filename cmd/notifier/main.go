@@ -87,6 +87,7 @@ func run(log *slog.Logger) error {
 	notifRepo := postgres.NewNotificationRepo(pool)
 	priceHistoryRepo := postgres.NewPriceHistoryRepo(pool)
 	searchNotifRepo := postgres.NewSearchNotificationRepo(pool)
+	searchSubRepo := postgres.NewSearchSubscriptionRepo(pool)
 
 	var priceCache *redisrepo.PriceCache
 	if redisClient != nil {
@@ -115,10 +116,102 @@ func run(log *slog.Logger) error {
 		}
 	}()
 
+	// Reconciler grace-периода: гасит/восстанавливает/чистит поиск-подписки по
+	// действующему плану. Живёт здесь, т.к. notifier — единственный синглтон с
+	// БД И egress в Telegram (scheduler без HTTPS_PROXY юзеру написать не может).
+	reconcileInterval := time.Duration(getEnvInt("PLAN_RECONCILE_INTERVAL_MINUTES", 15)) * time.Minute
+	go runPlanReconciler(ctx, log, searchSubRepo, tgNotifier, reconcileInterval)
+
 	handler := makeHandler(log, subRepo, notifRepo, priceHistoryRepo, priceCache, tgNotifier)
 
 	log.Info("notifier started, waiting for price events...")
 	return consumer.Run(ctx, handler)
+}
+
+// runPlanReconciler периодически приводит поиск-подписки в соответствие с
+// действующим планом пользователей (grace-период после истечения):
+//
+//  1. ПАУЗА    — у юзеров с истёкшим планом активные поиски → active=FALSE,
+//     paused_at=NOW(); каждому затронутому шлём разовое уведомление.
+//  2. ВОЗВРАТ  — кто вернул план с поиском в пределах grace → реактивируем
+//     самые старые паузные подписки до лимита нового плана.
+//  3. ОЧИСТКА  — паузные старше grace удаляем насовсем (каскад чистит baseline).
+//
+// Лимиты (MaxSearch) — в коде (domain.Plans), поэтому решение о возврате считаем
+// в Go. Блокируется до отмены ctx.
+func runPlanReconciler(
+	ctx context.Context,
+	log *slog.Logger,
+	repo *postgres.SearchSubscriptionRepo,
+	tg *telegram.Notifier,
+	interval time.Duration,
+) {
+	tick := func() {
+		now := time.Now()
+
+		// 1. Пауза истёкших + уведомление.
+		paused, err := repo.PauseExpiredSearchSubs(ctx)
+		if err != nil {
+			log.Error("reconcile: pause expired", "err", err)
+		} else if len(paused) > 0 {
+			log.Info("reconcile: paused search subs for expired users", "users", len(paused))
+			for _, tgID := range paused {
+				if err := tg.SendPlanPausedNotice(ctx, tgID); err != nil {
+					log.Error("reconcile: notify paused", "telegram_id", tgID, "err", err)
+				}
+			}
+		}
+
+		// 2. Возврат вернувшихся (в пределах grace), до лимита плана.
+		cutoff := now.Add(-domain.PlanGracePeriod)
+		candidates, err := repo.ListPausedWithinGrace(ctx, cutoff)
+		if err != nil {
+			log.Error("reconcile: list paused within grace", "err", err)
+		} else {
+			var toRestore []int64
+			// candidates упорядочены по (user_id, created_at) — группируем подряд.
+			for i := 0; i < len(candidates); {
+				j := i
+				for j < len(candidates) && candidates[j].UserID == candidates[i].UserID {
+					j++
+				}
+				group := candidates[i:j]
+				u := &domain.User{Plan: group[0].Plan, PlanExpiresAt: group[0].PlanExpiresAt}
+				limit := u.EffectivePlan(now).MaxSearch
+				for k := 0; k < len(group) && k < limit; k++ {
+					toRestore = append(toRestore, group[k].ID)
+				}
+				i = j
+			}
+			if len(toRestore) > 0 {
+				if err := repo.Reactivate(ctx, toRestore); err != nil {
+					log.Error("reconcile: reactivate", "err", err)
+				} else {
+					log.Info("reconcile: restored search subs", "count", len(toRestore))
+				}
+			}
+		}
+
+		// 3. Очистка просроченных grace.
+		if deleted, err := repo.DeleteExpiredGraceSearchSubs(ctx, cutoff); err != nil {
+			log.Error("reconcile: delete past grace", "err", err)
+		} else if deleted > 0 {
+			log.Info("reconcile: deleted search subs past grace", "count", deleted)
+		}
+	}
+
+	log.Info("plan reconciler started", "interval", interval.String())
+	tick()
+	ticker := time.NewTicker(interval)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			tick()
+		}
+	}
 }
 
 func makeHandler(

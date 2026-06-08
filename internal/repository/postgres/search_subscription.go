@@ -3,6 +3,7 @@ package postgres
 import (
 	"context"
 	"errors"
+	"time"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -206,4 +207,107 @@ func (r *SearchSubscriptionRepo) GetBaseline(ctx context.Context, subID, product
 		return 0, false, err
 	}
 	return price, true, nil
+}
+
+// ── Grace-период плана (reconciler в notifier) ───────────────────────────────
+
+// PausedSearchSub — паузная подписка с планом владельца. Лимиты (MaxSearch) живут
+// в коде (domain.Plans), поэтому решение о восстановлении считаем в Go, не в SQL.
+type PausedSearchSub struct {
+	ID            int64
+	UserID        int64
+	Plan          string
+	PlanExpiresAt *time.Time
+	CreatedAt     time.Time
+}
+
+// PauseExpiredSearchSubs ставит на паузу активные поиск-подписки пользователей с
+// истёкшим планом (effective plan = free → MaxSearch=0, поиск не положен вовсе).
+// Возвращает telegram_id затронутых пользователей (без дублей) для разового
+// уведомления. Идемпотентна: паузные (active=FALSE) под условие не попадают,
+// поэтому повторный вызов не шлёт уведомление снова.
+func (r *SearchSubscriptionRepo) PauseExpiredSearchSubs(ctx context.Context) ([]int64, error) {
+	const q = `
+		UPDATE search_subscriptions s
+		SET active = FALSE, paused_at = NOW(), updated_at = NOW()
+		FROM users u
+		WHERE s.user_id = u.id
+		  AND s.active = TRUE AND s.paused_at IS NULL
+		  AND u.plan_expires_at IS NOT NULL AND u.plan_expires_at < NOW()
+		RETURNING u.telegram_id`
+
+	rows, err := r.db.Query(ctx, q)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	seen := make(map[int64]bool)
+	var ids []int64
+	for rows.Next() {
+		var tg int64
+		if err := rows.Scan(&tg); err != nil {
+			return nil, err
+		}
+		if !seen[tg] {
+			seen[tg] = true
+			ids = append(ids, tg)
+		}
+	}
+	return ids, rows.Err()
+}
+
+// ListPausedWithinGrace возвращает паузные подписки, ещё не вышедшие из grace
+// (paused_at >= cutoff), вместе с планом владельца. Упорядочено по (user_id,
+// created_at), чтобы вызывающий мог группировать по юзеру и восстанавливать
+// самые старые в пределах MaxSearch.
+func (r *SearchSubscriptionRepo) ListPausedWithinGrace(ctx context.Context, cutoff time.Time) ([]PausedSearchSub, error) {
+	const q = `
+		SELECT s.id, s.user_id, u.plan, u.plan_expires_at, s.created_at
+		FROM search_subscriptions s
+		JOIN users u ON u.id = s.user_id
+		WHERE s.paused_at IS NOT NULL AND s.paused_at >= $1
+		ORDER BY s.user_id, s.created_at`
+
+	rows, err := r.db.Query(ctx, q, cutoff)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var out []PausedSearchSub
+	for rows.Next() {
+		var p PausedSearchSub
+		if err := rows.Scan(&p.ID, &p.UserID, &p.Plan, &p.PlanExpiresAt, &p.CreatedAt); err != nil {
+			return nil, err
+		}
+		out = append(out, p)
+	}
+	return out, rows.Err()
+}
+
+// Reactivate возвращает паузные подписки в работу (active=TRUE, paused_at=NULL).
+func (r *SearchSubscriptionRepo) Reactivate(ctx context.Context, ids []int64) error {
+	if len(ids) == 0 {
+		return nil
+	}
+	const q = `
+		UPDATE search_subscriptions
+		SET active = TRUE, paused_at = NULL, updated_at = NOW()
+		WHERE id = ANY($1)`
+	_, err := r.db.Exec(ctx, q, ids)
+	return err
+}
+
+// DeleteExpiredGraceSearchSubs удаляет паузные подписки старше grace
+// (paused_at < cutoff). FK ON DELETE CASCADE сам чистит baseline
+// (search_subscription_products) и историю (search_notifications).
+// Возвращает число удалённых строк.
+func (r *SearchSubscriptionRepo) DeleteExpiredGraceSearchSubs(ctx context.Context, cutoff time.Time) (int64, error) {
+	const q = `DELETE FROM search_subscriptions WHERE paused_at IS NOT NULL AND paused_at < $1`
+	tag, err := r.db.Exec(ctx, q, cutoff)
+	if err != nil {
+		return 0, err
+	}
+	return tag.RowsAffected(), nil
 }
