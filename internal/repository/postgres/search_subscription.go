@@ -299,6 +299,32 @@ func (r *SearchSubscriptionRepo) Reactivate(ctx context.Context, ids []int64) er
 	return err
 }
 
+// RestorePausedForUser реактивирует до limit самых старых паузных поиск-подписок
+// юзера в пределах grace (paused_at >= cutoff). Для мгновенного возврата при
+// покупке/выдаче плана (reconciler сделал бы это на ближайшем тике). limit<=0 —
+// no-op. Возвращает число восстановленных.
+func (r *SearchSubscriptionRepo) RestorePausedForUser(ctx context.Context, userID int64, limit int, cutoff time.Time) (int64, error) {
+	if limit <= 0 {
+		return 0, nil
+	}
+	const q = `
+		WITH to_restore AS (
+			SELECT id FROM search_subscriptions
+			WHERE user_id = $1 AND paused_at IS NOT NULL AND paused_at >= $2
+			ORDER BY created_at
+			LIMIT $3
+		)
+		UPDATE search_subscriptions s
+		SET active = TRUE, paused_at = NULL, updated_at = NOW()
+		FROM to_restore t
+		WHERE s.id = t.id`
+	tag, err := r.db.Exec(ctx, q, userID, cutoff, limit)
+	if err != nil {
+		return 0, err
+	}
+	return tag.RowsAffected(), nil
+}
+
 // DeleteExpiredGraceSearchSubs удаляет паузные подписки старше grace
 // (paused_at < cutoff). FK ON DELETE CASCADE сам чистит baseline
 // (search_subscription_products) и историю (search_notifications).

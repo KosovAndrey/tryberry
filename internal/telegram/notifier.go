@@ -141,6 +141,20 @@ func (n *Notifier) SendPlanPausedNotice(ctx context.Context, chatID int64) error
 	return n.sendMessage(ctx, chatID, text, keyboard)
 }
 
+// SendPlanExpiringReminder — разовое напоминание за сутки до конца тарифа.
+func (n *Notifier) SendPlanExpiringReminder(ctx context.Context, chatID int64) error {
+	text := "⏳ <b>Тариф скоро закончится</b>\n\n" +
+		"Завтра истекает срок твоего тарифа. Продли, чтобы не потерять подписки и " +
+		"лимиты — иначе часть из них будет приостановлена.\n\n" +
+		"Твой тариф и лимиты: /myplan"
+	keyboard := map[string]any{
+		"inline_keyboard": [][]map[string]any{
+			{{"text": "💳 Продлить", "url": "https://t.me/kosov_andrey"}},
+		},
+	}
+	return n.sendMessage(ctx, chatID, text, keyboard)
+}
+
 func (n *Notifier) sendPhoto(ctx context.Context, chatID int64, photo, caption string, keyboard any) error {
 	payload := map[string]any{
 		"chat_id":      chatID,

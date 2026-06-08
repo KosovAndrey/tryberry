@@ -1,0 +1,127 @@
+package main
+
+import (
+	"testing"
+	"time"
+
+	"gitlab.com/KosovAndrey/tryberrybot/internal/repository/postgres"
+)
+
+var testNow = time.Date(2026, 1, 1, 12, 0, 0, 0, time.UTC)
+
+func ptime(t time.Time) *time.Time { return &t }
+
+// созданные позже = больший created_at; функции полагаются на порядок (user_id, created_at).
+func at(i int64) time.Time { return testNow.Add(time.Duration(i) * time.Minute) }
+
+func TestSelectProductPauses(t *testing.T) {
+	past := testNow.Add(-time.Hour)  // план истёк → free, MaxProduct=10
+	future := testNow.Add(time.Hour) // план действует → не трогаем
+
+	var cands []postgres.ProductSubForReconcile
+	// user 1: истёкший pro, 12 активных → гасим избыток сверх 10 (id 11, 12).
+	for i := int64(1); i <= 12; i++ {
+		cands = append(cands, postgres.ProductSubForReconcile{
+			ID: i, UserID: 1, TelegramID: 100, Plan: "pro", PlanExpiresAt: ptime(past), CreatedAt: at(i),
+		})
+	}
+	// user 2: истёкший pro, ровно 8 → ничего не гасим.
+	for i := int64(13); i <= 20; i++ {
+		cands = append(cands, postgres.ProductSubForReconcile{
+			ID: i, UserID: 2, TelegramID: 200, Plan: "pro", PlanExpiresAt: ptime(past), CreatedAt: at(i),
+		})
+	}
+	// user 3: действующий pro — не трогаем (в реальности сюда не попадёт, но проверим устойчивость).
+	for i := int64(21); i <= 35; i++ {
+		cands = append(cands, postgres.ProductSubForReconcile{
+			ID: i, UserID: 3, TelegramID: 300, Plan: "pro", PlanExpiresAt: ptime(future), CreatedAt: at(i),
+		})
+	}
+
+	pause, affected := selectProductPauses(cands, testNow)
+
+	if want := []int64{11, 12}; !eq(pause, want) {
+		t.Fatalf("pause = %v, want %v", pause, want)
+	}
+	if want := []int64{100}; !eq(affected, want) {
+		t.Fatalf("affected = %v, want %v", affected, want)
+	}
+}
+
+func TestSelectProductRestores(t *testing.T) {
+	past := testNow.Add(-time.Hour)
+	future := testNow.Add(time.Hour)
+
+	var cands []postgres.ProductSubForReconcile
+	// user 1: вернул pro (действует), активных 10 → слотов 90 → вернём все 5 паузных.
+	for i := int64(1); i <= 5; i++ {
+		cands = append(cands, postgres.ProductSubForReconcile{
+			ID: i, UserID: 1, Plan: "pro", PlanExpiresAt: ptime(future), ActiveCount: 10, CreatedAt: at(i),
+		})
+	}
+	// user 2: pro действует, но активных уже 98 → слотов 2 → вернём только 2 самых старых (id 6, 7).
+	for i := int64(6); i <= 10; i++ {
+		cands = append(cands, postgres.ProductSubForReconcile{
+			ID: i, UserID: 2, Plan: "pro", PlanExpiresAt: ptime(future), ActiveCount: 98, CreatedAt: at(i),
+		})
+	}
+	// user 3: всё ещё истёкший (free), активных 10 → слотов 0 → не возвращаем.
+	for i := int64(11); i <= 13; i++ {
+		cands = append(cands, postgres.ProductSubForReconcile{
+			ID: i, UserID: 3, Plan: "pro", PlanExpiresAt: ptime(past), ActiveCount: 10, CreatedAt: at(i),
+		})
+	}
+
+	got := selectProductRestores(cands, testNow)
+	if want := []int64{1, 2, 3, 4, 5, 6, 7}; !eq(got, want) {
+		t.Fatalf("restore = %v, want %v", got, want)
+	}
+}
+
+func TestSelectSearchRestores(t *testing.T) {
+	past := testNow.Add(-time.Hour)
+	future := testNow.Add(time.Hour)
+
+	var cands []postgres.PausedSearchSub
+	// user 1: pro действует (MaxSearch=5), 4 паузных → вернём все 4.
+	for i := int64(1); i <= 4; i++ {
+		cands = append(cands, postgres.PausedSearchSub{ID: i, UserID: 1, Plan: "pro", PlanExpiresAt: ptime(future), CreatedAt: at(i)})
+	}
+	// user 2: trial действует (MaxSearch=3), 4 паузных → вернём 3 самых старых (id 5,6,7).
+	for i := int64(5); i <= 8; i++ {
+		cands = append(cands, postgres.PausedSearchSub{ID: i, UserID: 2, Plan: "trial", PlanExpiresAt: ptime(future), CreatedAt: at(i)})
+	}
+	// user 3: истёкший (free, MaxSearch=0), 2 паузных → не возвращаем.
+	for i := int64(9); i <= 10; i++ {
+		cands = append(cands, postgres.PausedSearchSub{ID: i, UserID: 3, Plan: "pro", PlanExpiresAt: ptime(past), CreatedAt: at(i)})
+	}
+
+	got := selectSearchRestores(cands, testNow)
+	if want := []int64{1, 2, 3, 4, 5, 6, 7}; !eq(got, want) {
+		t.Fatalf("restore = %v, want %v", got, want)
+	}
+}
+
+func TestSelectorsEmpty(t *testing.T) {
+	if p, a := selectProductPauses(nil, testNow); p != nil || a != nil {
+		t.Fatalf("empty pauses: got %v %v", p, a)
+	}
+	if r := selectProductRestores(nil, testNow); r != nil {
+		t.Fatalf("empty product restores: got %v", r)
+	}
+	if r := selectSearchRestores(nil, testNow); r != nil {
+		t.Fatalf("empty search restores: got %v", r)
+	}
+}
+
+func eq(a, b []int64) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i] != b[i] {
+			return false
+		}
+	}
+	return true
+}

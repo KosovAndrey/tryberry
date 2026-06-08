@@ -57,7 +57,8 @@ func (r *UserRepo) GetByTelegramID(ctx context.Context, telegramID int64) (*doma
 
 // SetPlan — выставить план и срок (expiresAt=nil → бессрочно). Для /grant и /revoke.
 func (r *UserRepo) SetPlan(ctx context.Context, telegramID int64, plan string, expiresAt *time.Time) error {
-	const q = `UPDATE users SET plan = $2, plan_expires_at = $3 WHERE telegram_id = $1`
+	// plan_reminded_at сбрасываем: новый срок → снова можно напомнить об истечении.
+	const q = `UPDATE users SET plan = $2, plan_expires_at = $3, plan_reminded_at = NULL WHERE telegram_id = $1`
 	tag, err := r.db.Exec(ctx, q, telegramID, plan, expiresAt)
 	if err != nil {
 		return err
@@ -73,13 +74,50 @@ func (r *UserRepo) SetPlan(ctx context.Context, telegramID int64, plan string, e
 func (r *UserRepo) ActivateTrial(ctx context.Context, telegramID int64, expiresAt time.Time) (bool, error) {
 	const q = `
 		UPDATE users
-		SET plan = 'trial', plan_expires_at = $2, trial_used = TRUE
+		SET plan = 'trial', plan_expires_at = $2, trial_used = TRUE, plan_reminded_at = NULL
 		WHERE telegram_id = $1 AND trial_used = FALSE`
 	tag, err := r.db.Exec(ctx, q, telegramID, expiresAt)
 	if err != nil {
 		return false, err
 	}
 	return tag.RowsAffected() > 0, nil
+}
+
+// ListExpiringUnreminded — telegram_id юзеров с тарифом, истекающим в окне
+// (now, until], которым ещё не слали напоминание. Reconciler в notifier шлёт им
+// разовое уведомление об истечении и помечает MarkReminded.
+func (r *UserRepo) ListExpiringUnreminded(ctx context.Context, until time.Time) ([]int64, error) {
+	const q = `
+		SELECT telegram_id
+		FROM users
+		WHERE plan_expires_at IS NOT NULL
+		  AND plan_expires_at > NOW() AND plan_expires_at <= $1
+		  AND plan_reminded_at IS NULL`
+	rows, err := r.db.Query(ctx, q, until)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var ids []int64
+	for rows.Next() {
+		var id int64
+		if err := rows.Scan(&id); err != nil {
+			return nil, err
+		}
+		ids = append(ids, id)
+	}
+	return ids, rows.Err()
+}
+
+// MarkReminded ставит plan_reminded_at=NOW() — защита от повторной отправки.
+func (r *UserRepo) MarkReminded(ctx context.Context, telegramIDs []int64) error {
+	if len(telegramIDs) == 0 {
+		return nil
+	}
+	const q = `UPDATE users SET plan_reminded_at = NOW() WHERE telegram_id = ANY($1)`
+	_, err := r.db.Exec(ctx, q, telegramIDs)
+	return err
 }
 
 // UserUsage — строка для админского /users: план + занятость лимитов.

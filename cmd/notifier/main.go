@@ -88,6 +88,7 @@ func run(log *slog.Logger) error {
 	priceHistoryRepo := postgres.NewPriceHistoryRepo(pool)
 	searchNotifRepo := postgres.NewSearchNotificationRepo(pool)
 	searchSubRepo := postgres.NewSearchSubscriptionRepo(pool)
+	userRepo := postgres.NewUserRepo(pool)
 
 	var priceCache *redisrepo.PriceCache
 	if redisClient != nil {
@@ -120,7 +121,7 @@ func run(log *slog.Logger) error {
 	// действующему плану. Живёт здесь, т.к. notifier — единственный синглтон с
 	// БД И egress в Telegram (scheduler без HTTPS_PROXY юзеру написать не может).
 	reconcileInterval := time.Duration(getEnvInt("PLAN_RECONCILE_INTERVAL_MINUTES", 15)) * time.Minute
-	go runPlanReconciler(ctx, log, searchSubRepo, subRepo, tgNotifier, reconcileInterval)
+	go runPlanReconciler(ctx, log, searchSubRepo, subRepo, userRepo, tgNotifier, reconcileInterval)
 
 	handler := makeHandler(log, subRepo, notifRepo, priceHistoryRepo, priceCache, tgNotifier)
 
@@ -128,22 +129,24 @@ func run(log *slog.Logger) error {
 	return consumer.Run(ctx, handler)
 }
 
-// runPlanReconciler периодически приводит поиск-подписки в соответствие с
-// действующим планом пользователей (grace-период после истечения):
+// runPlanReconciler периодически приводит подписки в соответствие с действующим
+// планом пользователей (grace-период после истечения) + шлёт напоминания:
 //
-//  1. ПАУЗА    — у юзеров с истёкшим планом активные поиски → active=FALSE,
-//     paused_at=NOW(); каждому затронутому шлём разовое уведомление.
-//  2. ВОЗВРАТ  — кто вернул план с поиском в пределах grace → реактивируем
-//     самые старые паузные подписки до лимита нового плана.
+//  1. ПАУЗА    — сверхлимитные подписки истёкших юзеров → active=FALSE,
+//     paused_at=NOW(); затронутым шлём ОДНО уведомление (поиск+товары вместе).
+//  2. ВОЗВРАТ  — кто вернул план в пределах grace → реактивируем самые старые
+//     паузные подписки до лимита нового плана.
 //  3. ОЧИСТКА  — паузные старше grace удаляем насовсем (каскад чистит baseline).
+//  4. НАПОМИНАНИЕ — за сутки до истечения тарифа шлём разовое напоминание.
 //
-// Лимиты (MaxSearch) — в коде (domain.Plans), поэтому решение о возврате считаем
-// в Go. Блокируется до отмены ctx.
+// Лимиты (MaxSearch/MaxProduct) — в коде (domain.Plans), поэтому решения считаем
+// в Go (чистые функции select*). Блокируется до отмены ctx.
 func runPlanReconciler(
 	ctx context.Context,
 	log *slog.Logger,
 	searchRepo *postgres.SearchSubscriptionRepo,
 	subRepo *postgres.SubscriptionRepo,
+	userRepo *postgres.UserRepo,
 	tg *telegram.Notifier,
 	interval time.Duration,
 ) {
@@ -184,6 +187,9 @@ func runPlanReconciler(
 		} else if n > 0 {
 			log.Info("reconcile: deleted product subs past grace", "count", n)
 		}
+
+		// 4. Напоминание за сутки до истечения тарифа.
+		remindExpiring(ctx, log, userRepo, tg, now.Add(24*time.Hour))
 	}
 
 	log.Info("plan reconciler started", "interval", interval.String())
@@ -215,30 +221,14 @@ func pauseExpiredSearch(ctx context.Context, log *slog.Logger, repo *postgres.Se
 }
 
 // pauseExpiredProducts гасит ИЗБЫТОК товарных подписок истёкших юзеров сверх
-// лимита free (самые старые остаются). Возвращает telegram_id затронутых.
+// лимита плана (самые старые остаются). Возвращает telegram_id затронутых.
 func pauseExpiredProducts(ctx context.Context, log *slog.Logger, repo *postgres.SubscriptionRepo, now time.Time) []int64 {
 	cands, err := repo.ListActiveOfExpiredUsers(ctx)
 	if err != nil {
 		log.Error("reconcile: list active of expired", "err", err)
 		return nil
 	}
-	var toPause, affected []int64
-	for i := 0; i < len(cands); {
-		j := i
-		for j < len(cands) && cands[j].UserID == cands[i].UserID {
-			j++
-		}
-		group := cands[i:j]
-		u := &domain.User{Plan: group[0].Plan, PlanExpiresAt: group[0].PlanExpiresAt}
-		limit := u.EffectivePlan(now).MaxProduct
-		if len(group) > limit {
-			for k := limit; k < len(group); k++ {
-				toPause = append(toPause, group[k].ID)
-			}
-			affected = append(affected, group[0].TelegramID)
-		}
-		i = j
-	}
+	toPause, affected := selectProductPauses(cands, now)
 	if len(toPause) == 0 {
 		return nil
 	}
@@ -258,20 +248,7 @@ func restoreSearch(ctx context.Context, log *slog.Logger, repo *postgres.SearchS
 		log.Error("reconcile: list paused search", "err", err)
 		return
 	}
-	var toRestore []int64
-	for i := 0; i < len(cands); {
-		j := i
-		for j < len(cands) && cands[j].UserID == cands[i].UserID {
-			j++
-		}
-		group := cands[i:j]
-		u := &domain.User{Plan: group[0].Plan, PlanExpiresAt: group[0].PlanExpiresAt}
-		limit := u.EffectivePlan(now).MaxSearch
-		for k := 0; k < len(group) && k < limit; k++ {
-			toRestore = append(toRestore, group[k].ID)
-		}
-		i = j
-	}
+	toRestore := selectSearchRestores(cands, now)
 	if len(toRestore) == 0 {
 		return
 	}
@@ -290,7 +267,96 @@ func restoreProducts(ctx context.Context, log *slog.Logger, repo *postgres.Subsc
 		log.Error("reconcile: list paused products", "err", err)
 		return
 	}
-	var toRestore []int64
+	toRestore := selectProductRestores(cands, now)
+	if len(toRestore) == 0 {
+		return
+	}
+	if err := repo.Reactivate(ctx, toRestore); err != nil {
+		log.Error("reconcile: reactivate products", "err", err)
+		return
+	}
+	log.Info("reconcile: restored product subs", "count", len(toRestore))
+}
+
+// remindExpiring шлёт разовое напоминание юзерам, чей тариф истекает в окне
+// (now, until], и помечает их MarkReminded — только тех, кому реально отправили
+// (сбой отправки → повтор на следующем тике).
+func remindExpiring(ctx context.Context, log *slog.Logger, repo *postgres.UserRepo, tg *telegram.Notifier, until time.Time) {
+	ids, err := repo.ListExpiringUnreminded(ctx, until)
+	if err != nil {
+		log.Error("reconcile: list expiring", "err", err)
+		return
+	}
+	if len(ids) == 0 {
+		return
+	}
+	var sent []int64
+	for _, tgID := range ids {
+		if err := tg.SendPlanExpiringReminder(ctx, tgID); err != nil {
+			log.Error("reconcile: send expiry reminder", "telegram_id", tgID, "err", err)
+			continue
+		}
+		sent = append(sent, tgID)
+	}
+	if len(sent) == 0 {
+		return
+	}
+	if err := repo.MarkReminded(ctx, sent); err != nil {
+		log.Error("reconcile: mark reminded", "err", err)
+	}
+	log.Info("reconcile: sent expiry reminders", "count", len(sent))
+}
+
+// ── Чистые функции принятия решений (без БД, покрыты тестами) ────────────────
+//
+// Все три принимают cands, упорядоченные по (user_id, created_at), и группируют
+// подряд идущие строки одного юзера. now → действующий план через EffectivePlan.
+
+// selectSearchRestores — id поиск-подписок к возврату: самые старые до MaxSearch.
+func selectSearchRestores(cands []postgres.PausedSearchSub, now time.Time) []int64 {
+	var out []int64
+	for i := 0; i < len(cands); {
+		j := i
+		for j < len(cands) && cands[j].UserID == cands[i].UserID {
+			j++
+		}
+		group := cands[i:j]
+		u := &domain.User{Plan: group[0].Plan, PlanExpiresAt: group[0].PlanExpiresAt}
+		limit := u.EffectivePlan(now).MaxSearch
+		for k := 0; k < len(group) && k < limit; k++ {
+			out = append(out, group[k].ID)
+		}
+		i = j
+	}
+	return out
+}
+
+// selectProductPauses — id товарных подписок к паузе (избыток сверх лимита плана,
+// самые старые остаются) и telegram_id затронутых юзеров.
+func selectProductPauses(cands []postgres.ProductSubForReconcile, now time.Time) (pause, affected []int64) {
+	for i := 0; i < len(cands); {
+		j := i
+		for j < len(cands) && cands[j].UserID == cands[i].UserID {
+			j++
+		}
+		group := cands[i:j]
+		u := &domain.User{Plan: group[0].Plan, PlanExpiresAt: group[0].PlanExpiresAt}
+		limit := u.EffectivePlan(now).MaxProduct
+		if len(group) > limit {
+			for k := limit; k < len(group); k++ {
+				pause = append(pause, group[k].ID)
+			}
+			affected = append(affected, group[0].TelegramID)
+		}
+		i = j
+	}
+	return pause, affected
+}
+
+// selectProductRestores — id товарных подписок к возврату: самые старые до
+// (MaxProduct − уже активные) на юзера.
+func selectProductRestores(cands []postgres.ProductSubForReconcile, now time.Time) []int64 {
+	var out []int64
 	for i := 0; i < len(cands); {
 		j := i
 		for j < len(cands) && cands[j].UserID == cands[i].UserID {
@@ -300,18 +366,11 @@ func restoreProducts(ctx context.Context, log *slog.Logger, repo *postgres.Subsc
 		u := &domain.User{Plan: group[0].Plan, PlanExpiresAt: group[0].PlanExpiresAt}
 		slots := u.EffectivePlan(now).MaxProduct - group[0].ActiveCount
 		for k := 0; k < len(group) && k < slots; k++ {
-			toRestore = append(toRestore, group[k].ID)
+			out = append(out, group[k].ID)
 		}
 		i = j
 	}
-	if len(toRestore) == 0 {
-		return
-	}
-	if err := repo.Reactivate(ctx, toRestore); err != nil {
-		log.Error("reconcile: reactivate products", "err", err)
-		return
-	}
-	log.Info("reconcile: restored product subs", "count", len(toRestore))
+	return out
 }
 
 func makeHandler(

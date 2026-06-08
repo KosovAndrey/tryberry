@@ -334,6 +334,31 @@ func (r *SubscriptionRepo) Reactivate(ctx context.Context, ids []int64) error {
 	return err
 }
 
+// RestorePausedForUser реактивирует до limit самых старых паузных товарных
+// подписок юзера в пределах grace (paused_at >= cutoff). Для мгновенного возврата
+// при покупке/выдаче плана. limit<=0 — no-op. Возвращает число восстановленных.
+func (r *SubscriptionRepo) RestorePausedForUser(ctx context.Context, userID int64, limit int, cutoff time.Time) (int64, error) {
+	if limit <= 0 {
+		return 0, nil
+	}
+	const q = `
+		WITH to_restore AS (
+			SELECT id FROM subscriptions
+			WHERE user_id = $1 AND paused_at IS NOT NULL AND paused_at >= $2
+			ORDER BY created_at
+			LIMIT $3
+		)
+		UPDATE subscriptions s
+		SET active = TRUE, paused_at = NULL, updated_at = NOW()
+		FROM to_restore t
+		WHERE s.id = t.id`
+	tag, err := r.db.Exec(ctx, q, userID, cutoff, limit)
+	if err != nil {
+		return 0, err
+	}
+	return tag.RowsAffected(), nil
+}
+
 // DeleteExpiredGraceProductSubs удаляет паузные подписки старше grace
 // (paused_at < cutoff). У notifications нет ON DELETE CASCADE на subscription_id,
 // поэтому зависимые строки удаляем в одной транзакции: сначала notifications,

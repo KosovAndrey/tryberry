@@ -41,6 +41,8 @@ func (b *Bot) handleTrial(ctx context.Context, chatID int64, user *domain.User) 
 		return
 	}
 
+	b.restorePausedAfterUpgrade(ctx, user.TelegramID)
+
 	p := domain.Plans["trial"]
 	b.reply(chatID, fmt.Sprintf(
 		"🎁 <b>Триал активирован на 3 дня!</b>\n\n"+
@@ -120,11 +122,42 @@ func (b *Bot) handleGrant(ctx context.Context, msg *tgbotapi.Message) {
 		return
 	}
 
+	b.restorePausedAfterUpgrade(ctx, tgID)
+
 	txt := fmt.Sprintf("✅ Выдан тариф <b>%s</b> пользователю <code>%d</code>", plan.Title, tgID)
 	if exp != nil {
 		txt += fmt.Sprintf(" до <b>%s</b>", exp.Format(dateLayout))
 	}
 	b.reply(msg.Chat.ID, txt)
+}
+
+// restorePausedAfterUpgrade мгновенно возвращает паузные подписки пользователя
+// (в пределах grace) до лимитов действующего плана — после выдачи/покупки тарифа.
+// Reconciler в notifier сделал бы это и сам на ближайшем тике; хук убирает лаг.
+// Ошибки только логируем: возврат не критичен для ответа пользователю.
+func (b *Bot) restorePausedAfterUpgrade(ctx context.Context, telegramID int64) {
+	user, err := b.userRepo.GetByTelegramID(ctx, telegramID)
+	if err != nil {
+		b.log.Error("restore after upgrade: get user", "err", err)
+		return
+	}
+	now := time.Now()
+	plan := user.EffectivePlan(now)
+	cutoff := now.Add(-domain.PlanGracePeriod)
+
+	activeS, _ := b.searchSubRepo.CountActiveByUserID(ctx, user.ID)
+	if n, err := b.searchSubRepo.RestorePausedForUser(ctx, user.ID, plan.MaxSearch-activeS, cutoff); err != nil {
+		b.log.Error("restore after upgrade: search", "err", err)
+	} else if n > 0 {
+		b.log.Info("restored paused search subs after upgrade", "user", user.ID, "count", n)
+	}
+
+	activeP, _ := b.subRepo.CountActiveByUserID(ctx, user.ID)
+	if n, err := b.subRepo.RestorePausedForUser(ctx, user.ID, plan.MaxProduct-activeP, cutoff); err != nil {
+		b.log.Error("restore after upgrade: products", "err", err)
+	} else if n > 0 {
+		b.log.Info("restored paused product subs after upgrade", "user", user.ID, "count", n)
+	}
 }
 
 // /revoke <telegram_id>
