@@ -101,11 +101,6 @@ func run(log *slog.Logger) error {
 	productRepo := postgres.NewProductRepo(pool)
 	priceHistoryRepo := postgres.NewPriceHistoryRepo(pool)
 
-	searchQueryRepo := postgres.NewSearchQueryRepo(pool)
-	searchSubRepo := postgres.NewSearchSubscriptionRepo(pool)
-	searchResultRepo := postgres.NewSearchResultRepo(pool)
-	searchNotifRepo := postgres.NewSearchNotificationRepo(pool)
-
 	var priceCache *redisrepo.PriceCache
 	if redisClient != nil {
 		priceCache = redisrepo.NewPriceCache(redisClient)
@@ -113,63 +108,19 @@ func run(log *slog.Logger) error {
 
 	// ── Kafka ────────────────────────────────────────────────────────────────
 	// Товарный путь: scrape-tasks → (этот consumer) → price-events.
+	// Поисковый путь вынесен в отдельный бинарь cmd/search-worker.
 	consumer := kafka.NewConsumer(kafkaBrokers, "scrape-tasks", kafkaGroupID)
 	defer consumer.Close()
 
 	producer := kafka.NewProducer(kafkaBrokers, "price-events")
 	defer producer.Close()
 
-	// Поисковый путь (M1b): search-tasks → (search worker) → search-events.
-	searchConsumer := kafka.NewConsumer(kafkaBrokers, "search-tasks", "search-workers")
-	defer searchConsumer.Close()
-
-	searchEvents := kafka.NewProducer(kafkaBrokers, "search-events")
-	defer searchEvents.Close()
-
-	// ── Скрейперы ─────────────────────────────────────────────────────────────
-	// WB-поиск аутентифицируется cookie-токеном wbaas из пула в Redis (майнит
-	// token-miner). Search-скрейпер встраивает товарный, поэтому обслуживает и
-	// карточки, и выдачи.
-	poolSize := getEnvInt("WB_TOKEN_POOL_SIZE", 5)
-	tokenProvider := scraper.NewRedisSearchTokenPool(redisClient, poolSize, log)
-
-	proxyPool, proxyErrs := scraper.NewProxyPool(splitCSV(getEnv("SEARCH_PROXY_URLS", "")), 12*time.Second)
-	for _, e := range proxyErrs {
-		log.Warn("bad search proxy, skipped", "err", e)
-	}
-
-	wbSearch := scraper.NewWildberriesSearchScraper(
-		scraper.NewWildberriesScraper(rpsWB),
-		proxyPool,
-		tokenProvider,
-		getEnvInt("SEARCH_MAX_PAGES", 5),
-		time.Duration(getEnvInt("SEARCH_PAGE_DELAY_MS", 700))*time.Millisecond,
-	)
-
+	// ── Скрейперы (товарные карточки) ──────────────────────────────────────────
 	registry := scraper.NewRegistry(
-		wbSearch,
+		scraper.NewWildberriesScraper(rpsWB),
 		scraper.NewOzonScraper(),
 		scraper.NewYandexMarketScraper(rpsYandex),
 	)
-
-	// ── Поиск-воркер (consumer search-tasks; уведомления уходят событием в
-	//    notifier через топик search-events) ───────────────────────────────────
-	sw := &searchWorker{
-		log:      log.With("component", "search_worker"),
-		registry: registry,
-		queries:  searchQueryRepo,
-		subs:     searchSubRepo,
-		results:  searchResultRepo,
-		notifs:   searchNotifRepo,
-		products: productRepo,
-		events:   searchEvents,
-	}
-	go func() {
-		log.Info("search worker started (consuming search-tasks)")
-		if err := searchConsumer.Run(ctx, sw.makeHandler()); err != nil {
-			log.Error("search consumer stopped", "err", err)
-		}
-	}()
 
 	// ── Обработчик сообщений (цены) — блокирующий основной цикл ────────────────
 	handler := makeHandler(log, registry, productRepo, priceHistoryRepo, priceCache, producer)
@@ -305,20 +256,4 @@ func getEnv(key, fallback string) string {
 		return v
 	}
 	return fallback
-}
-
-func getEnvInt(key string, fallback int) int {
-	if v := os.Getenv(key); v != "" {
-		if n, err := strconv.Atoi(v); err == nil {
-			return n
-		}
-	}
-	return fallback
-}
-
-func splitCSV(s string) []string {
-	if strings.TrimSpace(s) == "" {
-		return nil
-	}
-	return strings.Split(s, ",")
 }

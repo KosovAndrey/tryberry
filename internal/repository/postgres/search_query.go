@@ -3,6 +3,7 @@ package postgres
 import (
 	"context"
 	"errors"
+	"time"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -111,5 +112,59 @@ func (r *SearchQueryRepo) GetScrapable(ctx context.Context) ([]*domain.SearchQue
 func (r *SearchQueryRepo) UpdateLastScraped(ctx context.Context, id int64) error {
 	const q = `UPDATE search_queries SET last_scraped_at = NOW() WHERE id = $1`
 	_, err := r.db.Exec(ctx, q, id)
+	return err
+}
+
+// SchedulableRow — строка планирования: запрос + один его активный подписчик
+// (с тарифом владельца). Планировщик группирует по QueryID и считает
+// минимальный эффективный интервал среди подписчиков (источник истины —
+// domain.Plans), чтобы выбрать дорожку и проверить, пора ли скрейпить.
+type SchedulableRow struct {
+	QueryID        int64
+	NormalizedURL  string
+	QueryText      string
+	LastEnqueuedAt *time.Time
+	OwnerPlan      string
+	PlanExpiresAt  *time.Time
+}
+
+// GetSchedulable — по строке на каждую активную поиск-подписку: запрос + план
+// владельца. Интервал тарифа живёт в коде, поэтому MIN-интервал и решение «пора»
+// планировщик считает в Go (см. cmd/scheduler), а не в SQL.
+func (r *SearchQueryRepo) GetSchedulable(ctx context.Context) ([]SchedulableRow, error) {
+	const q = `
+		SELECT sq.id, sq.normalized_url, sq.query_text, sq.last_enqueued_at,
+		       u.plan, u.plan_expires_at
+		FROM search_queries sq
+		JOIN search_subscriptions ss ON ss.search_query_id = sq.id AND ss.active = TRUE
+		JOIN users u ON u.id = ss.user_id`
+
+	rows, err := r.db.Query(ctx, q)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var out []SchedulableRow
+	for rows.Next() {
+		var row SchedulableRow
+		if err := rows.Scan(&row.QueryID, &row.NormalizedURL, &row.QueryText,
+			&row.LastEnqueuedAt, &row.OwnerPlan, &row.PlanExpiresAt); err != nil {
+			return nil, err
+		}
+		out = append(out, row)
+	}
+	return out, rows.Err()
+}
+
+// ClaimEnqueued — отметить запросы поставленными в очередь (last_enqueued_at=NOW).
+// Планировщик-синглтон делает это перед эмиссией в Kafka: гонок нет, повторная
+// постановка того же запроса до истечения его интервала исключена.
+func (r *SearchQueryRepo) ClaimEnqueued(ctx context.Context, ids []int64) error {
+	if len(ids) == 0 {
+		return nil
+	}
+	const q = `UPDATE search_queries SET last_enqueued_at = NOW() WHERE id = ANY($1)`
+	_, err := r.db.Exec(ctx, q, ids)
 	return err
 }

@@ -50,9 +50,11 @@ test-cover:
 
 # Build
 build:
-	go build -o bin/api      ./cmd/api
-	go build -o bin/scraper  ./cmd/scraper
-	go build -o bin/notifier ./cmd/notifier
+	go build -o bin/api           ./cmd/api
+	go build -o bin/scraper       ./cmd/scraper
+	go build -o bin/notifier      ./cmd/notifier
+	go build -o bin/scheduler     ./cmd/scheduler
+	go build -o bin/search-worker ./cmd/search-worker
 
 # Help
 help:

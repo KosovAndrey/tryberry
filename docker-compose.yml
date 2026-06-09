@@ -160,10 +160,8 @@ services:
       KAFKA_BROKERS: "kafka:29092"
       KAFKA_GROUP_ID: "price-tracker"
       TELEGRAM_BOT_TOKEN: "${TELEGRAM_BOT_TOKEN}"
-      WB_TOKEN_POOL_SIZE: "5"
       SCRAPER_RATE_LIMIT_RPS: "5"
       SCRAPER_HEALTH_PORT: "8090"
-      SEARCH_SCRAPE_INTERVAL_MINUTES: "20"
       OTLP_ENDPOINT: "jaeger:4317"
     depends_on:
       postgres:
@@ -177,6 +175,78 @@ services:
     labels:
       logging: "promtail"
       service: "scraper"
+
+  # ── Поиск-воркер: обычная дорожка (search-tasks) ───────────────────────────
+  search-worker:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      args:
+        SERVICE: search-worker
+    container_name: pt_search_worker
+    environment:
+      DATABASE_URL: "postgres://user:password@postgres:5432/tryberrybot?sslmode=disable"
+      REDIS_URL: "redis://redis:6379"
+      KAFKA_BROKERS: "kafka:29092"
+      KAFKA_GROUP_ID: "search-workers"
+      SEARCH_TASKS_TOPIC: "search-tasks"
+      WB_TOKEN_POOL_PREFIX: "wb:search:"
+      WB_TOKEN_POOL_SIZE: "5"
+      SEARCH_SCRAPE_INTERVAL_MINUTES: "20"
+      SEARCH_MAX_PAGES: "5"
+      SEARCH_PAGE_DELAY_MS: "700"
+      SEARCH_WORKER_HEALTH_PORT: "8094"
+      OTLP_ENDPOINT: "jaeger:4317"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      kafka:
+        condition: service_healthy
+      jaeger:
+        condition: service_started
+    labels:
+      logging: "promtail"
+      service: "search-worker"
+
+  # ── Поиск-воркер: дорожка перекупов (reseller-tasks) ───────────────────────
+  # Масштабируется независимо: docker compose up -d --scale reseller-worker=N
+  # (поэтому без container_name и без публикации портов). Партиций у топика
+  # reseller-tasks хватает на 10 реплик (KAFKA_NUM_PARTITIONS). Отдельный пул
+  # токенов (wb:reseller:) наполняет token-miner-reseller со своим egress.
+  reseller-worker:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      args:
+        SERVICE: search-worker
+    environment:
+      DATABASE_URL: "postgres://user:password@postgres:5432/tryberrybot?sslmode=disable"
+      REDIS_URL: "redis://redis:6379"
+      KAFKA_BROKERS: "kafka:29092"
+      KAFKA_GROUP_ID: "reseller-workers"
+      SEARCH_TASKS_TOPIC: "reseller-tasks"
+      WB_TOKEN_POOL_PREFIX: "wb:reseller:"
+      WB_TOKEN_POOL_SIZE: "20"
+      SEARCH_SCRAPE_INTERVAL_MINUTES: "20"
+      SEARCH_MAX_PAGES: "2"
+      SEARCH_PAGE_DELAY_MS: "400"
+      SEARCH_PROXY_URLS: "${RESELLER_SEARCH_PROXY_URLS:-}"
+      SEARCH_WORKER_HEALTH_PORT: "8094"
+      OTLP_ENDPOINT: "jaeger:4317"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      kafka:
+        condition: service_healthy
+      jaeger:
+        condition: service_started
+    labels:
+      logging: "promtail"
+      service: "reseller-worker"
 
   notifier:
     build:
@@ -238,6 +308,36 @@ services:
         logging: "promtail"
         service: "token-miner"
 
+  # ── Майнер пула токенов перекупов (wb:reseller:) ───────────────────────────
+  # Отдельный пул: больше слотов, чаще ремонтируется, свой egress-прокси (чтобы
+  # exit-IP не пересекались с обычной дорожкой и не делили rate-limit WB).
+  token-miner-reseller:
+      build:
+        context: ./token-miner
+        dockerfile: Dockerfile
+      container_name: pt_token_miner_reseller
+      init: true
+      environment:
+        REDIS_URL: "redis://redis:6379"
+        WB_TOKEN_POOL_PREFIX: "wb:reseller:"
+        WB_DISABLE_LEGACY_MIRROR: "true"
+        WB_TOKEN_POOL_SIZE: "20"
+        WB_SEARCH_QUERY: "телефон"
+        MINE_CHECK_INTERVAL_MINUTES: "3"
+        MINE_RETRY_MINUTES: "5"
+        MINE_MAX_RELOADS: "2"
+        MINE_TIMEOUT_SECONDS: "150"
+        WB_TOKEN_PROXY_URL: "${RESELLER_TOKEN_PROXY_URL:-}"
+        HEADLESS: "false"
+        LOG_LEVEL: "INFO"
+      shm_size: "1gb"
+      depends_on:
+        redis:
+          condition: service_healthy
+      labels:
+        logging: "promtail"
+        service: "token-miner-reseller"
+
   scheduler:
       build:
         context: .
@@ -249,6 +349,8 @@ services:
         DATABASE_URL: "postgres://user:password@postgres:5432/tryberrybot?sslmode=disable"
         KAFKA_BROKERS: "kafka:29092"
         SCRAPE_INTERVAL_MINUTES: "15"
+        SEARCH_SCRAPE_INTERVAL_MINUTES: "20"
+        SEARCH_TICK_SECONDS: "20"
         SCHEDULER_HEALTH_PORT: "8092"
         OTLP_ENDPOINT: "jaeger:4317"
       depends_on:
@@ -382,7 +484,7 @@ services:
       - "9121:9121"
     command:
       - '--redis.addr=redis://redis:6379'
-      - '--check-single-keys=wb:search:token:mined_at,wb:search:token:exp,wb:search:pool:healthy,wb:search:pool:oldest_mined_at'
+      - '--check-single-keys=wb:search:token:mined_at,wb:search:token:exp,wb:search:pool:healthy,wb:search:pool:oldest_mined_at,wb:reseller:pool:healthy,wb:reseller:pool:oldest_mined_at'
     depends_on:
       redis:
         condition: service_healthy

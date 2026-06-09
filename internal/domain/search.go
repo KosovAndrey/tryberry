@@ -52,10 +52,19 @@ type SearchSubscription struct {
 	CreatedAt     time.Time
 	UpdatedAt     time.Time
 
+	// LastEvaluatedAt — когда воркер последний раз оценивал триггеры этой подписки
+	// (throttle уведомлений по интервалу плана). nil → ещё ни разу.
+	LastEvaluatedAt *time.Time
+
 	// Поля для JOIN-запросов (не хранятся в самой таблице)
 	TelegramID    int64
 	QueryText     string
 	NormalizedURL string
+
+	// Тариф владельца — для вычисления интервала уведомлений в воркере
+	// (источник истины domain.Plans). Заполняются JOIN users.
+	OwnerPlan          string
+	OwnerPlanExpiresAt *time.Time
 }
 
 // SearchResultItem — позиция товара в выдаче конкретного запроса.

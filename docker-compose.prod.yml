@@ -15,6 +15,12 @@
 services:
   token-miner:
     restart: unless-stopped
+  token-miner-reseller:
+    restart: unless-stopped
+  search-worker:
+    restart: unless-stopped
+  reseller-worker:
+    restart: unless-stopped
   bot-worker:
     restart: unless-stopped
 

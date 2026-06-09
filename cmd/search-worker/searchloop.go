@@ -1,13 +1,14 @@
-// cmd/scraper/searchloop.go
+// cmd/search-worker/searchloop.go
 //
-// Поиск-воркер: consumer топика search-tasks. На каждую задачу (одна выдача)
-// делает скрейп → апсерт товаров/результатов → baseline новым товарам →
-// оценку триггеров по подпискам. На сработавшие триггеры НЕ шлёт в Telegram сам,
-// а продюсит SearchHitEvent в топик search-events. Отправку и запись
-// search_notifications (после успешной доставки) делает notifier — как в
-// товарном пути. Раньше тут жил in-process тикер runSearchLoop; теперь
-// планирование вынесено в scheduler (топик search-tasks), а воркер
-// реплицируется как consumer group.
+// Поиск-воркер: consumer топика поисковых задач (search-tasks или reseller-tasks).
+// На каждую задачу (одна выдача) делает скрейп → апсерт товаров/результатов →
+// baseline новым товарам → оценку триггеров по подпискам. На сработавшие триггеры
+// НЕ шлёт в Telegram сам, а продюсит SearchHitEvent в топик search-events.
+// Отправку и запись search_notifications (после успешной доставки) делает notifier.
+//
+// Вынесен из cmd/scraper в отдельный бинарь, чтобы перекуп-дорожку
+// (reseller-tasks, отдельный пул токенов) можно было реплицировать независимо от
+// товарного пути.
 package main
 
 import (
@@ -15,6 +16,7 @@ import (
 	"fmt"
 	"log/slog"
 	"strconv"
+	"time"
 
 	"gitlab.com/KosovAndrey/tryberrybot/internal/domain"
 	"gitlab.com/KosovAndrey/tryberrybot/internal/kafka"
@@ -26,6 +28,10 @@ import (
 
 const wbMarketplace = "wildberries"
 
+// evalSlack — допуск к интервалу оценки подписки: если шаг скрейпа примерно
+// совпадает с интервалом тарифа, мелкий джиттер не должен «съедать» оценку.
+const evalSlack = 5 * time.Second
+
 type searchWorker struct {
 	log      *slog.Logger
 	registry *scraper.Registry
@@ -35,13 +41,16 @@ type searchWorker struct {
 	notifs   *postgres.SearchNotificationRepo
 	products *postgres.ProductRepo
 	events   *kafka.Producer // топик search-events
+
+	// defaultInterval — интервал оценки для тарифов без своего SearchInterval.
+	defaultInterval time.Duration
 }
 
-// makeHandler — обработчик одной задачи из search-tasks.
+// makeHandler — обработчик одной задачи из топика поисковых задач.
 //
-// При ошибке возвращаем nil (offset коммитится, задача дропается): следующий
-// тик планировщика (~20 мин) переотправит её. Так бережём WB и пул токенов —
-// иначе at-least-once гонял бы тяжёлый скрейп в плотном цикле повторов.
+// При ошибке возвращаем nil (offset коммитится, задача дропается): следующий тик
+// планировщика переотправит её по интервалу запроса. Так бережём WB и пул
+// токенов — иначе at-least-once гонял бы тяжёлый скрейп в плотном цикле повторов.
 func (w *searchWorker) makeHandler() kafka.HandlerFunc {
 	return func(ctx context.Context, msg kafka.Message) error {
 		task, err := kafka.Decode[domain.SearchTask](msg)
@@ -60,6 +69,17 @@ func (w *searchWorker) makeHandler() kafka.HandlerFunc {
 		}
 		return nil
 	}
+}
+
+// shouldEvaluate — пора ли оценивать подписку: ещё ни разу (lastEval==nil) или с
+// прошлой оценки прошло не меньше интервала тарифа (с допуском evalSlack, чтобы
+// джиттер шага скрейпа не «съедал» оценку, когда шаг ≈ интервалу). Это и
+// обузживает перекуп-частоту для обычных подписчиков того же запроса.
+func shouldEvaluate(lastEval *time.Time, interval time.Duration, now time.Time) bool {
+	if lastEval == nil {
+		return true
+	}
+	return now.Sub(*lastEval) >= interval-evalSlack
 }
 
 // entry — товар выдачи после апсерта (с product_id и эфф. ценой в копейках).
@@ -110,14 +130,26 @@ func (w *searchWorker) scrapeQuery(ctx context.Context, q *domain.SearchQuery) e
 		"query_id", q.ID, "text", q.QueryText,
 		"items", len(entries), "pages", set.PagesRead, "total_found", set.TotalFound)
 
-	// Триггеры по каждой активной подписке.
+	// Триггеры по каждой активной подписке — с throttl'ом по интервалу тарифа.
+	// Выдача шарится по normalized_url, поэтому к одному запросу могут относиться
+	// и перекуп-подписки (оцениваем каждый скрейп), и обычные (не чаще их
+	// интервала, хотя выдача физически скрейпится раз в минуту).
 	subs, err := w.subs.GetActiveByQueryID(ctx, q.ID)
 	if err != nil {
 		return fmt.Errorf("active subs: %w", err)
 	}
+	now := time.Now()
 	for _, sub := range subs {
+		iv := domain.EffectivePlanFor(sub.OwnerPlan, sub.OwnerPlanExpiresAt, now).EffectiveSearchInterval(w.defaultInterval)
+		if !shouldEvaluate(sub.LastEvaluatedAt, iv, now) {
+			continue // оценивали недавно — не чаще интервала тарифа
+		}
 		if err := w.evaluateSubscription(ctx, q, sub, entries); err != nil {
 			w.log.Error("evaluate subscription", "sub_id", sub.ID, "err", err)
+			continue
+		}
+		if err := w.subs.MarkEvaluated(ctx, sub.ID); err != nil {
+			w.log.Warn("mark evaluated", "sub_id", sub.ID, "err", err)
 		}
 	}
 	return nil

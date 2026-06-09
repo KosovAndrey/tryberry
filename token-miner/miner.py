@@ -64,15 +64,22 @@ LOG_LEVEL = os.getenv("LOG_LEVEL", "INFO").upper()
 DEBUG_DIR = os.getenv("MINER_DEBUG_DIR", "/app/debug")
 
 # ── Ключи Redis ──────────────────────────────────────────────────────────────
-SLOT_PREFIX = "wb:search:pool:"          # + i → HASH
-KEY_HEALTHY = "wb:search:pool:healthy"
-KEY_OLDEST = "wb:search:pool:oldest_mined_at"
+# Префикс параметризован: обычный пул — "wb:search:", пул перекупов —
+# "wb:reseller:". Должен совпадать с WB_TOKEN_POOL_PREFIX у Go-воркера.
+POOL_PREFIX = os.getenv("WB_TOKEN_POOL_PREFIX", "wb:search:")
+# Для пула перекупов legacy-зеркало не нужно (его читают только старый скрейпер
+# и алерты обычной дорожки) — отключается флагом.
+DISABLE_LEGACY = os.getenv("WB_DISABLE_LEGACY_MIRROR", "false").lower() in ("1", "true", "yes")
+
+SLOT_PREFIX = f"{POOL_PREFIX}pool:"          # + i → HASH
+KEY_HEALTHY = f"{POOL_PREFIX}pool:healthy"
+KEY_OLDEST = f"{POOL_PREFIX}pool:oldest_mined_at"
 # legacy-зеркало (читает ещё не обновлённый скрейпер + старые алерты):
-KEY_COOKIE = "wb:search:cookie"
-KEY_UA = "wb:search:ua"
-KEY_TOKEN = "wb:search:token"
-KEY_MINED_AT = "wb:search:token:mined_at"
-KEY_EXP = "wb:search:token:exp"
+KEY_COOKIE = f"{POOL_PREFIX}cookie"
+KEY_UA = f"{POOL_PREFIX}ua"
+KEY_TOKEN = f"{POOL_PREFIX}token"
+KEY_MINED_AT = f"{POOL_PREFIX}token:mined_at"
+KEY_EXP = f"{POOL_PREFIX}token:exp"
 TOKEN_COOKIE_NAME = "x_wbaas_token"
 
 WALL_MARKERS = ("почти готов", "подозрительная активность", "что-то не так")
@@ -339,7 +346,7 @@ def run_cycle(r: "redis.Redis", pw):
         mined_vals = [_int(h.get("mined_at")) for (_, h) in alive if _int(h.get("mined_at"))]
         if mined_vals:
             r.set(KEY_OLDEST, min(mined_vals))
-        if alive:
+        if alive and not DISABLE_LEGACY:
             # зеркало самого свежего живого токена в legacy-ключи
             fi, fh = max(alive, key=lambda x: _int(x[1].get("mined_at")))
             r.set(KEY_COOKIE, fh["cookie"])
@@ -375,11 +382,11 @@ def main():
             sys.exit(1)
 
     log.info(
-        "старт майнера-пула: pool=%d query=%r check=%.0fмин refresh<%.0fч maxage=%.0fч "
-        "reloads=%d timeout=%.0fс channel=%s headless=%s display=%s once=%s proxy=%s",
-        POOL_SIZE, WB_SEARCH_QUERY, CHECK_INTERVAL_MIN, REFRESH_MARGIN_H, MAX_AGE_H,
+        "старт майнера-пула: prefix=%s pool=%d query=%r check=%.0fмин refresh<%.0fч maxage=%.0fч "
+        "reloads=%d timeout=%.0fс channel=%s headless=%s display=%s once=%s proxy=%s legacy=%s",
+        POOL_PREFIX, POOL_SIZE, WB_SEARCH_QUERY, CHECK_INTERVAL_MIN, REFRESH_MARGIN_H, MAX_AGE_H,
         MINE_MAX_RELOADS, MINE_TIMEOUT_SECONDS, BROWSER_CHANNEL or "chromium",
-        HEADLESS, os.getenv("DISPLAY", "—"), MINE_ONCE, bool(PROXY_URL),
+        HEADLESS, os.getenv("DISPLAY", "—"), MINE_ONCE, bool(PROXY_URL), not DISABLE_LEGACY,
     )
 
     with sync_playwright() as pw:

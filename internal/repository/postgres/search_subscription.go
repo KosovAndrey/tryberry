@@ -102,12 +102,13 @@ func (r *SearchSubscriptionRepo) GetActiveByUserID(ctx context.Context, userID i
 }
 
 // GetActiveByQueryID — все активные подписки на запрос (для движка триггеров).
-// JOIN users чтобы сразу иметь telegram_id для отправки уведомления.
+// JOIN users чтобы сразу иметь telegram_id для отправки уведомления и план
+// владельца (+last_evaluated_at) для throttle оценки по интервалу тарифа.
 func (r *SearchSubscriptionRepo) GetActiveByQueryID(ctx context.Context, queryID int64) ([]*domain.SearchSubscription, error) {
 	const q = `
 		SELECT s.id, s.user_id, s.search_query_id, s.trigger_type,
 		       s.target_price, s.discount_pct, s.active, s.created_at, s.updated_at,
-		       u.telegram_id
+		       s.last_evaluated_at, u.telegram_id, u.plan, u.plan_expires_at
 		FROM search_subscriptions s
 		JOIN users u ON u.id = s.user_id
 		WHERE s.search_query_id = $1 AND s.active = TRUE`
@@ -124,13 +125,20 @@ func (r *SearchSubscriptionRepo) GetActiveByQueryID(ctx context.Context, queryID
 		if err := rows.Scan(
 			&s.ID, &s.UserID, &s.SearchQueryID, &s.TriggerType,
 			&s.TargetPrice, &s.DiscountPct, &s.Active, &s.CreatedAt, &s.UpdatedAt,
-			&s.TelegramID,
+			&s.LastEvaluatedAt, &s.TelegramID, &s.OwnerPlan, &s.OwnerPlanExpiresAt,
 		); err != nil {
 			return nil, err
 		}
 		subs = append(subs, s)
 	}
 	return subs, rows.Err()
+}
+
+// MarkEvaluated — отметить, что подписка оценена сейчас (throttle уведомлений).
+func (r *SearchSubscriptionRepo) MarkEvaluated(ctx context.Context, id int64) error {
+	const q = `UPDATE search_subscriptions SET last_evaluated_at = NOW() WHERE id = $1`
+	_, err := r.db.Exec(ctx, q, id)
+	return err
 }
 
 func (r *SearchSubscriptionRepo) Deactivate(ctx context.Context, id int64) error {

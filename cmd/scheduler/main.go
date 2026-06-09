@@ -58,7 +58,12 @@ func run(log *slog.Logger) error {
 	otlpEndpoint := getEnv("OTLP_ENDPOINT", "jaeger:4317")
 	healthPort := getEnv("SCHEDULER_HEALTH_PORT", "8092")
 	productInterval := time.Duration(getEnvInt("SCRAPE_INTERVAL_MINUTES", 15)) * time.Minute
-	searchInterval := time.Duration(getEnvInt("SEARCH_SCRAPE_INTERVAL_MINUTES", 20)) * time.Minute
+	// Дефолтный интервал поиска для тарифов без своего SearchInterval.
+	searchDefaultInterval := time.Duration(getEnvInt("SEARCH_SCRAPE_INTERVAL_MINUTES", 20)) * time.Minute
+	// Шаг поискового тикера: часто опрашиваем БД, но эмитим только «созревшие»
+	// запросы (по last_enqueued_at + их интервал). Должен быть заметно меньше
+	// самого короткого тарифного интервала (перекуп = 1 мин).
+	searchTick := time.Duration(getEnvInt("SEARCH_TICK_SECONDS", 20)) * time.Second
 
 	shutdownTracing, err := tracing.Init(ctx, "scheduler", otlpEndpoint)
 	if err != nil {
@@ -87,13 +92,18 @@ func run(log *slog.Logger) error {
 	defer productProducer.Close()
 	searchProducer := kafka.NewProducer(brokers, "search-tasks")
 	defer searchProducer.Close()
+	// Быстрая дорожка перекупов — отдельный топик (отдельная consumer group и
+	// пул токенов на стороне reseller-worker).
+	resellerProducer := kafka.NewProducer(brokers, "reseller-tasks")
+	defer resellerProducer.Close()
 
 	log.Info("scheduler started",
 		"product_interval", productInterval.String(),
-		"search_interval", searchInterval.String())
+		"search_default_interval", searchDefaultInterval.String(),
+		"search_tick", searchTick.String())
 
 	go runProductScheduler(ctx, log, productRepo, productProducer, productInterval)
-	go runSearchScheduler(ctx, log, searchQueryRepo, searchProducer, searchInterval)
+	go runSearchScheduler(ctx, log, searchQueryRepo, searchProducer, resellerProducer, searchTick, searchDefaultInterval)
 
 	<-ctx.Done()
 	return nil
@@ -160,22 +170,35 @@ func productSchedulerTick(
 	return nil
 }
 
-// ── Поисковый планировщик (M1b: заменяет in-process runSearchLoop) ───────────
+// ── Поисковый планировщик (due-based, две дорожки) ───────────────────────────
+//
+// Один частый тикер обслуживает обе дорожки. На каждом тике:
+//   1. читает (запрос × подписчик) с тарифами;
+//   2. для каждого запроса считает эффективный интервал = MIN по подписчикам
+//      (источник истины — domain.Plans);
+//   3. эмитит только «созревшие» (last_enqueued_at + интервал ≤ now);
+//   4. бакетирует: интервал < дефолта → reseller-tasks (перекупы), иначе
+//      search-tasks (обычные);
+//   5. claim'ит last_enqueued_at перед эмиссией — синглтон, гонок нет.
+//
+// Дорожки не пересекаются: запрос с перекуп-подписчиком целиком уходит в
+// быструю; обычные подписчики того же запроса оцениваются по своему интервалу
+// уже в воркере (throttle), а не плодят уведомления каждую минуту.
 
 func runSearchScheduler(
 	ctx context.Context,
 	log *slog.Logger,
 	queryRepo *postgres.SearchQueryRepo,
-	producer *kafka.Producer,
-	interval time.Duration,
+	searchProducer, resellerProducer *kafka.Producer,
+	tickInterval, defaultInterval time.Duration,
 ) {
 	tick := func() {
-		if err := searchSchedulerTick(ctx, log, queryRepo, producer); err != nil {
+		if err := searchSchedulerTick(ctx, log, queryRepo, searchProducer, resellerProducer, defaultInterval); err != nil {
 			log.Error("search scheduler tick failed", "err", err)
 		}
 	}
 	tick()
-	timer := time.NewTicker(interval)
+	timer := time.NewTicker(tickInterval)
 	defer timer.Stop()
 	for {
 		select {
@@ -187,36 +210,91 @@ func runSearchScheduler(
 	}
 }
 
+// dueQuery — созревший запрос, готовый к эмиссии.
+type dueQuery struct {
+	id   int64
+	url  string
+	text string
+	fast bool // эффективный интервал < дефолтного → дорожка перекупов
+}
+
 func searchSchedulerTick(
 	ctx context.Context,
 	log *slog.Logger,
 	queryRepo *postgres.SearchQueryRepo,
-	producer *kafka.Producer,
+	searchProducer, resellerProducer *kafka.Producer,
+	defaultInterval time.Duration,
 ) error {
-	queries, err := queryRepo.GetScrapable(ctx)
+	rows, err := queryRepo.GetSchedulable(ctx)
 	if err != nil {
-		return fmt.Errorf("get scrapable: %w", err)
+		return fmt.Errorf("get schedulable: %w", err)
 	}
-	if len(queries) == 0 {
-		log.Info("search scheduler: no scrapable queries")
+	if len(rows) == 0 {
 		return nil
 	}
 
-	sent := 0
-	for _, q := range queries {
-		task := domain.SearchTask{
-			QueryID:   q.ID,
-			URL:       q.NormalizedURL,
-			QueryText: q.QueryText,
-		}
-		key := strconv.FormatInt(q.ID, 10)
-		if err := producer.Send(ctx, key, task); err != nil {
-			log.Error("send search task", "query_id", q.ID, "err", err)
+	now := time.Now()
+
+	// Группируем по запросу: эффективный интервал = MIN по подписчикам.
+	type agg struct {
+		url    string
+		text   string
+		eff    time.Duration
+		lastEn *time.Time
+	}
+	byQuery := make(map[int64]*agg)
+	for _, r := range rows {
+		iv := domain.EffectivePlanFor(r.OwnerPlan, r.PlanExpiresAt, now).EffectiveSearchInterval(defaultInterval)
+		a, ok := byQuery[r.QueryID]
+		if !ok {
+			byQuery[r.QueryID] = &agg{url: r.NormalizedURL, text: r.QueryText, eff: iv, lastEn: r.LastEnqueuedAt}
 			continue
 		}
-		sent++
+		if iv < a.eff {
+			a.eff = iv
+		}
 	}
-	log.Info("search scheduler tick done", "total", len(queries), "sent", sent)
+
+	// Отбираем созревшие.
+	var due []dueQuery
+	for id, a := range byQuery {
+		if a.lastEn != nil && now.Sub(*a.lastEn) < a.eff {
+			continue // ещё не пора
+		}
+		due = append(due, dueQuery{id: id, url: a.url, text: a.text, fast: a.eff < defaultInterval})
+	}
+	if len(due) == 0 {
+		return nil
+	}
+
+	// Claim до эмиссии: помечаем все созревшие как поставленные в очередь.
+	ids := make([]int64, len(due))
+	for i, d := range due {
+		ids[i] = d.id
+	}
+	if err := queryRepo.ClaimEnqueued(ctx, ids); err != nil {
+		return fmt.Errorf("claim enqueued: %w", err)
+	}
+
+	var sentFast, sentNormal int
+	for _, d := range due {
+		task := domain.SearchTask{QueryID: d.id, URL: d.url, QueryText: d.text}
+		key := strconv.FormatInt(d.id, 10)
+		producer := searchProducer
+		if d.fast {
+			producer = resellerProducer
+		}
+		if err := producer.Send(ctx, key, task); err != nil {
+			log.Error("send search task", "query_id", d.id, "fast", d.fast, "err", err)
+			continue
+		}
+		if d.fast {
+			sentFast++
+		} else {
+			sentNormal++
+		}
+	}
+	log.Info("search scheduler tick done", "due", len(due), "reseller", sentFast, "normal", sentNormal)
 	return nil
 }
 
