@@ -62,17 +62,15 @@
   вызвать уже готовый `userRepo.SetPlan` с нужным сроком. Машинерия восстановления
   трекинга при покупке уже реализована.
 
-### B. Стабильность Telegram-плеча → переход на VLESS (в работе)
-- Симптом: бот иногда отвечает 25с — флап на удерживаемых long-poll через WireGuard
+### B. Стабильность Telegram-плеча → VLESS (РАЗВЁРНУТО 2026-06-11)
+- Симптом был: бот иногда отвечал 25с — флап на удерживаемых long-poll через WireGuard
   (UDP, РКН троттлит по DPI).
-- Решение: основной egress переведён на **VLESS+Reality** (TCP под HTTPS, DPI почти не
-  душит), WG оставлен как авто-fallback. Один контейнер `xray` (inbound :8888, outbounds
-  vless|wg, observatory+balancer). Сервисы ходят через `http://xray:8888`.
-- Статус: код/compose готовы (`xray/`, `xray/README.md`). Осталось на сервере:
-  `cp xray/config.json.example xray/config.json`, заполнить из vless://-подписки
-  (маппинг в `xray/README.md`), `up -d xray api bot-worker notifier`, проверить exit-IP
-  и латентность.
-- Дальше (опц.): второй VLESS-узел → строгий фейловер через тот же balancer.
+- Решение в проде: основной egress на **VLESS+Reality** (TCP под HTTPS), 6 узлов
+  подписки un1.pro (`vless-ger1..6`) + WG как авто-fallback. Контейнер `xray`
+  (inbound :8888, observatory+balancer leastPing). Подтверждено логами
+  `[in -> vless-ger1]`, exit-IP немецкий.
+- Осталось: понаблюдать, что флап на 25с ушёл. Опц.: строгий приоритет/расширение
+  пула узлов через тот же balancer.
 
 ### C. Безопасность (техдолг, светилось в чате)
 - Сменить root-пароль VPS и пароль прокси, перейти на SSH-ключи, ограничить порт прокси.
