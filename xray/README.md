@@ -80,15 +80,19 @@ docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d api bot-wo
 ## Проверка
 
 ```bash
-# Какой IP видит Telegram через xray (должен быть НЕ-RU, немецкий):
-docker compose exec xray sh -c "wget -qO- -e https_proxy=http://127.0.0.1:8888 https://api.ipify.org"
-# Логи выбора плеча / observatory:
-docker compose logs -f xray
+# Через какое плечо реально идёт трафик: ищем [in -> vless-gerN], НЕ [in -> wg]:
+docker compose logs --tail=30 xray
+
+# Какой IP видит мир через xray (в образе busybox wget — прокси через env + -Y on):
+docker compose exec xray sh -c "http_proxy=http://127.0.0.1:8888 wget -Y on -qO- http://api.ipify.org; echo"
 ```
 
-Если все `vless-*` помечаются мёртвыми, а трафик идёт через `wg` — проверь, что
-`pbk`/`sid`/`sni` точно совпали с подпиской (Reality к ним чувствителен) и что
-`gerN.un1.pro:443` доступны с сервера.
+Если все `vless-*` помечаются мёртвыми, а трафик идёт через `wg`:
+- `x509: certificate is valid for ... not <SNI>` → в `config.json` остался
+  незаменённый плейсхолдер `serverName`; пересобери конфиг из свежего `.example`
+  (там `serverName` уже = `gerN.un1.pro`).
+- иначе → `pbk`/`sid`/`serverName` не совпали с подпиской (Reality к ним
+  чувствителен) или `gerN.un1.pro:443` недоступны с сервера.
 
 ## Другой тип подписки (не Reality)
 
