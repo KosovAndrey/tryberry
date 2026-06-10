@@ -141,13 +141,15 @@ func (r *SearchSubscriptionRepo) MarkEvaluated(ctx context.Context, id int64) er
 	return err
 }
 
-func (r *SearchSubscriptionRepo) Deactivate(ctx context.Context, id int64) error {
+// userID обязателен: id приходит из callback_data пользователя, фильтр по
+// владельцу не даёт отменить чужую поиск-подписку по её id (IDOR).
+func (r *SearchSubscriptionRepo) Deactivate(ctx context.Context, id, userID int64) error {
 	const q = `
 		UPDATE search_subscriptions
 		SET active = FALSE, updated_at = NOW()
-		WHERE id = $1`
+		WHERE id = $1 AND user_id = $2`
 
-	tag, err := r.db.Exec(ctx, q, id)
+	tag, err := r.db.Exec(ctx, q, id, userID)
 	if err != nil {
 		return err
 	}

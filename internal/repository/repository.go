@@ -31,7 +31,7 @@ type SubscriptionRepo interface {
 	GetActiveByUserID(ctx context.Context, userID int64) ([]*domain.Subscription, error)
 	// GetActiveByProductID — все активные подписки на товар (для notifier)
 	GetActiveByProductID(ctx context.Context, productID int64) ([]*domain.Subscription, error)
-	Deactivate(ctx context.Context, id int64) error
+	Deactivate(ctx context.Context, id, userID int64) error
 	UpdateBaseline(ctx context.Context, id int64, newPrice float64) error
 }
 

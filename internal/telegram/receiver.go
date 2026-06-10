@@ -64,12 +64,18 @@ func pollHTTPClient() *http.Client {
 	}
 }
 
-func (r *Receiver) SetWebhook(webhookURL string) error {
-	wh, err := tgbotapi.NewWebhook(webhookURL)
-	if err != nil {
-		return fmt.Errorf("new webhook: %w", err)
+// SetWebhook регистрирует webhook и (если secretToken не пуст) просит Telegram
+// слать его в заголовке X-Telegram-Bot-Api-Secret-Token каждого апдейта. Это
+// единственная аутентификация эндпоинта /webhook: он публичен, и без секрета
+// кто угодно может запостить поддельный апдейт (спуфинг from.id → выдача себе
+// прав/тарифа, утечка чужих данных). WebhookConfig в tgbotapi v5.5.1 не несёт
+// поля secret_token, поэтому шлём setWebhook напрямую через MakeRequest.
+func (r *Receiver) SetWebhook(webhookURL, secretToken string) error {
+	params := tgbotapi.Params{"url": webhookURL}
+	if secretToken != "" {
+		params["secret_token"] = secretToken
 	}
-	_, err = r.api.Request(wh)
+	_, err := r.api.MakeRequest("setWebhook", params)
 	return err
 }
 

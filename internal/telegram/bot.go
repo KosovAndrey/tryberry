@@ -383,7 +383,12 @@ func (b *Bot) handleUntrack(ctx context.Context, msg *tgbotapi.Message) {
 		b.reply(msg.Chat.ID, "Номер подписки должен быть числом.")
 		return
 	}
-	if err := b.subRepo.Deactivate(ctx, id); err != nil {
+	user, err := b.userRepo.GetByTelegramID(ctx, msg.From.ID)
+	if err != nil {
+		b.reply(msg.Chat.ID, "Произошла ошибка, попробуй позже.")
+		return
+	}
+	if err := b.subRepo.Deactivate(ctx, id, user.ID); err != nil {
 		if errors.Is(err, domain.ErrNotFound) {
 			b.reply(msg.Chat.ID, "Подписка не найдена.")
 			return
@@ -642,21 +647,24 @@ func (b *Bot) callbackUntrack(ctx context.Context, cb *tgbotapi.CallbackQuery) {
 		return
 	}
 
-	if err := b.subRepo.Deactivate(ctx, id); err != nil && !errors.Is(err, domain.ErrNotFound) {
+	// id — из callback_data; гасим только если подписка принадлежит этому юзеру.
+	user, err := b.userRepo.GetByTelegramID(ctx, cb.From.ID)
+	if err != nil {
+		b.answerCallback(cb.ID, "Ошибка")
+		return
+	}
+	if err := b.subRepo.Deactivate(ctx, id, user.ID); err != nil && !errors.Is(err, domain.ErrNotFound) {
 		b.log.Error("deactivate via callback", "err", err)
 		b.answerCallback(cb.ID, "Ошибка, попробуй позже")
 		return
 	}
 
-	user, err := b.userRepo.GetByTelegramID(ctx, cb.From.ID)
-	if err == nil {
-		subs, err := b.subRepo.GetActiveByUserID(ctx, user.ID)
-		if err == nil && len(subs) > 0 {
-			text, keyboard := b.buildListView(subs)
-			b.editMenu(cb.Message.Chat.ID, cb.Message.MessageID, text, keyboard)
-			b.answerCallback(cb.ID, "✅ Отслеживание отменено")
-			return
-		}
+	subs, err := b.subRepo.GetActiveByUserID(ctx, user.ID)
+	if err == nil && len(subs) > 0 {
+		text, keyboard := b.buildListView(subs)
+		b.editMenu(cb.Message.Chat.ID, cb.Message.MessageID, text, keyboard)
+		b.answerCallback(cb.ID, "✅ Отслеживание отменено")
+		return
 	}
 
 	b.sendMainMenu(ctx, cb.Message.Chat.ID, cb.Message.MessageID, true)
