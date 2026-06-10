@@ -100,10 +100,18 @@ func (b *Bot) handleTrackTriggerCallback(ctx context.Context, cb *tgbotapi.Callb
 	kind := parts[1]
 	chatID := cb.Message.Chat.ID
 
+	// subID берётся из callback_data (недоверенный ввод) — резолвим владельца и
+	// прокидываем user.ID в репозиторий, чтобы нельзя было править чужую подписку.
+	user, err := b.userRepo.GetByTelegramID(ctx, cb.From.ID)
+	if err != nil {
+		b.answerCallback(cb.ID, "Ошибка")
+		return
+	}
+
 	switch kind {
 	case "any":
 		b.clearTrackFSM(ctx, cb.From.ID)
-		if err := b.subRepo.SetTrigger(ctx, subID, string(domain.TriggerAnyDrop), nil, nil); err != nil {
+		if err := b.subRepo.SetTrigger(ctx, subID, user.ID, string(domain.TriggerAnyDrop), nil, nil); err != nil {
 			b.log.Error("set trigger any", "sub_id", subID, "err", err)
 			b.answerCallback(cb.ID, "Ошибка, попробуй позже")
 			return
@@ -136,6 +144,14 @@ func (b *Bot) handleTrackTriggerCallback(ctx context.Context, cb *tgbotapi.Callb
 
 // handleTrackThreshold — приём числа (порог/процент) для товарной подписки.
 func (b *Bot) handleTrackThreshold(ctx context.Context, chatID, tgID int64, text string, fsm trackFSM) {
+	// fsm.SubID создавался для этого пользователя, но подстраховываемся фильтром по
+	// владельцу в репозитории — резолвим user.ID по telegram_id.
+	user, err := b.userRepo.GetByTelegramID(ctx, tgID)
+	if err != nil {
+		b.reply(chatID, "Произошла ошибка, попробуй позже.")
+		return
+	}
+
 	switch domain.TriggerType(fsm.Trigger) {
 	case domain.TriggerBelowTarget:
 		price, err := parsePrice(text)
@@ -144,7 +160,7 @@ func (b *Bot) handleTrackThreshold(ctx context.Context, chatID, tgID int64, text
 			return
 		}
 		b.clearTrackFSM(ctx, tgID)
-		if err := b.subRepo.SetTrigger(ctx, fsm.SubID, string(domain.TriggerBelowTarget), &price, nil); err != nil {
+		if err := b.subRepo.SetTrigger(ctx, fsm.SubID, user.ID, string(domain.TriggerBelowTarget), &price, nil); err != nil {
 			b.log.Error("set trigger below", "sub_id", fsm.SubID, "err", err)
 			b.reply(chatID, "Произошла ошибка, попробуй позже.")
 			return
@@ -158,7 +174,7 @@ func (b *Bot) handleTrackThreshold(ctx context.Context, chatID, tgID int64, text
 			return
 		}
 		b.clearTrackFSM(ctx, tgID)
-		if err := b.subRepo.SetTrigger(ctx, fsm.SubID, string(domain.TriggerDiscountPct), nil, &pct); err != nil {
+		if err := b.subRepo.SetTrigger(ctx, fsm.SubID, user.ID, string(domain.TriggerDiscountPct), nil, &pct); err != nil {
 			b.log.Error("set trigger disc", "sub_id", fsm.SubID, "err", err)
 			b.reply(chatID, "Произошла ошибка, попробуй позже.")
 			return

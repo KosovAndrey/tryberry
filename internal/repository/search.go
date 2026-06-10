@@ -21,7 +21,7 @@ type SearchSubscriptionRepo interface {
 	GetByID(ctx context.Context, id int64) (*domain.SearchSubscription, error)
 	GetActiveByUserID(ctx context.Context, userID int64) ([]*domain.SearchSubscription, error)
 	GetActiveByQueryID(ctx context.Context, queryID int64) ([]*domain.SearchSubscription, error)
-	Deactivate(ctx context.Context, id int64) error
+	Deactivate(ctx context.Context, id, userID int64) error
 
 	// search_subscription_products
 	UpsertBaseline(ctx context.Context, subID, productID int64, firstSeenPrice float64) error

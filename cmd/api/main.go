@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"crypto/subtle"
 	"encoding/json"
 	"fmt"
 	"log/slog"
@@ -58,6 +59,8 @@ func run(log *slog.Logger) error {
 	botToken := mustEnv("TELEGRAM_BOT_TOKEN")
 	kafkaBrokers := strings.Split(mustEnv("KAFKA_BROKERS"), ",")
 	webhookURL := getEnv("TELEGRAM_WEBHOOK_URL", "")
+	webhookSecret := getEnv("TELEGRAM_WEBHOOK_SECRET", "")
+	webhookEnabled := getEnv("WEBHOOK_ENABLED", "true") == "true"
 	port := getEnv("PORT", "8081")
 	otlpEndpoint := getEnv("OTLP_ENDPOINT", "jaeger:4317")
 
@@ -112,11 +115,16 @@ func run(log *slog.Logger) error {
 		}
 	}
 
-	if getEnv("WEBHOOK_ENABLED", "true") == "true" {
+	if webhookEnabled {
 		if webhookURL == "" {
 			return fmt.Errorf("WEBHOOK_ENABLED=true requires TELEGRAM_WEBHOOK_URL")
 		}
-		if err := receiver.SetWebhook(webhookURL); err != nil {
+		// Без секрета /webhook аутентифицировать нечем — публичный эндпоинт принимал
+		// бы поддельные апдейты. Падаем на старте, а не запускаемся «открытыми».
+		if webhookSecret == "" {
+			return fmt.Errorf("WEBHOOK_ENABLED=true requires TELEGRAM_WEBHOOK_SECRET")
+		}
+		if err := receiver.SetWebhook(webhookURL, webhookSecret); err != nil {
 			return fmt.Errorf("set webhook: %w", err)
 		}
 		log.Info("webhook set", "url", webhookURL)
@@ -137,6 +145,14 @@ func run(log *slog.Logger) error {
 			w.WriteHeader(http.StatusMethodNotAllowed)
 			return
 		}
+		// Аутентификация эндпоинта: апдейт принимаем, только если Telegram прислал
+		// согласованный с setWebhook секрет. Сравнение постоянного времени.
+		got := r.Header.Get("X-Telegram-Bot-Api-Secret-Token")
+		if subtle.ConstantTimeCompare([]byte(got), []byte(webhookSecret)) != 1 {
+			log.Warn("webhook secret mismatch", "remote", r.RemoteAddr)
+			w.WriteHeader(http.StatusUnauthorized)
+			return
+		}
 		var update tgbotapi.Update
 		if err := json.NewDecoder(r.Body).Decode(&update); err != nil {
 			log.Error("decode update", "err", err)
@@ -147,9 +163,13 @@ func run(log *slog.Logger) error {
 		w.WriteHeader(http.StatusOK)
 	})
 
-	mux.Handle("/webhook", metrics.HTTPMiddleware("webhook")(
-		otelhttp.NewHandler(webhookHandler, "webhook"),
-	))
+	// Эндпоинт монтируем ТОЛЬКО в webhook-режиме. В polling-режиме /webhook не
+	// существует (404) — иначе он висел бы открытым приёмником поддельных апдейтов.
+	if webhookEnabled {
+		mux.Handle("/webhook", metrics.HTTPMiddleware("webhook")(
+			otelhttp.NewHandler(webhookHandler, "webhook"),
+		))
+	}
 	mux.HandleFunc("/health", healthChecker.Handler())
 	mux.HandleFunc("/live", health.LivenessHandler())
 	mux.Handle("/metrics", promhttp.Handler())

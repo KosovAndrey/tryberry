@@ -315,21 +315,25 @@ func (b *Bot) callbackUntrackSearch(ctx context.Context, cb *tgbotapi.CallbackQu
 		b.answerCallback(cb.ID, "Ошибка")
 		return
 	}
-	if err := b.searchSubRepo.Deactivate(ctx, id); err != nil && !errors.Is(err, domain.ErrNotFound) {
+
+	// id — из callback_data; гасим только если подписка принадлежит этому юзеру.
+	user, err := b.userRepo.GetByTelegramID(ctx, cb.From.ID)
+	if err != nil {
+		b.answerCallback(cb.ID, "Ошибка")
+		return
+	}
+	if err := b.searchSubRepo.Deactivate(ctx, id, user.ID); err != nil && !errors.Is(err, domain.ErrNotFound) {
 		b.log.Error("deactivate search sub", "err", err)
 		b.answerCallback(cb.ID, "Ошибка, попробуй позже")
 		return
 	}
 
-	user, err := b.userRepo.GetByTelegramID(ctx, cb.From.ID)
-	if err == nil {
-		subs, err := b.searchSubRepo.GetActiveByUserID(ctx, user.ID)
-		if err == nil && len(subs) > 0 {
-			text, keyboard := b.buildSearchListView(subs)
-			b.editMenu(cb.Message.Chat.ID, cb.Message.MessageID, text, keyboard)
-			b.answerCallback(cb.ID, "✅ Поиск-подписка отменена")
-			return
-		}
+	subs, err := b.searchSubRepo.GetActiveByUserID(ctx, user.ID)
+	if err == nil && len(subs) > 0 {
+		text, keyboard := b.buildSearchListView(subs)
+		b.editMenu(cb.Message.Chat.ID, cb.Message.MessageID, text, keyboard)
+		b.answerCallback(cb.ID, "✅ Поиск-подписка отменена")
+		return
 	}
 	b.sendMainMenu(ctx, cb.Message.Chat.ID, cb.Message.MessageID, true)
 	b.answerCallback(cb.ID, "✅ Поиск-подписка отменена")

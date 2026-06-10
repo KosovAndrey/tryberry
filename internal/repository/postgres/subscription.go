@@ -195,13 +195,16 @@ func (r *SubscriptionRepo) GetActiveByProductID(ctx context.Context, productID i
 	return subs, rows.Err()
 }
 
-func (r *SubscriptionRepo) Deactivate(ctx context.Context, id int64) error {
+// Deactivate гасит подписку ТОЛЬКО если она принадлежит userID — id приходит из
+// callback_data/команды пользователя (недоверенный ввод), поэтому фильтр по
+// владельцу обязателен, иначе IDOR: чужую подписку можно отменить по её id.
+func (r *SubscriptionRepo) Deactivate(ctx context.Context, id, userID int64) error {
 	const q = `
 		UPDATE subscriptions
 		SET active = FALSE, updated_at = NOW()
-		WHERE id = $1`
+		WHERE id = $1 AND user_id = $2`
 
-	tag, err := r.db.Exec(ctx, q, id)
+	tag, err := r.db.Exec(ctx, q, id, userID)
 	if err != nil {
 		return err
 	}
@@ -227,13 +230,15 @@ func (r *SubscriptionRepo) UpdateBaseline(ctx context.Context, id int64, newPric
 // SetTrigger — сменить стратегию триггера товарной подписки.
 // target и pct передаются только для соответствующих типов (иначе nil).
 // CHECK-констрейнты в БД гарантируют согласованность.
-func (r *SubscriptionRepo) SetTrigger(ctx context.Context, id int64, trigger string, target *float64, pct *int16) error {
+// userID обязателен: id берётся из callback_data пользователя, фильтр по
+// владельцу не даёт менять стратегию чужой подписки (IDOR).
+func (r *SubscriptionRepo) SetTrigger(ctx context.Context, id, userID int64, trigger string, target *float64, pct *int16) error {
 	const q = `
 		UPDATE subscriptions
 		SET trigger_type = $2, target_price = $3, discount_pct = $4, updated_at = NOW()
-		WHERE id = $1`
+		WHERE id = $1 AND user_id = $5`
 
-	tag, err := r.db.Exec(ctx, q, id, trigger, target, pct)
+	tag, err := r.db.Exec(ctx, q, id, trigger, target, pct, userID)
 	if err != nil {
 		return err
 	}
