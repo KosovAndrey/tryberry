@@ -42,7 +42,7 @@ type searchWorker struct {
 	products *postgres.ProductRepo
 	events   *kafka.Producer // топик search-events
 
-	// defaultInterval — интервал оценки для тарифов без своего SearchInterval.
+	// defaultInterval — интервал оценки для тарифов без своего Interval (фолбэк).
 	defaultInterval time.Duration
 }
 
@@ -140,7 +140,7 @@ func (w *searchWorker) scrapeQuery(ctx context.Context, q *domain.SearchQuery) e
 	}
 	now := time.Now()
 	for _, sub := range subs {
-		iv := domain.EffectivePlanFor(sub.OwnerPlan, sub.OwnerPlanExpiresAt, now).EffectiveSearchInterval(w.defaultInterval)
+		iv := domain.EffectivePlanFor(sub.OwnerPlan, sub.OwnerPlanExpiresAt, now).EffectiveInterval(w.defaultInterval)
 		if !shouldEvaluate(sub.LastEvaluatedAt, iv, now) {
 			continue // оценивали недавно — не чаще интервала тарифа
 		}

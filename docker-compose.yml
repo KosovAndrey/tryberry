@@ -349,8 +349,7 @@ services:
         DATABASE_URL: "postgres://user:password@postgres:5432/tryberrybot?sslmode=disable"
         KAFKA_BROKERS: "kafka:29092"
         SCRAPE_INTERVAL_MINUTES: "15"
-        SEARCH_SCRAPE_INTERVAL_MINUTES: "20"
-        SEARCH_TICK_SECONDS: "20"
+        SCHEDULER_TICK_SECONDS: "20"
         SCHEDULER_HEALTH_PORT: "8092"
         OTLP_ENDPOINT: "jaeger:4317"
       depends_on:

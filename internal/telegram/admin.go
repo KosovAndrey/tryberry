@@ -65,6 +65,10 @@ func (b *Bot) handleMyPlan(ctx context.Context, chatID int64, user *domain.User)
 	fmt.Fprintf(&sb, "ℹ️ <b>Твой тариф: %s</b>\n\n", plan.Title)
 	fmt.Fprintf(&sb, "📦 Товары: <b>%d из %d</b>\n", prod, plan.MaxProduct)
 	fmt.Fprintf(&sb, "🔎 Поиски: <b>%d из %d</b>\n", srch, plan.MaxSearch)
+	fmt.Fprintf(&sb, "⏱ Интервал проверки: <b>%d мин</b>\n", int(plan.Interval.Minutes()))
+	if plan.PriceRub > 0 {
+		fmt.Fprintf(&sb, "💳 Цена: <b>%d ₽/мес</b>\n", plan.PriceRub)
+	}
 
 	if user.PlanExpiresAt != nil && !user.PlanExpired(now) {
 		fmt.Fprintf(&sb, "\n⏳ Действует до <b>%s</b>\n", user.PlanExpiresAt.Format(dateLayout))
@@ -86,7 +90,7 @@ func (b *Bot) handleGrant(ctx context.Context, msg *tgbotapi.Message) {
 	}
 	args := strings.Fields(msg.CommandArguments())
 	if len(args) < 2 {
-		b.reply(msg.Chat.ID, "Использование: <code>/grant &lt;telegram_id&gt; &lt;план&gt; [дней]</code>\nПланы: free, trial, basic, pro, unlimited")
+		b.reply(msg.Chat.ID, "Использование: <code>/grant &lt;telegram_id&gt; &lt;план&gt; [дней]</code>\nПланы: free, trial, lite, pro, reseller_start, reseller_pro, unlimited")
 		return
 	}
 	tgID, err := strconv.ParseInt(args[0], 10, 64)
@@ -97,7 +101,7 @@ func (b *Bot) handleGrant(ctx context.Context, msg *tgbotapi.Message) {
 	planName := strings.ToLower(args[1])
 	plan, ok := domain.PlanByName(planName)
 	if !ok {
-		b.reply(msg.Chat.ID, "Неизвестный план. Доступно: free, trial, basic, pro, unlimited.")
+		b.reply(msg.Chat.ID, "Неизвестный план. Доступно: free, trial, lite, pro, reseller_start, reseller_pro, unlimited.")
 		return
 	}
 

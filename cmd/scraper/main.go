@@ -197,26 +197,26 @@ func makeHandler(
 			}
 		}
 
-		// Если цена изменилась — публикуем событие
-		if prevPrice > 0 && result.Price != prevPrice {
-			event := domain.PriceEvent{
-				ProductID:   task.ProductID,
-				Marketplace: string(marketplace),
-				OldPrice:    prevPrice,
-				NewPrice:    result.Price,
-			}
-			key := strconv.FormatInt(task.ProductID, 10)
-			if err := producer.Send(ctx, key, event); err != nil {
-				return fmt.Errorf("send price event: %w", err)
-			}
-			if result.Price < prevPrice {
-				metrics.PriceDrops.WithLabelValues(string(marketplace)).Inc()
-			}
-			log.Info("price changed, event sent",
-				"marketplace", marketplace,
-				"old_price", prevPrice,
-				"new_price", result.Price,
-			)
+		// Публикуем событие на КАЖДОМ скрейпе (не только при изменении цены):
+		// строгая per-plan модель требует, чтобы notifier мог оценить подписку на
+		// её чек-поинте по текущей цене. Иначе free-подписчик (60 мин) пропустит
+		// устойчивое падение, случившееся между событиями «по изменению». Частоту
+		// доставки режет throttle (last_evaluated_at) в notifier.
+		event := domain.PriceEvent{
+			ProductID:   task.ProductID,
+			Marketplace: string(marketplace),
+			OldPrice:    prevPrice,
+			NewPrice:    result.Price,
+			RecordedAt:  time.Now(),
+		}
+		key := strconv.FormatInt(task.ProductID, 10)
+		if err := producer.Send(ctx, key, event); err != nil {
+			return fmt.Errorf("send price event: %w", err)
+		}
+		if prevPrice > 0 && result.Price < prevPrice {
+			metrics.PriceDrops.WithLabelValues(string(marketplace)).Inc()
+			log.Info("price dropped",
+				"marketplace", marketplace, "old_price", prevPrice, "new_price", result.Price)
 		}
 
 		return nil

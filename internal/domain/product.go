@@ -53,6 +53,15 @@ type Subscription struct {
 	TelegramID         int64
 	ProductMarketplace string
 
+	// LastEvaluatedAt — когда notifier последний раз оценивал триггер этой
+	// подписки (throttle уведомлений по интервалу плана). nil → ещё ни разу.
+	LastEvaluatedAt *time.Time
+
+	// Тариф владельца — для вычисления интервала проверки (источник истины
+	// domain.Plans). Заполняются JOIN users.
+	OwnerPlan          string
+	OwnerPlanExpiresAt *time.Time
+
 	// Поля для JOIN-запросов (не хранятся отдельно)
 	ProductName     string
 	ProductURL      string

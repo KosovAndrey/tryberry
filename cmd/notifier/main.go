@@ -123,7 +123,9 @@ func run(log *slog.Logger) error {
 	reconcileInterval := time.Duration(getEnvInt("PLAN_RECONCILE_INTERVAL_MINUTES", 15)) * time.Minute
 	go runPlanReconciler(ctx, log, searchSubRepo, subRepo, userRepo, tgNotifier, reconcileInterval)
 
-	handler := makeHandler(log, subRepo, notifRepo, priceHistoryRepo, priceCache, tgNotifier)
+	// Дефолт-фолбэк интервала проверки для тарифов без своего Interval.
+	defaultInterval := time.Duration(getEnvInt("SCRAPE_INTERVAL_MINUTES", 15)) * time.Minute
+	handler := makeHandler(log, subRepo, notifRepo, priceHistoryRepo, priceCache, tgNotifier, defaultInterval)
 
 	log.Info("notifier started, waiting for price events...")
 	return consumer.Run(ctx, handler)
@@ -373,6 +375,21 @@ func selectProductRestores(cands []postgres.ProductSubForReconcile, now time.Tim
 	return out
 }
 
+// evalSlack — допуск к интервалу оценки подписки: если шаг скрейпа примерно
+// совпадает с интервалом тарифа, мелкий джиттер не должен «съедать» оценку.
+const evalSlack = 5 * time.Second
+
+// shouldEvaluate — пора ли оценивать подписку (throttle строгой per-plan модели):
+// ещё ни разу (lastEval==nil) или с прошлой оценки прошло не меньше интервала
+// тарифа. Это обузживает частоту доставки для обычных подписчиков товара, даже
+// если он делит выдачу/скрейп с более быстрым тарифом.
+func shouldEvaluate(lastEval *time.Time, interval time.Duration, now time.Time) bool {
+	if lastEval == nil {
+		return true
+	}
+	return now.Sub(*lastEval) >= interval-evalSlack
+}
+
 func makeHandler(
 	log *slog.Logger,
 	subRepo *postgres.SubscriptionRepo,
@@ -380,6 +397,7 @@ func makeHandler(
 	priceHistoryRepo *postgres.PriceHistoryRepo,
 	priceCache *redisrepo.PriceCache,
 	tgNotifier *telegram.Notifier,
+	defaultInterval time.Duration,
 ) kafka.HandlerFunc {
 	return func(ctx context.Context, msg kafka.Message) error {
 		event, err := kafka.Decode[domain.PriceEvent](msg)
@@ -412,7 +430,26 @@ func makeHandler(
 			}
 		}
 
+		now := time.Now()
 		for _, sub := range subs {
+			// Throttle: оцениваем подписку не чаще интервала её тарифа. PriceEvent
+			// шлётся на каждом скрейпе (= MIN-интервал по подписчикам товара), но
+			// доставку каждому держим строго по его плану.
+			iv := domain.EffectivePlanFor(sub.OwnerPlan, sub.OwnerPlanExpiresAt, now).EffectiveInterval(defaultInterval)
+			if !shouldEvaluate(sub.LastEvaluatedAt, iv, now) {
+				continue
+			}
+
+			// markEval двигает чек-поинт. Вызываем ТОЛЬКО на безопасных точках (нет
+			// срабатывания / уже отправлено / успешно записано), но НЕ перед
+			// отправкой: иначе сбой отправки + переполучение сообщения «съел» бы
+			// уведомление до следующего чек-поинта вместо немедленного ретрая.
+			markEval := func() {
+				if err := subRepo.MarkEvaluated(ctx, sub.ID); err != nil {
+					log.Warn("mark evaluated", "sub_id", sub.ID, "err", err)
+				}
+			}
+
 			// Решение о срабатывании — общий движок поиск-подписок:
 			//   first_seen_price  — база первого срабатывания (any_drop/discount_pct),
 			//   baseline_price    — цена последнего уведомления (повторные срабатывания),
@@ -426,6 +463,7 @@ func makeHandler(
 				HasNotified:         sub.Notified,
 			}
 			if !searchsub.Decide(rule, state) {
+				markEval() // чек-поинт пройден, триггер не сработал
 				continue
 			}
 
@@ -439,6 +477,7 @@ func makeHandler(
 			}
 			if exists {
 				log.Info("notification already sent, skipping", "key", iKey)
+				markEval()
 				continue
 			}
 
@@ -470,6 +509,7 @@ func makeHandler(
 			}); err != nil {
 				return fmt.Errorf("insert notification: %w", err)
 			}
+			markEval()
 			metrics.NotificationsSent.WithLabelValues(event.Marketplace).Inc()
 			log.Info("notification sent",
 				"subscription_id", sub.ID,

@@ -413,7 +413,7 @@ func productLimitText(plan domain.Plan, used int) string {
 func (b *Bot) searchLimitText(plan domain.Plan, used int) string {
 	if plan.MaxSearch == 0 {
 		return "🔎 Поиск-подписки на твоём тарифе пока недоступны.\n\n" +
-			"Поиск по ссылке есть на тарифе <b>Pro</b>. Также можно попробовать бесплатный триал на 3 дня — команда /trial.\n\n" +
+			"Поиск по ссылке есть на тарифах <b>Lite</b> и выше. Также можно попробовать бесплатный триал на 3 дня — команда /trial.\n\n" +
 			"По вопросам — @kosov_andrey."
 	}
 	return fmt.Sprintf(

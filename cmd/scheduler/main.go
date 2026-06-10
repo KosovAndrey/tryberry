@@ -57,13 +57,13 @@ func run(log *slog.Logger) error {
 	brokers := strings.Split(mustEnv("KAFKA_BROKERS"), ",")
 	otlpEndpoint := getEnv("OTLP_ENDPOINT", "jaeger:4317")
 	healthPort := getEnv("SCHEDULER_HEALTH_PORT", "8092")
-	productInterval := time.Duration(getEnvInt("SCRAPE_INTERVAL_MINUTES", 15)) * time.Minute
-	// Дефолтный интервал поиска для тарифов без своего SearchInterval.
-	searchDefaultInterval := time.Duration(getEnvInt("SEARCH_SCRAPE_INTERVAL_MINUTES", 20)) * time.Minute
-	// Шаг поискового тикера: часто опрашиваем БД, но эмитим только «созревшие»
-	// запросы (по last_enqueued_at + их интервал). Должен быть заметно меньше
-	// самого короткого тарифного интервала (перекуп = 1 мин).
-	searchTick := time.Duration(getEnvInt("SEARCH_TICK_SECONDS", 20)) * time.Second
+	// Дефолт-фолбэк интервала для тарифов без своего Interval (на практике все
+	// планы его задают; фолбэк — страховка).
+	defaultInterval := time.Duration(getEnvInt("SCRAPE_INTERVAL_MINUTES", 15)) * time.Minute
+	// Шаг тикера: часто опрашиваем БД, но эмитим только «созревшие» товары/запросы
+	// (по last_enqueued_at + их интервал). Должен быть заметно меньше самого
+	// короткого тарифного интервала (reseller = 1 мин). Один шаг на оба пути.
+	tick := time.Duration(getEnvInt("SCHEDULER_TICK_SECONDS", 20)) * time.Second
 
 	shutdownTracing, err := tracing.Init(ctx, "scheduler", otlpEndpoint)
 	if err != nil {
@@ -98,33 +98,38 @@ func run(log *slog.Logger) error {
 	defer resellerProducer.Close()
 
 	log.Info("scheduler started",
-		"product_interval", productInterval.String(),
-		"search_default_interval", searchDefaultInterval.String(),
-		"search_tick", searchTick.String())
+		"default_interval", defaultInterval.String(),
+		"tick", tick.String())
 
-	go runProductScheduler(ctx, log, productRepo, productProducer, productInterval)
-	go runSearchScheduler(ctx, log, searchQueryRepo, searchProducer, resellerProducer, searchTick, searchDefaultInterval)
+	go runProductScheduler(ctx, log, productRepo, productProducer, tick, defaultInterval)
+	go runSearchScheduler(ctx, log, searchQueryRepo, searchProducer, resellerProducer, tick, defaultInterval)
 
 	<-ctx.Done()
 	return nil
 }
 
-// ── Товарный планировщик (перенесён из cmd/api/scheduler.go, M1a) ────────────
+// ── Товарный планировщик (due-based per-plan, зеркало поискового) ────────────
+//
+// Товар скрейпится не чаще MIN-интервала своих подписчиков: free-only товар —
+// раз в 60 мин, а если его же отслеживает Pro — раз в 15 (Pro и платит за
+// свежесть). Строгую доставку каждому тарифу обеспечивает throttle в notifier.
+// Отдельной быстрой дорожки для товаров нет: reseller-товаров мало, они едут по
+// общему scrape-tasks на своём 1-мин кадансе.
 
 func runProductScheduler(
 	ctx context.Context,
 	log *slog.Logger,
 	productRepo *postgres.ProductRepo,
 	producer *kafka.Producer,
-	interval time.Duration,
+	tickInterval, defaultInterval time.Duration,
 ) {
 	tick := func() {
-		if err := productSchedulerTick(ctx, log, productRepo, producer); err != nil {
+		if err := productSchedulerTick(ctx, log, productRepo, producer, defaultInterval); err != nil {
 			log.Error("product scheduler tick failed", "err", err)
 		}
 	}
 	tick()
-	timer := time.NewTicker(interval)
+	timer := time.NewTicker(tickInterval)
 	defer timer.Stop()
 	for {
 		select {
@@ -141,32 +146,70 @@ func productSchedulerTick(
 	log *slog.Logger,
 	productRepo *postgres.ProductRepo,
 	producer *kafka.Producer,
+	defaultInterval time.Duration,
 ) error {
-	productIDs, err := productRepo.GetActiveProductIDs(ctx)
+	rows, err := productRepo.GetSchedulableProducts(ctx)
 	if err != nil {
-		return fmt.Errorf("get active product ids: %w", err)
+		return fmt.Errorf("get schedulable products: %w", err)
 	}
-	if len(productIDs) == 0 {
-		log.Info("scheduler: no active products")
+	if len(rows) == 0 {
 		return nil
 	}
 
-	sent := 0
-	for _, id := range productIDs {
-		product, err := productRepo.GetByID(ctx, id)
-		if err != nil {
-			log.Error("get product", "id", id, "err", err)
+	now := time.Now()
+
+	type agg struct {
+		url    string
+		eff    time.Duration
+		lastEn *time.Time
+	}
+	byProduct := make(map[int64]*agg)
+	for _, r := range rows {
+		iv := domain.EffectivePlanFor(r.OwnerPlan, r.PlanExpiresAt, now).EffectiveInterval(defaultInterval)
+		a, ok := byProduct[r.ProductID]
+		if !ok {
+			byProduct[r.ProductID] = &agg{url: r.URL, eff: iv, lastEn: r.LastEnqueuedAt}
 			continue
 		}
-		task := domain.ScrapeTask{ProductID: product.ID, URL: product.URL}
-		key := strconv.FormatInt(product.ID, 10)
+		if iv < a.eff {
+			a.eff = iv
+		}
+	}
+
+	type due struct {
+		id  int64
+		url string
+	}
+	var dueList []due
+	for id, a := range byProduct {
+		if a.lastEn != nil && now.Sub(*a.lastEn) < a.eff {
+			continue
+		}
+		dueList = append(dueList, due{id: id, url: a.url})
+	}
+	if len(dueList) == 0 {
+		return nil
+	}
+
+	ids := make([]int64, len(dueList))
+	for i, d := range dueList {
+		ids[i] = d.id
+	}
+	if err := productRepo.ClaimEnqueued(ctx, ids); err != nil {
+		return fmt.Errorf("claim products enqueued: %w", err)
+	}
+
+	sent := 0
+	for _, d := range dueList {
+		task := domain.ScrapeTask{ProductID: d.id, URL: d.url}
+		key := strconv.FormatInt(d.id, 10)
 		if err := producer.Send(ctx, key, task); err != nil {
-			log.Error("send scrape task", "product_id", id, "err", err)
+			log.Error("send scrape task", "product_id", d.id, "err", err)
 			continue
 		}
 		sent++
 	}
-	log.Info("scheduler tick done", "total", len(productIDs), "sent", sent)
+	log.Info("product scheduler tick done", "due", len(dueList), "sent", sent)
 	return nil
 }
 
@@ -210,12 +253,17 @@ func runSearchScheduler(
 	}
 }
 
+// resellerLaneCutoff — запрос с эффективным интервалом ≤ этого порога уходит в
+// быструю дорожку (reseller-tasks, отдельный пул токенов). Reseller-планы (1 мин)
+// проходят, обычные (15/30/60) — нет.
+const resellerLaneCutoff = 2 * time.Minute
+
 // dueQuery — созревший запрос, готовый к эмиссии.
 type dueQuery struct {
 	id   int64
 	url  string
 	text string
-	fast bool // эффективный интервал < дефолтного → дорожка перекупов
+	fast bool // эффективный интервал ≤ resellerLaneCutoff → дорожка перекупов
 }
 
 func searchSchedulerTick(
@@ -244,7 +292,7 @@ func searchSchedulerTick(
 	}
 	byQuery := make(map[int64]*agg)
 	for _, r := range rows {
-		iv := domain.EffectivePlanFor(r.OwnerPlan, r.PlanExpiresAt, now).EffectiveSearchInterval(defaultInterval)
+		iv := domain.EffectivePlanFor(r.OwnerPlan, r.PlanExpiresAt, now).EffectiveInterval(defaultInterval)
 		a, ok := byQuery[r.QueryID]
 		if !ok {
 			byQuery[r.QueryID] = &agg{url: r.NormalizedURL, text: r.QueryText, eff: iv, lastEn: r.LastEnqueuedAt}
@@ -261,7 +309,7 @@ func searchSchedulerTick(
 		if a.lastEn != nil && now.Sub(*a.lastEn) < a.eff {
 			continue // ещё не пора
 		}
-		due = append(due, dueQuery{id: id, url: a.url, text: a.text, fast: a.eff < defaultInterval})
+		due = append(due, dueQuery{id: id, url: a.url, text: a.text, fast: a.eff <= resellerLaneCutoff})
 	}
 	if len(due) == 0 {
 		return nil

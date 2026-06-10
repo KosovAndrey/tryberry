@@ -119,13 +119,15 @@ func (r *SubscriptionRepo) GetActiveByUserID(ctx context.Context, userID int64) 
 	return subs, rows.Err()
 }
 
+// GetActiveByProductIDWithTelegramID — активные подписки на товар + telegram_id,
+// план владельца и last_evaluated_at (для throttle оценки по интервалу тарифа).
 func (r *SubscriptionRepo) GetActiveByProductIDWithTelegramID(ctx context.Context, productID int64) ([]*domain.Subscription, error) {
 	const q = `
 		SELECT s.id, s.user_id, s.product_id, s.baseline_price, s.first_seen_price,
 		       s.trigger_type, s.target_price, s.discount_pct, s.notified,
-		       s.active, s.created_at, s.updated_at,
+		       s.active, s.created_at, s.updated_at, s.last_evaluated_at,
 		       p.name, p.url, COALESCE(p.image_url, ''), p.marketplace,
-		       u.telegram_id
+		       u.telegram_id, u.plan, u.plan_expires_at
 		FROM subscriptions s
 		JOIN products p ON p.id = s.product_id
 		JOIN users u ON u.id = s.user_id
@@ -143,15 +145,22 @@ func (r *SubscriptionRepo) GetActiveByProductIDWithTelegramID(ctx context.Contex
 		if err := rows.Scan(
 			&s.ID, &s.UserID, &s.ProductID, &s.BaselinePrice, &s.FirstSeenPrice,
 			&s.TriggerType, &s.TargetPrice, &s.DiscountPct, &s.Notified,
-			&s.Active, &s.CreatedAt, &s.UpdatedAt,
+			&s.Active, &s.CreatedAt, &s.UpdatedAt, &s.LastEvaluatedAt,
 			&s.ProductName, &s.ProductURL, &s.ProductImageURL, &s.ProductMarketplace,
-			&s.TelegramID,
+			&s.TelegramID, &s.OwnerPlan, &s.OwnerPlanExpiresAt,
 		); err != nil {
 			return nil, err
 		}
 		subs = append(subs, s)
 	}
 	return subs, rows.Err()
+}
+
+// MarkEvaluated — отметить, что товарная подписка оценена сейчас (throttle).
+func (r *SubscriptionRepo) MarkEvaluated(ctx context.Context, id int64) error {
+	const q = `UPDATE subscriptions SET last_evaluated_at = NOW() WHERE id = $1`
+	_, err := r.db.Exec(ctx, q, id)
+	return err
 }
 
 func (r *SubscriptionRepo) GetActiveByProductID(ctx context.Context, productID int64) ([]*domain.Subscription, error) {

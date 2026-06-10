@@ -18,24 +18,32 @@ type Plan struct {
 	MaxProduct int    // лимит товарных подписок
 	MaxSearch  int    // лимит поиск-подписок
 
-	// SearchInterval — желаемая частота скрейпа выдачи (и оценки уведомлений)
-	// для подписок этого плана. 0 → дефолт (SEARCH_SCRAPE_INTERVAL_MINUTES).
-	// Тариф «перекуп» ставит сюда 1 минуту: запрос с таким подписчиком уходит
-	// в отдельную быструю дорожку (топик reseller-tasks, отдельный пул токенов),
-	// а обычные подписчики того же запроса оцениваются по своему (дефолтному)
-	// интервалу — см. throttle в search-worker.
-	SearchInterval time.Duration
+	// Interval — частота проверки (скрейп + оценка уведомлений) для подписок этого
+	// плана, ОБА пути: товары и поиск. Эффективный интервал запроса/товара =
+	// MIN по подписчикам; доставка же каждому строго по его плану (throttle в
+	// воркере/notifier). Reseller-планы ставят 1 минуту → их запросы уходят в
+	// быструю дорожку (reseller-tasks, отдельный пул токенов). 0 → дефолт-фолбэк.
+	Interval time.Duration
+
+	// PriceRub — цена в рублях, ТОЛЬКО для отображения (оплаты в боте пока нет,
+	// план выдаётся вручную через /grant).
+	PriceRub int
 }
 
 // Plans — каталог тарифов. ЦИФРЫ МЕНЯЮТСЯ ЗДЕСЬ.
-// Старт консервативный (под слабую VM): поиск только в pro/trial/unlimited.
 var Plans = map[string]Plan{
-	"free":      {Name: "free", Title: "Free", MaxProduct: 10, MaxSearch: 0},
-	"trial":     {Name: "trial", Title: "Триал (3 дня)", MaxProduct: 10, MaxSearch: 3},
-	"basic":     {Name: "basic", Title: "Basic", MaxProduct: 100, MaxSearch: 0},
-	"pro":       {Name: "pro", Title: "Pro", MaxProduct: 100, MaxSearch: 5},
-	"reseller":  {Name: "reseller", Title: "Перекуп", MaxProduct: 100, MaxSearch: 50, SearchInterval: time.Minute},
-	"unlimited": {Name: "unlimited", Title: "Unlimited", MaxProduct: 100000, MaxSearch: 100000},
+	"free":           {Name: "free", Title: "Free", MaxProduct: 5, MaxSearch: 0, Interval: 60 * time.Minute, PriceRub: 0},
+	"trial":          {Name: "trial", Title: "Триал (3 дня)", MaxProduct: 100, MaxSearch: 10, Interval: 15 * time.Minute, PriceRub: 0},
+	"lite":           {Name: "lite", Title: "Lite", MaxProduct: 20, MaxSearch: 3, Interval: 30 * time.Minute, PriceRub: 199},
+	"pro":            {Name: "pro", Title: "Pro", MaxProduct: 100, MaxSearch: 10, Interval: 15 * time.Minute, PriceRub: 499},
+	"reseller_start": {Name: "reseller_start", Title: "Reseller Start", MaxProduct: 5, MaxSearch: 1, Interval: time.Minute, PriceRub: 990},
+	"reseller_pro":   {Name: "reseller_pro", Title: "Reseller Pro", MaxProduct: 15, MaxSearch: 3, Interval: time.Minute, PriceRub: 1990},
+	"unlimited":      {Name: "unlimited", Title: "Unlimited", MaxProduct: 100000, MaxSearch: 100000, Interval: time.Minute, PriceRub: 0},
+
+	// Legacy-алиасы: чтобы users.plan со старыми именами не откатывался на free
+	// до миграции (см. 010_per_plan_intervals.sql). Не предлагаются в /grant.
+	"basic":    {Name: "basic", Title: "Basic (legacy)", MaxProduct: 100, MaxSearch: 0, Interval: 30 * time.Minute, PriceRub: 0},
+	"reseller": {Name: "reseller", Title: "Reseller (legacy)", MaxProduct: 15, MaxSearch: 3, Interval: time.Minute, PriceRub: 1990},
 }
 
 const planFree = "free"
@@ -66,11 +74,11 @@ func (u *User) PlanExpired(now time.Time) bool {
 	return u.PlanExpiresAt != nil && now.After(*u.PlanExpiresAt)
 }
 
-// EffectiveSearchInterval — частота скрейпа/оценки для плана: SearchInterval,
-// либо переданный дефолт, если план её не задаёт.
-func (p Plan) EffectiveSearchInterval(def time.Duration) time.Duration {
-	if p.SearchInterval > 0 {
-		return p.SearchInterval
+// EffectiveInterval — частота проверки для плана: Interval, либо переданный
+// дефолт-фолбэк, если план её не задаёт (Interval==0).
+func (p Plan) EffectiveInterval(def time.Duration) time.Duration {
+	if p.Interval > 0 {
+		return p.Interval
 	}
 	return def
 }
