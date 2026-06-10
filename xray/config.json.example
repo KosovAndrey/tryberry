@@ -1,9 +1,10 @@
 {
   "//": "ШАБЛОН клиента Xray для egress в Telegram. Скопировать в xray/config.json",
   "//1": "и заполнить из подписки (см. xray/README.md). Реальный config.json — СЕКРЕТ.",
-  "//2": "Вариант: 6 серверов un1.pro (VLESS+Reality, TCP) + WG как резерв.",
-  "//3": "UUID/pbk/sid/sni у всех 6 узлов ОДИНАКОВЫЕ — отличается только address.",
-  "//4": "Теги vless-gerN: balancer/observatory матчат по префиксу 'vless' → все 6 сразу.",
+  "//2": "Вариант: 6 серверов un1.pro (VLESS+Reality, TCP, fp=edge) + WG как резерв.",
+  "//3": "address/serverName(sni)/fingerprint уже пер-сервер. Осталось вставить 3 ОБЩИХ",
+  "//4": "секрета: <UUID>, <REALITY_PUBLIC_KEY> (pbk), <SHORT_ID> (sid) — одинаковы у всех.",
+  "//5": "Теги vless-gerN: balancer/observatory матчат по префиксу 'vless' → все 6 сразу.",
 
   "log": { "loglevel": "warning" },
 
@@ -25,7 +26,7 @@
       "settings": { "vnext": [ { "address": "ger1.un1.pro", "port": 443,
         "users": [ { "id": "<UUID>", "encryption": "none", "flow": "xtls-rprx-vision" } ] } ] },
       "streamSettings": { "network": "tcp", "security": "reality", "realitySettings": {
-        "show": false, "fingerprint": "chrome", "serverName": "<SNI>",
+        "show": false, "fingerprint": "edge", "serverName": "ger1.un1.pro",
         "publicKey": "<REALITY_PUBLIC_KEY>", "shortId": "<SHORT_ID>", "spiderX": "" } }
     },
     {
@@ -34,7 +35,7 @@
       "settings": { "vnext": [ { "address": "ger2.un1.pro", "port": 443,
         "users": [ { "id": "<UUID>", "encryption": "none", "flow": "xtls-rprx-vision" } ] } ] },
       "streamSettings": { "network": "tcp", "security": "reality", "realitySettings": {
-        "show": false, "fingerprint": "chrome", "serverName": "<SNI>",
+        "show": false, "fingerprint": "edge", "serverName": "ger2.un1.pro",
         "publicKey": "<REALITY_PUBLIC_KEY>", "shortId": "<SHORT_ID>", "spiderX": "" } }
     },
     {
@@ -43,7 +44,7 @@
       "settings": { "vnext": [ { "address": "ger3.un1.pro", "port": 443,
         "users": [ { "id": "<UUID>", "encryption": "none", "flow": "xtls-rprx-vision" } ] } ] },
       "streamSettings": { "network": "tcp", "security": "reality", "realitySettings": {
-        "show": false, "fingerprint": "chrome", "serverName": "<SNI>",
+        "show": false, "fingerprint": "edge", "serverName": "ger3.un1.pro",
         "publicKey": "<REALITY_PUBLIC_KEY>", "shortId": "<SHORT_ID>", "spiderX": "" } }
     },
     {
@@ -52,7 +53,7 @@
       "settings": { "vnext": [ { "address": "ger4.un1.pro", "port": 443,
         "users": [ { "id": "<UUID>", "encryption": "none", "flow": "xtls-rprx-vision" } ] } ] },
       "streamSettings": { "network": "tcp", "security": "reality", "realitySettings": {
-        "show": false, "fingerprint": "chrome", "serverName": "<SNI>",
+        "show": false, "fingerprint": "edge", "serverName": "ger4.un1.pro",
         "publicKey": "<REALITY_PUBLIC_KEY>", "shortId": "<SHORT_ID>", "spiderX": "" } }
     },
     {
@@ -61,7 +62,7 @@
       "settings": { "vnext": [ { "address": "ger5.un1.pro", "port": 443,
         "users": [ { "id": "<UUID>", "encryption": "none", "flow": "xtls-rprx-vision" } ] } ] },
       "streamSettings": { "network": "tcp", "security": "reality", "realitySettings": {
-        "show": false, "fingerprint": "chrome", "serverName": "<SNI>",
+        "show": false, "fingerprint": "edge", "serverName": "ger5.un1.pro",
         "publicKey": "<REALITY_PUBLIC_KEY>", "shortId": "<SHORT_ID>", "spiderX": "" } }
     },
     {
@@ -70,7 +71,7 @@
       "settings": { "vnext": [ { "address": "ger6.un1.pro", "port": 443,
         "users": [ { "id": "<UUID>", "encryption": "none", "flow": "xtls-rprx-vision" } ] } ] },
       "streamSettings": { "network": "tcp", "security": "reality", "realitySettings": {
-        "show": false, "fingerprint": "chrome", "serverName": "<SNI>",
+        "show": false, "fingerprint": "edge", "serverName": "ger6.un1.pro",
         "publicKey": "<REALITY_PUBLIC_KEY>", "shortId": "<SHORT_ID>", "spiderX": "" } }
     },
     {
