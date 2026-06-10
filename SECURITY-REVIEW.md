@@ -3,10 +3,10 @@
 Ревью всего проекта (Go ~9k LOC + SQL/shell/nginx). Дата: 2026-06-10.
 
 ## Статус
-- Ветка: `security/webhook-auth-and-idor` (запушена на origin/GitLab, в `main` ещё **не** смержена).
-- Коммит: `e2e49e4` — 13 файлов, +157/−45.
+- **Смержено в `main`** (origin/GitLab). Security-фикс — `e2e49e4`; ветка `security/webhook-auth-and-idor`.
 - Сборка проверена в `golang:1.26-alpine`: `go build ./...` → **BUILD_OK**.
-- Тесты: пакеты подписок зелёные (`domain`, `searchsub`, `search-worker`). Красные `TestSelectProductPauses` и `TestSelectSearchRestores` в `cmd/notifier` — **предсуществующие**, не от наших правок (устаревшие ожидания лимитов тарифов после коммита `f60226b`, наш коммит этот пакет не трогает). Деплой не блокируют.
+- Тесты: **зелёные**. Ранее красные `TestSelectProductPauses`/`TestSelectSearchRestores` в `cmd/notifier` были предсуществующими (устаревшие лимиты тарифов после `f60226b`) — актуализированы под текущий `domain.Plans` (free.MaxProduct=5, trial.MaxSearch=10).
+- ⏳ Осталось одно: **деплой в прод** (`api` + `bot-worker`).
 
 ## Найденные уязвимости
 
@@ -41,8 +41,8 @@
 - Все вызывающие хендлеры резолвят владельца по `from.id` и прокидывают `user.ID`.
 
 ## Осталось / к деплою ⏳
-- [x] **Собрать и прогнать тесты** — `BUILD_OK` в `golang:1.26-alpine`. Падают только 2 предсуществующих теста `cmd/notifier` (см. «Статус»).
-- [ ] **Смержить MR** `security/webhook-auth-and-idor` → `main` в GitLab.
+- [x] **Собрать и прогнать тесты** — `BUILD_OK`; устаревшие тесты `cmd/notifier` починены.
+- [x] **Смержить MR** `security/webhook-auth-and-idor` → `main`.
 - [ ] **Задеплоить в прод** (затронуты `api` и `bot-worker`; остальные сервисы изменённую логику не вызывают):
   ```
   git fetch origin && git checkout security/webhook-auth-and-idor && git pull --ff-only origin security/webhook-auth-and-idor
@@ -54,8 +54,8 @@
 - [ ] **Секрет нужен только при переходе на webhook:** прод сейчас на polling (`docker-compose.prod.yml: WEBHOOK_ENABLED=false`), `api` стартует без него. Если включат `WEBHOOK_ENABLED=true` — добавить в прод-`.env`: `echo "TELEGRAM_WEBHOOK_SECRET=$(openssl rand -hex 32)" >> .env` (иначе `api` намеренно не стартует — fail-fast).
 - [ ] **(Defense-in-depth, опционально)** ограничить в nginx `location = /webhook` диапазонами Telegram (`149.154.160.0/20`, `91.108.4.0/22`).
 
-## Не из этого ревью (отдельно, не блокирует)
-- [ ] Починить устаревшие тесты `cmd/notifier` (`TestSelectProductPauses`, `TestSelectSearchRestores`) — ожидания лимитов разошлись с текущим `domain.Plans` после `f60226b`. Обновить ожидаемые значения под актуальный каталог тарифов.
+## Не из этого ревью (сделано попутно)
+- [x] Починены устаревшие тесты `cmd/notifier` (`TestSelectProductPauses`, `TestSelectSearchRestores`) — ожидания приведены к текущему `domain.Plans`.
 
 ## Не уязвимости (зафиксировано, чтобы не возвращаться)
 - Логирование URL/не-PII — ок.
