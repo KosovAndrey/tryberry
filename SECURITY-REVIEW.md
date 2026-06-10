@@ -2,6 +2,12 @@
 
 Ревью всего проекта (Go ~9k LOC + SQL/shell/nginx). Дата: 2026-06-10.
 
+## Статус
+- Ветка: `security/webhook-auth-and-idor` (запушена на origin/GitLab, в `main` ещё **не** смержена).
+- Коммит: `e2e49e4` — 13 файлов, +157/−45.
+- Сборка проверена в `golang:1.26-alpine`: `go build ./...` → **BUILD_OK**.
+- Тесты: пакеты подписок зелёные (`domain`, `searchsub`, `search-worker`). Красные `TestSelectProductPauses` и `TestSelectSearchRestores` в `cmd/notifier` — **предсуществующие**, не от наших правок (устаревшие ожидания лимитов тарифов после коммита `f60226b`, наш коммит этот пакет не трогает). Деплой не блокируют.
+
 ## Найденные уязвимости
 
 ### 1. HIGH — спуфинг апдейтов через публичный `/webhook` (auth bypass)
@@ -35,10 +41,21 @@
 - Все вызывающие хендлеры резолвят владельца по `from.id` и прокидывают `user.ID`.
 
 ## Осталось / к деплою ⏳
-- [ ] **Сгенерировать секрет и положить в прод-`.env`:** `openssl rand -hex 32` → `TELEGRAM_WEBHOOK_SECRET=…`. Нужен только если включают `WEBHOOK_ENABLED=true` (прод сейчас на polling, `docker-compose.prod.yml: WEBHOOK_ENABLED=false`).
-- [ ] **Собрать и прогнать тесты** (`go build ./... && go test ./...`) — в текущем WSL нет go-тулчейна, сборка идёт через Docker; вручную пока не проверено.
+- [x] **Собрать и прогнать тесты** — `BUILD_OK` в `golang:1.26-alpine`. Падают только 2 предсуществующих теста `cmd/notifier` (см. «Статус»).
+- [ ] **Смержить MR** `security/webhook-auth-and-idor` → `main` в GitLab.
+- [ ] **Задеплоить в прод** (затронуты `api` и `bot-worker`; остальные сервисы изменённую логику не вызывают):
+  ```
+  git fetch origin && git checkout security/webhook-auth-and-idor && git pull --ff-only origin security/webhook-auth-and-idor
+  docker compose -f docker-compose.yml -f docker-compose.prod.yml build api bot-worker
+  docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d api bot-worker
+  ```
+  Проверка: `docker logs --tail=50 pt_api` («polling mode enabled»), `docker logs --tail=50 pt_bot_worker`; в Telegram — `/list`+отмена, поиск-подписки, `/grant` (для админа).
+  Миграции БД **не нужны** (схема не менялась).
+- [ ] **Секрет нужен только при переходе на webhook:** прод сейчас на polling (`docker-compose.prod.yml: WEBHOOK_ENABLED=false`), `api` стартует без него. Если включат `WEBHOOK_ENABLED=true` — добавить в прод-`.env`: `echo "TELEGRAM_WEBHOOK_SECRET=$(openssl rand -hex 32)" >> .env` (иначе `api` намеренно не стартует — fail-fast).
 - [ ] **(Defense-in-depth, опционально)** ограничить в nginx `location = /webhook` диапазонами Telegram (`149.154.160.0/20`, `91.108.4.0/22`).
-- [ ] При переходе на webhook убедиться, что секрет одинаков в `setWebhook` и в env сервиса `api`.
+
+## Не из этого ревью (отдельно, не блокирует)
+- [ ] Починить устаревшие тесты `cmd/notifier` (`TestSelectProductPauses`, `TestSelectSearchRestores`) — ожидания лимитов разошлись с текущим `domain.Plans` после `f60226b`. Обновить ожидаемые значения под актуальный каталог тарифов.
 
 ## Не уязвимости (зафиксировано, чтобы не возвращаться)
 - Логирование URL/не-PII — ок.
