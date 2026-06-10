@@ -1,8 +1,9 @@
 {
   "//": "ШАБЛОН клиента Xray для egress в Telegram. Скопировать в xray/config.json",
-  "//1": "и заполнить из vless://-ссылки подписки (см. xray/README.md). Реальный",
-  "//2": "config.json — СЕКРЕТ (.gitignore). Вариант ниже — VLESS+Reality (TCP).",
-  "//3": "Для WS/gRPC-подписки замени блок streamSettings (см. README.md).",
+  "//1": "и заполнить из подписки (см. xray/README.md). Реальный config.json — СЕКРЕТ.",
+  "//2": "Вариант: 6 серверов un1.pro (VLESS+Reality, TCP) + WG как резерв.",
+  "//3": "UUID/pbk/sid/sni у всех 6 узлов ОДИНАКОВЫЕ — отличается только address.",
+  "//4": "Теги vless-gerN: balancer/observatory матчат по префиксу 'vless' → все 6 сразу.",
 
   "log": { "loglevel": "warning" },
 
@@ -19,41 +20,65 @@
 
   "outbounds": [
     {
-      "//": "ОСНОВНОЙ выход — VLESS+Reality на не-RU exit. Заполнить из подписки.",
-      "tag": "vless",
+      "tag": "vless-ger1",
       "protocol": "vless",
-      "settings": {
-        "vnext": [
-          {
-            "address": "<SERVER_HOST>",
-            "port": 443,
-            "users": [
-              { "id": "<UUID>", "encryption": "none", "flow": "xtls-rprx-vision" }
-            ]
-          }
-        ]
-      },
-      "streamSettings": {
-        "network": "tcp",
-        "security": "reality",
-        "realitySettings": {
-          "show": false,
-          "fingerprint": "chrome",
-          "serverName": "<SNI>",
-          "publicKey": "<REALITY_PUBLIC_KEY>",
-          "shortId": "<SHORT_ID>",
-          "spiderX": ""
-        }
-      }
+      "settings": { "vnext": [ { "address": "ger1.un1.pro", "port": 443,
+        "users": [ { "id": "<UUID>", "encryption": "none", "flow": "xtls-rprx-vision" } ] } ] },
+      "streamSettings": { "network": "tcp", "security": "reality", "realitySettings": {
+        "show": false, "fingerprint": "chrome", "serverName": "<SNI>",
+        "publicKey": "<REALITY_PUBLIC_KEY>", "shortId": "<SHORT_ID>", "spiderX": "" } }
+    },
+    {
+      "tag": "vless-ger2",
+      "protocol": "vless",
+      "settings": { "vnext": [ { "address": "ger2.un1.pro", "port": 443,
+        "users": [ { "id": "<UUID>", "encryption": "none", "flow": "xtls-rprx-vision" } ] } ] },
+      "streamSettings": { "network": "tcp", "security": "reality", "realitySettings": {
+        "show": false, "fingerprint": "chrome", "serverName": "<SNI>",
+        "publicKey": "<REALITY_PUBLIC_KEY>", "shortId": "<SHORT_ID>", "spiderX": "" } }
+    },
+    {
+      "tag": "vless-ger3",
+      "protocol": "vless",
+      "settings": { "vnext": [ { "address": "ger3.un1.pro", "port": 443,
+        "users": [ { "id": "<UUID>", "encryption": "none", "flow": "xtls-rprx-vision" } ] } ] },
+      "streamSettings": { "network": "tcp", "security": "reality", "realitySettings": {
+        "show": false, "fingerprint": "chrome", "serverName": "<SNI>",
+        "publicKey": "<REALITY_PUBLIC_KEY>", "shortId": "<SHORT_ID>", "spiderX": "" } }
+    },
+    {
+      "tag": "vless-ger4",
+      "protocol": "vless",
+      "settings": { "vnext": [ { "address": "ger4.un1.pro", "port": 443,
+        "users": [ { "id": "<UUID>", "encryption": "none", "flow": "xtls-rprx-vision" } ] } ] },
+      "streamSettings": { "network": "tcp", "security": "reality", "realitySettings": {
+        "show": false, "fingerprint": "chrome", "serverName": "<SNI>",
+        "publicKey": "<REALITY_PUBLIC_KEY>", "shortId": "<SHORT_ID>", "spiderX": "" } }
+    },
+    {
+      "tag": "vless-ger5",
+      "protocol": "vless",
+      "settings": { "vnext": [ { "address": "ger5.un1.pro", "port": 443,
+        "users": [ { "id": "<UUID>", "encryption": "none", "flow": "xtls-rprx-vision" } ] } ] },
+      "streamSettings": { "network": "tcp", "security": "reality", "realitySettings": {
+        "show": false, "fingerprint": "chrome", "serverName": "<SNI>",
+        "publicKey": "<REALITY_PUBLIC_KEY>", "shortId": "<SHORT_ID>", "spiderX": "" } }
+    },
+    {
+      "tag": "vless-ger6",
+      "protocol": "vless",
+      "settings": { "vnext": [ { "address": "ger6.un1.pro", "port": 443,
+        "users": [ { "id": "<UUID>", "encryption": "none", "flow": "xtls-rprx-vision" } ] } ] },
+      "streamSettings": { "network": "tcp", "security": "reality", "realitySettings": {
+        "show": false, "fingerprint": "chrome", "serverName": "<SNI>",
+        "publicKey": "<REALITY_PUBLIC_KEY>", "shortId": "<SHORT_ID>", "spiderX": "" } }
     },
     {
       "//": "РЕЗЕРВ — старый WG-туннель через http://wg-proxy:8888. Если WG снят,",
-      "//1": "observatory просто пометит это плечо мёртвым и оставит только vless.",
+      "//1": "observatory просто пометит это плечо мёртвым и оставит только vless-*.",
       "tag": "wg",
       "protocol": "http",
-      "settings": {
-        "servers": [ { "address": "wg-proxy", "port": 8888 } ]
-      }
+      "settings": { "servers": [ { "address": "wg-proxy", "port": 8888 } ] }
     },
     {
       "tag": "direct",
@@ -62,7 +87,7 @@
   ],
 
   "observatory": {
-    "//": "Пробит оба плеча — для balancer'а (живость + пинг до Telegram).",
+    "//": "Пробит все vless-* и wg — для balancer'а (живость + пинг до Telegram).",
     "subjectSelector": ["vless", "wg"],
     "probeUrl": "https://api.telegram.org/",
     "probeInterval": "30s"
@@ -72,9 +97,8 @@
     "domainStrategy": "AsIs",
     "balancers": [
       {
-        "//": "Весь egress на балансировщик: leastPing держит трафик на живом и",
-        "//1": "самом быстром плече. vless обычно быстрее (прямой exit) → primary;",
-        "//2": "при падении vless автоматически уходит на wg.",
+        "//": "leastPing держит трафик на живом и самом быстром из 6 узлов; при",
+        "//1": "падении всех VLESS уходит на wg. Селектор по префиксу: vless* + wg.",
         "tag": "egress",
         "selector": ["vless", "wg"],
         "strategy": { "type": "leastPing" }
