@@ -1,13 +1,13 @@
 
 services:
 
-  # ── Выход к Telegram через WireGuard ────────────────────────────────────
-  # На RU-хостинге РКН режет Telegram в обе стороны. Long-polling (api/ingestor)
-  # ходит наружу за апдейтами, а ответы шлют bot-worker/notifier — весь этот
-  # egress уводится в не-RU exit через WireGuard-туннель.
+  # ── WireGuard-туннель — РЕЗЕРВНОЕ плечо выхода к Telegram ────────────────
+  # На RU-хостинге РКН режет Telegram. ОСНОВНОЙ выход теперь — VLESS (сервис
+  # xray ниже); WG оставлен как fallback, к которому xray уходит автоматически,
+  # если VLESS-узел отвалится. Сервисы НЕ ходят сюда напрямую — только через
+  # xray (http://xray:8888), который сам выбирает плечо vless|wg.
   #   wg-proxy   — держит туннель wg0 (linuxserver/wireguard).
   #   tinyproxy  — HTTP CONNECT прокси в netns wg-proxy, слушает :8888.
-  # Сервисы ходят к Telegram через http://wg-proxy:8888 (HTTPS_PROXY).
   # Конфиг туннеля: ./wireguard/wg_confs/wg0.conf (секрет, см. wg0.conf.example).
   wg-proxy:
     image: lscr.io/linuxserver/wireguard:latest
@@ -69,6 +69,37 @@ services:
       retries: 5
       start_period: 20s
 
+  # ── Выход к Telegram через VLESS (Xray), primary; WG — fallback ──────────
+  # Xray держит локальный HTTP-прокси на :8888 и сам выбирает плечо выхода:
+  #   outbound "vless" — основной не-RU exit (VLESS+Reality, TCP под HTTPS,
+  #     РКН его почти не троттлит — в отличие от UDP-WireGuard);
+  #   outbound "wg"    — резерв через http://wg-proxy:8888 (тот же WG-туннель).
+  # observatory пробит оба плеча, balancer (leastPing) держит трафик на живом
+  # и быстром. Сервисы ходят сюда как http://xray:8888 (HTTPS_PROXY).
+  # Конфиг — СЕКРЕТ: ./xray/config.json (в .gitignore, см. config.json.example
+  # и xray/README.md по заполнению из vless://-ссылки подписки).
+  # ВАЖНО: xray НЕ зависит от wg-proxy — если WG-плечо лежит, VLESS работает.
+  xray:
+    image: teddysun/xray:latest
+    container_name: pt_xray
+    restart: unless-stopped
+    dns:
+      - 1.1.1.1
+      - 8.8.8.8
+    volumes:
+      - ./xray/config.json:/etc/xray/config.json:ro
+    healthcheck:
+      # Готовность = inbound :8888 слушает. Реальное здоровье плеч (vless/wg)
+      # держит сам observatory внутри Xray, не healthcheck контейнера.
+      test: ["CMD-SHELL", "netstat -ltn 2>/dev/null | grep -q ':8888 ' || ss -ltn 2>/dev/null | grep -q ':8888 '"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+    labels:
+      logging: "promtail"
+      service: "xray"
+
   api:
     build:
       context: .
@@ -92,7 +123,7 @@ services:
       SCRAPE_INTERVAL_MINUTES: "10"
       # Egress к Telegram через WireGuard (wg-proxy + tinyproxy). Внутренние
       # сервисы — мимо прокси (NO_PROXY). TELEGRAM_PROXY_URL больше не используется.
-      HTTPS_PROXY: "http://wg-proxy:8888"
+      HTTPS_PROXY: "http://xray:8888"
       TELEGRAM_POLL_TIMEOUT_SECONDS: "${TELEGRAM_POLL_TIMEOUT_SECONDS:-10}"
       NO_PROXY: "postgres,redis,kafka,jaeger,localhost,127.0.0.1"
     depends_on:
@@ -104,7 +135,7 @@ services:
         condition: service_healthy
       jaeger:
         condition: service_started
-      tinyproxy:
+      xray:
         condition: service_healthy
     labels:
       # Лейблы для Promtail — он по ним группирует логи в Loki
@@ -127,7 +158,7 @@ services:
       BOT_WORKER_HEALTH_PORT: "8093"
       OTLP_ENDPOINT: "jaeger:4317"
       # Egress к Telegram (ответы) через WireGuard (wg-proxy + tinyproxy).
-      HTTPS_PROXY: "http://wg-proxy:8888"
+      HTTPS_PROXY: "http://xray:8888"
       NO_PROXY: "postgres,redis,kafka,jaeger,localhost,127.0.0.1"
       ADMIN_IDS: "${ADMIN_IDS}"
     depends_on:
@@ -139,7 +170,7 @@ services:
         condition: service_healthy
       jaeger:
         condition: service_started
-      tinyproxy:
+      xray:
         condition: service_healthy
     labels:
       logging: "promtail"
@@ -266,7 +297,7 @@ services:
       NOTIFIER_HEALTH_PORT: "8091"
       OTLP_ENDPOINT: "jaeger:4317"
       # Egress к Telegram (уведомления) через WireGuard (wg-proxy + tinyproxy).
-      HTTPS_PROXY: "http://wg-proxy:8888"
+      HTTPS_PROXY: "http://xray:8888"
       NO_PROXY: "postgres,redis,kafka,jaeger,localhost,127.0.0.1"
     depends_on:
       postgres:
@@ -277,7 +308,7 @@ services:
         condition: service_healthy
       jaeger:
         condition: service_started
-      tinyproxy:
+      xray:
         condition: service_healthy
     labels:
       logging: "promtail"

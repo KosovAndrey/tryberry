@@ -1,0 +1,87 @@
+{
+  "//": "ШАБЛОН клиента Xray для egress в Telegram. Скопировать в xray/config.json",
+  "//1": "и заполнить из vless://-ссылки подписки (см. xray/README.md). Реальный",
+  "//2": "config.json — СЕКРЕТ (.gitignore). Вариант ниже — VLESS+Reality (TCP).",
+  "//3": "Для WS/gRPC-подписки замени блок streamSettings (см. README.md).",
+
+  "log": { "loglevel": "warning" },
+
+  "inbounds": [
+    {
+      "//": "Локальный HTTP-прокси. Сюда ходят api/bot-worker/notifier (HTTPS_PROXY).",
+      "tag": "in",
+      "listen": "0.0.0.0",
+      "port": 8888,
+      "protocol": "http",
+      "sniffing": { "enabled": true, "destOverride": ["http", "tls"] }
+    }
+  ],
+
+  "outbounds": [
+    {
+      "//": "ОСНОВНОЙ выход — VLESS+Reality на не-RU exit. Заполнить из подписки.",
+      "tag": "vless",
+      "protocol": "vless",
+      "settings": {
+        "vnext": [
+          {
+            "address": "<SERVER_HOST>",
+            "port": 443,
+            "users": [
+              { "id": "<UUID>", "encryption": "none", "flow": "xtls-rprx-vision" }
+            ]
+          }
+        ]
+      },
+      "streamSettings": {
+        "network": "tcp",
+        "security": "reality",
+        "realitySettings": {
+          "show": false,
+          "fingerprint": "chrome",
+          "serverName": "<SNI>",
+          "publicKey": "<REALITY_PUBLIC_KEY>",
+          "shortId": "<SHORT_ID>",
+          "spiderX": ""
+        }
+      }
+    },
+    {
+      "//": "РЕЗЕРВ — старый WG-туннель через http://wg-proxy:8888. Если WG снят,",
+      "//1": "observatory просто пометит это плечо мёртвым и оставит только vless.",
+      "tag": "wg",
+      "protocol": "http",
+      "settings": {
+        "servers": [ { "address": "wg-proxy", "port": 8888 } ]
+      }
+    },
+    {
+      "tag": "direct",
+      "protocol": "freedom"
+    }
+  ],
+
+  "observatory": {
+    "//": "Пробит оба плеча — для balancer'а (живость + пинг до Telegram).",
+    "subjectSelector": ["vless", "wg"],
+    "probeUrl": "https://api.telegram.org/",
+    "probeInterval": "30s"
+  },
+
+  "routing": {
+    "domainStrategy": "AsIs",
+    "balancers": [
+      {
+        "//": "Весь egress на балансировщик: leastPing держит трафик на живом и",
+        "//1": "самом быстром плече. vless обычно быстрее (прямой exit) → primary;",
+        "//2": "при падении vless автоматически уходит на wg.",
+        "tag": "egress",
+        "selector": ["vless", "wg"],
+        "strategy": { "type": "leastPing" }
+      }
+    ],
+    "rules": [
+      { "type": "field", "network": "tcp,udp", "balancerTag": "egress" }
+    ]
+  }
+}
