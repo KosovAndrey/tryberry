@@ -170,6 +170,65 @@ func run(log *slog.Logger) error {
 			otelhttp.NewHandler(webhookHandler, "webhook"),
 		))
 	}
+	// ── VK Callback API (фаза 1 VK-интеграции) ───────────────────────────────
+	// Монтируется только при заданных VK_CONFIRMATION и VK_CALLBACK_SECRET.
+	// Поток: VK POST /vk/callback → проверка secret → Kafka topic vk-updates
+	// (ключ = from_id, порядок диалога юзера сохраняется) → vk-консьюмер в bot-worker.
+	vkConfirmation := getEnv("VK_CONFIRMATION", "")
+	vkSecret := getEnv("VK_CALLBACK_SECRET", "")
+	if vkConfirmation != "" && vkSecret != "" {
+		vkProducer := kafka.NewProducer(kafkaBrokers, "vk-updates")
+		defer vkProducer.Close()
+
+		vkHandler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if r.Method != http.MethodPost {
+				w.WriteHeader(http.StatusMethodNotAllowed)
+				return
+			}
+			var ev struct {
+				Type    string          `json:"type"`
+				GroupID int64           `json:"group_id"`
+				Secret  string          `json:"secret"`
+				Object  json.RawMessage `json:"object"`
+			}
+			if err := json.NewDecoder(r.Body).Decode(&ev); err != nil {
+				w.WriteHeader(http.StatusBadRequest)
+				return
+			}
+			if subtle.ConstantTimeCompare([]byte(ev.Secret), []byte(vkSecret)) != 1 {
+				log.Warn("vk callback secret mismatch", "remote", r.RemoteAddr)
+				w.WriteHeader(http.StatusUnauthorized)
+				return
+			}
+			// Подтверждение сервера: VK шлёт type=confirmation, ждёт строку в теле.
+			if ev.Type == "confirmation" {
+				fmt.Fprint(w, vkConfirmation)
+				return
+			}
+			// Ключ партиционирования — автор сообщения (как у telegram-updates).
+			key := ""
+			var obj struct {
+				Message struct {
+					FromID int64 `json:"from_id"`
+				} `json:"message"`
+			}
+			if json.Unmarshal(ev.Object, &obj) == nil && obj.Message.FromID != 0 {
+				key = strconv.FormatInt(obj.Message.FromID, 10)
+			}
+			if err := vkProducer.Send(r.Context(), key, ev); err != nil {
+				log.Error("publish vk update", "err", err)
+				// 500 → VK ретраит доставку, событие не потеряется.
+				w.WriteHeader(http.StatusInternalServerError)
+				return
+			}
+			fmt.Fprint(w, "ok") // VK требует literal "ok" в теле
+		})
+		mux.Handle("/vk/callback", metrics.HTTPMiddleware("vk_callback")(
+			otelhttp.NewHandler(vkHandler, "vk_callback"),
+		))
+		log.Info("vk callback endpoint enabled")
+	}
+
 	mux.HandleFunc("/health", healthChecker.Handler())
 	mux.HandleFunc("/live", health.LivenessHandler())
 	mux.Handle("/metrics", promhttp.Handler())

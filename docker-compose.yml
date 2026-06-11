@@ -126,7 +126,10 @@ services:
       # сервисы — мимо прокси (NO_PROXY). TELEGRAM_PROXY_URL больше не используется.
       HTTPS_PROXY: "http://xray:8888"
       TELEGRAM_POLL_TIMEOUT_SECONDS: "${TELEGRAM_POLL_TIMEOUT_SECONDS:-10}"
-      NO_PROXY: "postgres,redis,kafka,jaeger,localhost,127.0.0.1"
+      NO_PROXY: "postgres,redis,kafka,jaeger,localhost,127.0.0.1,api.vk.com"
+      # VK Callback API (пусто = выключено). Значения из настроек сообщества VK.
+      VK_CONFIRMATION: "${VK_CONFIRMATION:-}"
+      VK_CALLBACK_SECRET: "${VK_CALLBACK_SECRET:-}"
     depends_on:
       postgres:
         condition: service_healthy
@@ -159,9 +162,13 @@ services:
       BOT_WORKER_HEALTH_PORT: "8093"
       OTLP_ENDPOINT: "jaeger:4317"
       # Egress к Telegram (ответы) через WireGuard (wg-proxy + tinyproxy).
+      # api.vk.com — мимо прокси: VK доступен с RU-VM напрямую.
       HTTPS_PROXY: "http://xray:8888"
-      NO_PROXY: "postgres,redis,kafka,jaeger,localhost,127.0.0.1"
+      NO_PROXY: "postgres,redis,kafka,jaeger,localhost,127.0.0.1,api.vk.com"
       ADMIN_IDS: "${ADMIN_IDS}"
+      # VK-бот (пусто = выключено): токен сообщества + ссылка для кнопки привязки.
+      VK_GROUP_TOKEN: "${VK_GROUP_TOKEN:-}"
+      VK_BOT_URL: "${VK_BOT_URL:-}"
     depends_on:
       postgres:
         condition: service_healthy
