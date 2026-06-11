@@ -210,11 +210,11 @@ func (b *Bot) handleCommand(ctx context.Context, msg *tgbotapi.Message) {
 	case "list_search":
 		b.handleListSearch(ctx, msg.Chat.ID, user)
 	case "trial":
-		b.handleTrial(ctx, msg.Chat.ID, user)
+		b.handleTrial(ctx, msg.Chat.ID, 0, user)
 	case "promo":
 		b.handlePromo(ctx, msg.Chat.ID, user, msg.CommandArguments())
 	case "ref":
-		b.handleRef(ctx, msg.Chat.ID, user)
+		b.handleRef(ctx, msg.Chat.ID, 0, user)
 	case "promo_create":
 		b.handlePromoCreate(ctx, msg)
 	case "promo_off":
@@ -222,7 +222,7 @@ func (b *Bot) handleCommand(ctx context.Context, msg *tgbotapi.Message) {
 	case "promo_list":
 		b.handlePromoList(ctx, msg)
 	case "myplan":
-		b.handleMyPlan(ctx, msg.Chat.ID, user)
+		b.handleMyPlan(ctx, msg.Chat.ID, 0, user)
 	case "grant":
 		b.handleGrant(ctx, msg)
 	case "revoke":
@@ -242,39 +242,50 @@ func (b *Bot) handleCommand(ctx context.Context, msg *tgbotapi.Message) {
 
 // ── Главное меню ──────────────────────────────────────────────────────────────
 
-func (b *Bot) sendMainMenu(ctx context.Context, chatID int64, messageID int, edit bool) {
-	text := "🍓 <b>TryberryBot</b>\n\n" +
-		"Слежу за ценами на Wildberries и уведомляю когда цена снижается.\n\n" +
-		"Выбери раздел:"
-
-	keyboard := tgbotapi.NewInlineKeyboardMarkup(
-		tgbotapi.NewInlineKeyboardRow(
-			tgbotapi.NewInlineKeyboardButtonData("📋 Мои подписки", "menu:list"),
-		),
+// mainMenuKeyboard — клавиатура главного меню. Вынесена отдельно, чтобы
+// приветственные экраны (рефералка) могли показать её со своим текстом.
+func mainMenuKeyboard() tgbotapi.InlineKeyboardMarkup {
+	return tgbotapi.NewInlineKeyboardMarkup(
 		tgbotapi.NewInlineKeyboardRow(
 			tgbotapi.NewInlineKeyboardButtonData("➕ Добавить товар", "menu:add"),
-		),
-		tgbotapi.NewInlineKeyboardRow(
 			tgbotapi.NewInlineKeyboardButtonData("🔎 Поиск по ссылке", "menu:search"),
 		),
 		tgbotapi.NewInlineKeyboardRow(
+			tgbotapi.NewInlineKeyboardButtonData("📋 Мои товары", "menu:list"),
+			tgbotapi.NewInlineKeyboardButtonData("📡 Мои поиски", "menu:lsearch"),
+		),
+		tgbotapi.NewInlineKeyboardRow(
 			tgbotapi.NewInlineKeyboardButtonData("ℹ️ Мой тариф", "menu:myplan"),
-			tgbotapi.NewInlineKeyboardButtonData("🎁 Триал 3 дня", "menu:trial"),
+			tgbotapi.NewInlineKeyboardButtonData("🎁 Триал", "menu:trial"),
+		),
+		tgbotapi.NewInlineKeyboardRow(
+			tgbotapi.NewInlineKeyboardButtonData("👥 Пригласить друга", "menu:ref"),
+			tgbotapi.NewInlineKeyboardButtonData("🎟 Промокод", "menu:promo"),
 		),
 		tgbotapi.NewInlineKeyboardRow(
 			tgbotapi.NewInlineKeyboardButtonData("❓ Помощь", "menu:help"),
 			tgbotapi.NewInlineKeyboardButtonURL("👨‍💻 Поддержка", "https://t.me/kosov_andrey"),
 		),
 	)
+}
 
-	if edit && messageID != 0 {
-		b.editMenu(chatID, messageID, text, keyboard)
-	} else {
-		m := tgbotapi.NewMessage(chatID, text)
-		m.ParseMode = "HTML"
-		m.ReplyMarkup = keyboard
-		b.send(m)
+// backToMenuKeyboard — единственная кнопка «◀️ В меню» для вложенных экранов.
+func backToMenuKeyboard() tgbotapi.InlineKeyboardMarkup {
+	return tgbotapi.NewInlineKeyboardMarkup(
+		tgbotapi.NewInlineKeyboardRow(
+			tgbotapi.NewInlineKeyboardButtonData("◀️ В меню", "menu:main"),
+		),
+	)
+}
+
+func (b *Bot) sendMainMenu(ctx context.Context, chatID int64, messageID int, edit bool) {
+	text := "🍓 <b>TryberryBot</b>\n\n" +
+		"Слежу за ценами на Wildberries и уведомляю, когда цена снижается.\n\n" +
+		"Выбери раздел:"
+	if !edit {
+		messageID = 0
 	}
+	b.showView(chatID, messageID, text, mainMenuKeyboard())
 }
 
 func (b *Bot) sendAddMenu(chatID int64, messageID int) {
@@ -306,6 +317,9 @@ func (b *Bot) sendHelpMenu(chatID int64, messageID int, edit bool) {
 		"<code>/list</code> — мои подписки\n" +
 		"<code>/track_search &lt;ссылка&gt;</code> — отслеживать поиск\n" +
 		"<code>/list_search</code> — мои поиск-подписки\n" +
+		"<code>/promo КОД</code> — активировать промокод\n" +
+		"<code>/ref</code> — пригласить друга\n" +
+		"<code>/myplan</code> — мой тариф и лимиты\n" +
 		"<code>/menu</code> — главное меню\n\n" +
 		"<b>Вопросы и предложения — пиши разработчику 👇</b>"
 
@@ -638,7 +652,7 @@ func (b *Bot) handleCallback(ctx context.Context, cb *tgbotapi.CallbackQuery) {
 			b.answerCallback(cb.ID, "Ошибка")
 			return
 		}
-		b.handleTrial(ctx, chatID, user)
+		b.handleTrial(ctx, chatID, messageID, user)
 
 	case cb.Data == "menu:myplan":
 		user, err := b.userRepo.GetByTelegramID(ctx, cb.From.ID)
@@ -646,7 +660,18 @@ func (b *Bot) handleCallback(ctx context.Context, cb *tgbotapi.CallbackQuery) {
 			b.answerCallback(cb.ID, "Ошибка")
 			return
 		}
-		b.handleMyPlan(ctx, chatID, user)
+		b.handleMyPlan(ctx, chatID, messageID, user)
+
+	case cb.Data == "menu:ref":
+		user, err := b.userRepo.GetByTelegramID(ctx, cb.From.ID)
+		if err != nil {
+			b.answerCallback(cb.ID, "Ошибка")
+			return
+		}
+		b.handleRef(ctx, chatID, messageID, user)
+
+	case cb.Data == "menu:promo":
+		b.sendPromoMenu(chatID, messageID)
 
 	case cb.Data == "menu:help":
 		b.sendHelpMenu(chatID, messageID, true)
@@ -701,6 +726,20 @@ func (b *Bot) callbackUntrack(ctx context.Context, cb *tgbotapi.CallbackQuery) {
 }
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
+
+// showView — единая точка вывода экрана: messageID != 0 → правим существующее
+// сообщение (навигация по меню живёт в одном сообщении), 0 → шлём новое
+// (ответ на команду). Все menu:* колбэки должны передавать сюда cb.Message.MessageID.
+func (b *Bot) showView(chatID int64, messageID int, text string, keyboard tgbotapi.InlineKeyboardMarkup) {
+	if messageID != 0 {
+		b.editMenu(chatID, messageID, text, keyboard)
+		return
+	}
+	m := tgbotapi.NewMessage(chatID, text)
+	m.ParseMode = "HTML"
+	m.ReplyMarkup = keyboard
+	b.send(m)
+}
 
 func (b *Bot) editMenu(chatID int64, messageID int, text string, keyboard tgbotapi.InlineKeyboardMarkup) {
 	msg := tgbotapi.NewEditMessageText(chatID, messageID, text)
