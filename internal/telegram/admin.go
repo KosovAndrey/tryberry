@@ -21,11 +21,16 @@ func (b *Bot) isAdmin(tgID int64) bool {
 
 // ── Триал (пользовательская команда/кнопка) ──────────────────────────────────
 
-func (b *Bot) handleTrial(ctx context.Context, chatID int64, user *domain.User) {
+// handleTrial — активация триала. messageID != 0 → результат показывается в том
+// же сообщении (вызов из меню), 0 → новым сообщением (команда /trial).
+func (b *Bot) handleTrial(ctx context.Context, chatID int64, messageID int, user *domain.User) {
 	now := time.Now()
 
 	if user.TrialUsed {
-		b.reply(chatID, "🎁 Триал уже был активирован ранее.\n\nПоиск по ссылке доступен на тарифе <b>Pro</b> — по вопросам пиши @kosov_andrey.")
+		b.showView(chatID, messageID,
+			"🎁 <b>Триал уже был активирован ранее</b>\n\n"+
+				"Поиск по ссылке доступен на тарифах <b>Pro</b> и выше — по вопросам пиши @kosov_andrey.",
+			backToMenuKeyboard())
 		return
 	}
 
@@ -43,25 +48,28 @@ func (b *Bot) handleTrial(ctx context.Context, chatID int64, user *domain.User) 
 		return
 	}
 	if !ok {
-		b.reply(chatID, "🎁 Триал уже был активирован ранее.")
+		b.showView(chatID, messageID, "🎁 Триал уже был активирован ранее.", backToMenuKeyboard())
 		return
 	}
 
 	b.restorePausedAfterUpgrade(ctx, user.TelegramID)
 
+	days := int(dur.Hours() / 24)
 	p := domain.Plans["trial"]
-	b.reply(chatID, fmt.Sprintf(
+	b.showView(chatID, messageID, fmt.Sprintf(
 		"🎁 <b>Триал активирован на %d %s!</b>\n\n"+
 			"Доступно поиск-подписок: <b>%d</b>.\n"+
 			"Действует до <b>%s</b>.\n\n"+
 			"Отправь ссылку на поисковую выдачу Wildberries, чтобы попробовать 🔎",
-		int(dur.Hours()/24), daysWord(int(dur.Hours()/24)),
-		p.MaxSearch, exp.Format(dateLayout)))
+		days, daysWord(days), p.MaxSearch, exp.Format(dateLayout)),
+		backToMenuKeyboard())
 }
 
 // ── Мой тариф ────────────────────────────────────────────────────────────────
 
-func (b *Bot) handleMyPlan(ctx context.Context, chatID int64, user *domain.User) {
+// handleMyPlan — экран тарифа. messageID != 0 → в том же сообщении (меню),
+// 0 → новым сообщением (команда /myplan).
+func (b *Bot) handleMyPlan(ctx context.Context, chatID int64, messageID int, user *domain.User) {
 	now := time.Now()
 	plan := user.EffectivePlan(now)
 
@@ -76,15 +84,26 @@ func (b *Bot) handleMyPlan(ctx context.Context, chatID int64, user *domain.User)
 	if plan.PriceRub > 0 {
 		fmt.Fprintf(&sb, "💳 Цена: <b>%d ₽/мес</b>\n", plan.PriceRub)
 	}
-
 	if user.PlanExpiresAt != nil && !user.PlanExpired(now) {
 		fmt.Fprintf(&sb, "\n⏳ Действует до <b>%s</b>\n", user.PlanExpiresAt.Format(dateLayout))
 	}
-	if plan.MaxSearch == 0 && !user.TrialUsed {
-		sb.WriteString("\n🎁 Доступен бесплатный триал поиска на 3 дня — /trial")
-	}
 
-	b.reply(chatID, sb.String())
+	var rows [][]tgbotapi.InlineKeyboardButton
+	if plan.MaxSearch == 0 && !user.TrialUsed {
+		sb.WriteString("\n🎁 Тебе доступен бесплатный триал поиска — кнопка ниже.")
+		rows = append(rows, tgbotapi.NewInlineKeyboardRow(
+			tgbotapi.NewInlineKeyboardButtonData("🎁 Активировать триал", "menu:trial"),
+		))
+	}
+	rows = append(rows, tgbotapi.NewInlineKeyboardRow(
+		tgbotapi.NewInlineKeyboardButtonData("👥 Пригласить друга", "menu:ref"),
+		tgbotapi.NewInlineKeyboardButtonData("🎟 Промокод", "menu:promo"),
+	))
+	rows = append(rows, tgbotapi.NewInlineKeyboardRow(
+		tgbotapi.NewInlineKeyboardButtonData("◀️ В меню", "menu:main"),
+	))
+
+	b.showView(chatID, messageID, sb.String(), tgbotapi.NewInlineKeyboardMarkup(rows...))
 }
 
 // ── Админка ──────────────────────────────────────────────────────────────────

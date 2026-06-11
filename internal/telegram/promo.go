@@ -87,6 +87,15 @@ func (b *Bot) applyGrantPromo(ctx context.Context, chatID int64, user *domain.Us
 		plan.Title, plan.MaxProduct, plan.MaxSearch, expiresAt.Format(dateLayout)))
 }
 
+// sendPromoMenu — экран «Промокод» из меню (в том же сообщении).
+func (b *Bot) sendPromoMenu(chatID int64, messageID int) {
+	text := "🎟 <b>Промокод</b>\n\n" +
+		"Есть код? Отправь его командой:\n" +
+		"<code>/promo КОД</code>\n\n" +
+		"Промокоды дают дни тарифа бесплатно или скидку на оплату."
+	b.showView(chatID, messageID, text, backToMenuKeyboard())
+}
+
 // ── Админка ──────────────────────────────────────────────────────────────────
 
 // /promo_create <код> grant <план> <дней> <макс_активаций> [срок_кода_дней]
