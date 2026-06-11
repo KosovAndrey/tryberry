@@ -35,6 +35,8 @@ type Bot struct {
 	searchSubRepo   *postgres.SearchSubscriptionRepo
 	rdb             *redis.Client // FSM для ввода порога (может быть nil)
 
+	promoRepo *postgres.PromoRepo
+
 	adminIDs map[int64]bool // кто может выдавать тарифы
 }
 
@@ -47,6 +49,7 @@ func NewBot(
 	registry *scraper.Registry,
 	searchQueryRepo *postgres.SearchQueryRepo,
 	searchSubRepo *postgres.SearchSubscriptionRepo,
+	promoRepo *postgres.PromoRepo,
 	rdb *redis.Client,
 	adminIDs map[int64]bool,
 ) (*Bot, error) {
@@ -67,6 +70,7 @@ func NewBot(
 		registry:        registry,
 		searchQueryRepo: searchQueryRepo,
 		searchSubRepo:   searchSubRepo,
+		promoRepo:       promoRepo,
 		rdb:             rdb,
 		adminIDs:        adminIDs,
 	}, nil
@@ -90,6 +94,7 @@ func (b *Bot) SetCommands() error {
 		{Command: "track_search", Description: "Отслеживать поиск — /track_search <ссылка>"},
 		{Command: "list_search", Description: "Мои поиск-подписки"},
 		{Command: "trial", Description: "🎁 Триал поиска (3 дня)"},
+		{Command: "promo", Description: "🎟 Активировать промокод"},
 		{Command: "myplan", Description: "Мой тариф и лимиты"},
 		{Command: "help", Description: "Помощь"},
 	}
@@ -165,6 +170,12 @@ func (b *Bot) handleCommand(ctx context.Context, msg *tgbotapi.Message) {
 
 	switch msg.Command() {
 	case "start":
+		// Deep-link payload: t.me/bot?start=promo_XXX (позже сюда же ref_XXX).
+		payload := strings.TrimSpace(msg.CommandArguments())
+		if code, ok := strings.CutPrefix(payload, "promo_"); ok {
+			b.handlePromo(ctx, msg.Chat.ID, user, code)
+			return
+		}
 		b.sendMainMenu(ctx, msg.Chat.ID, 0, false)
 	case "menu":
 		b.sendMainMenu(ctx, msg.Chat.ID, 0, false)
@@ -192,6 +203,14 @@ func (b *Bot) handleCommand(ctx context.Context, msg *tgbotapi.Message) {
 		b.handleListSearch(ctx, msg.Chat.ID, user)
 	case "trial":
 		b.handleTrial(ctx, msg.Chat.ID, user)
+	case "promo":
+		b.handlePromo(ctx, msg.Chat.ID, user, msg.CommandArguments())
+	case "promo_create":
+		b.handlePromoCreate(ctx, msg)
+	case "promo_off":
+		b.handlePromoOff(ctx, msg)
+	case "promo_list":
+		b.handlePromoList(ctx, msg)
 	case "myplan":
 		b.handleMyPlan(ctx, msg.Chat.ID, user)
 	case "grant":
