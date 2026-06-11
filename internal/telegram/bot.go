@@ -19,6 +19,7 @@ import (
 	"gitlab.com/KosovAndrey/tryberrybot/internal/domain"
 	"gitlab.com/KosovAndrey/tryberrybot/internal/metrics"
 	"gitlab.com/KosovAndrey/tryberrybot/internal/repository/postgres"
+	redisrepo "gitlab.com/KosovAndrey/tryberrybot/internal/repository/redis"
 	"gitlab.com/KosovAndrey/tryberrybot/internal/scraper"
 )
 
@@ -38,6 +39,9 @@ type Bot struct {
 	promoRepo    *postgres.PromoRepo
 	referralRepo *postgres.ReferralRepo
 
+	linkCodes *redisrepo.LinkCodeStore // коды привязки VK (nil, если redis недоступен)
+	vkBotURL  string                   // ссылка на VK-бота для кнопки привязки ("" — не показывать)
+
 	adminIDs map[int64]bool // кто может выдавать тарифы
 }
 
@@ -54,6 +58,7 @@ func NewBot(
 	referralRepo *postgres.ReferralRepo,
 	rdb *redis.Client,
 	adminIDs map[int64]bool,
+	vkBotURL string,
 ) (*Bot, error) {
 	// Тот же таймаут-клиент, что у Receiver: ответы bot-worker и (в монолитном
 	// режиме) Bot.RunPolling ходят к Telegram через HTTPS_PROXY — без таймаута
@@ -62,6 +67,10 @@ func NewBot(
 	api, err := tgbotapi.NewBotAPIWithClient(token, tgbotapi.APIEndpoint, pollHTTPClient())
 	if err != nil {
 		return nil, fmt.Errorf("init bot api: %w", err)
+	}
+	var linkCodes *redisrepo.LinkCodeStore
+	if rdb != nil {
+		linkCodes = redisrepo.NewLinkCodeStore(rdb)
 	}
 	return &Bot{
 		api:             api,
@@ -76,6 +85,8 @@ func NewBot(
 		referralRepo:    referralRepo,
 		rdb:             rdb,
 		adminIDs:        adminIDs,
+		linkCodes:       linkCodes,
+		vkBotURL:        vkBotURL,
 	}, nil
 }
 
@@ -99,6 +110,7 @@ func (b *Bot) SetCommands() error {
 		{Command: "trial", Description: "🎁 Триал поиска (3 дня)"},
 		{Command: "promo", Description: "🎟 Активировать промокод"},
 		{Command: "ref", Description: "👥 Пригласить друга"},
+		{Command: "profile", Description: "👤 Профиль"},
 		{Command: "myplan", Description: "Мой тариф и лимиты"},
 		{Command: "help", Description: "Помощь"},
 	}
@@ -215,6 +227,8 @@ func (b *Bot) handleCommand(ctx context.Context, msg *tgbotapi.Message) {
 		b.handlePromo(ctx, msg.Chat.ID, user, msg.CommandArguments())
 	case "ref":
 		b.handleRef(ctx, msg.Chat.ID, 0, user)
+	case "profile":
+		b.handleProfile(ctx, msg.Chat.ID, 0, user)
 	case "promo_create":
 		b.handlePromoCreate(ctx, msg)
 	case "promo_off":
@@ -255,7 +269,7 @@ func mainMenuKeyboard() tgbotapi.InlineKeyboardMarkup {
 			tgbotapi.NewInlineKeyboardButtonData("📡 Мои поиски", "menu:lsearch"),
 		),
 		tgbotapi.NewInlineKeyboardRow(
-			tgbotapi.NewInlineKeyboardButtonData("ℹ️ Мой тариф", "menu:myplan"),
+			tgbotapi.NewInlineKeyboardButtonData("👤 Профиль", "menu:profile"),
 			tgbotapi.NewInlineKeyboardButtonData("🎁 Триал", "menu:trial"),
 		),
 		tgbotapi.NewInlineKeyboardRow(
@@ -669,6 +683,30 @@ func (b *Bot) handleCallback(ctx context.Context, cb *tgbotapi.CallbackQuery) {
 			return
 		}
 		b.handleRef(ctx, chatID, messageID, user)
+
+	case cb.Data == "menu:profile":
+		user, err := b.userRepo.GetByTelegramID(ctx, cb.From.ID)
+		if err != nil {
+			b.answerCallback(cb.ID, "Ошибка")
+			return
+		}
+		b.handleProfile(ctx, chatID, messageID, user)
+
+	case cb.Data == "profile:linkvk", cb.Data == "profile:relinkvk":
+		user, err := b.userRepo.GetByTelegramID(ctx, cb.From.ID)
+		if err != nil {
+			b.answerCallback(cb.ID, "Ошибка")
+			return
+		}
+		b.profileLinkVK(ctx, chatID, messageID, user, cb.Data == "profile:relinkvk")
+
+	case cb.Data == "profile:notify":
+		user, err := b.userRepo.GetByTelegramID(ctx, cb.From.ID)
+		if err != nil {
+			b.answerCallback(cb.ID, "Ошибка")
+			return
+		}
+		b.profileToggleNotify(ctx, chatID, messageID, user)
 
 	case cb.Data == "menu:promo":
 		b.sendPromoMenu(chatID, messageID)

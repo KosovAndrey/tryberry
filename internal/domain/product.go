@@ -6,9 +6,13 @@ import (
 
 type User struct {
 	ID         int64
-	TelegramID int64
+	TelegramID int64 // 0 = TG не привязан (VK-only юзер)
 	Username   string
 	CreatedAt  time.Time
+
+	// VK-идентичность (vk_id = peer_id для отправки в ЛС VK)
+	VKID          *int64
+	NotifyChannel string // auto | tg | vk | both
 
 	// Тариф/лимиты
 	Plan          string     // free | trial | basic | pro | unlimited

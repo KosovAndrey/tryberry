@@ -22,9 +22,11 @@ import (
 	"gitlab.com/KosovAndrey/tryberrybot/internal/health"
 	"gitlab.com/KosovAndrey/tryberrybot/internal/kafka"
 	"gitlab.com/KosovAndrey/tryberrybot/internal/repository/postgres"
+	redisrepo "gitlab.com/KosovAndrey/tryberrybot/internal/repository/redis"
 	"gitlab.com/KosovAndrey/tryberrybot/internal/scraper"
 	"gitlab.com/KosovAndrey/tryberrybot/internal/telegram"
 	"gitlab.com/KosovAndrey/tryberrybot/internal/tracing"
+	"gitlab.com/KosovAndrey/tryberrybot/internal/vk"
 )
 
 // bot-worker (Шаг 2a): потребляет telegram-updates и обрабатывает апдейты
@@ -108,10 +110,39 @@ func run(log *slog.Logger) error {
 		return telegram.NewBot(
 			botToken, log, userRepo, subRepo, prodRepo, registry,
 			searchQueryRepo, searchSubRepo, promoRepo, referralRepo, redisClient, parseAdminIDs(getEnv("ADMIN_IDS", "")),
+			getEnv("VK_BOT_URL", ""),
 		)
 	})
 	if err != nil {
 		return fmt.Errorf("init bot: %w", err)
+	}
+
+	// ── VK-консьюмер (фаза 1: привязка аккаунтов + ответы в ЛС) ─────────────
+	// Включается только при заданном VK_GROUP_TOKEN. vk.com доступен напрямую,
+	// прокси не нужен.
+	if vkToken := getEnv("VK_GROUP_TOKEN", ""); vkToken != "" {
+		var linkCodes *redisrepo.LinkCodeStore
+		if redisClient != nil {
+			linkCodes = redisrepo.NewLinkCodeStore(redisClient)
+		}
+		vkBot := vk.NewBot(vk.NewClient(vkToken), log, userRepo, linkCodes)
+		vkConsumer := kafka.NewConsumer(kafkaBrokers, "vk-updates", "vk-workers")
+		defer vkConsumer.Close()
+		go func() {
+			log.Info("vk-updates consumer started")
+			err := vkConsumer.Run(ctx, func(ctx context.Context, msg kafka.Message) error {
+				ev, err := kafka.Decode[vk.CallbackEvent](msg)
+				if err != nil {
+					log.Error("decode vk update", "err", err)
+					return nil // poison pill — пропускаем
+				}
+				vkBot.HandleEvent(ctx, ev)
+				return nil
+			})
+			if err != nil {
+				log.Error("vk-updates consumer stopped", "err", err)
+			}
+		}()
 	}
 
 	consumer := kafka.NewConsumer(kafkaBrokers, "telegram-updates", groupID)
