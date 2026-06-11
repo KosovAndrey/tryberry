@@ -14,6 +14,9 @@ type User struct {
 	Plan          string     // free | trial | basic | pro | unlimited
 	PlanExpiresAt *time.Time // срок действия плана (nil = бессрочно)
 	TrialUsed     bool       // триал уже активировался
+
+	// Рефералка
+	ReferredBy *int64 // users.id пригласившего (nil = пришёл сам)
 }
 
 type Product struct {

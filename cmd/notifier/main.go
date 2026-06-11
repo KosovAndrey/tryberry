@@ -89,6 +89,7 @@ func run(log *slog.Logger) error {
 	searchNotifRepo := postgres.NewSearchNotificationRepo(pool)
 	searchSubRepo := postgres.NewSearchSubscriptionRepo(pool)
 	userRepo := postgres.NewUserRepo(pool)
+	referralRepo := postgres.NewReferralRepo(pool)
 
 	var priceCache *redisrepo.PriceCache
 	if redisClient != nil {
@@ -121,7 +122,7 @@ func run(log *slog.Logger) error {
 	// действующему плану. Живёт здесь, т.к. notifier — единственный синглтон с
 	// БД И egress в Telegram (scheduler без HTTPS_PROXY юзеру написать не может).
 	reconcileInterval := time.Duration(getEnvInt("PLAN_RECONCILE_INTERVAL_MINUTES", 15)) * time.Minute
-	go runPlanReconciler(ctx, log, searchSubRepo, subRepo, userRepo, tgNotifier, reconcileInterval)
+	go runPlanReconciler(ctx, log, searchSubRepo, subRepo, userRepo, referralRepo, tgNotifier, reconcileInterval)
 
 	// Дефолт-фолбэк интервала проверки для тарифов без своего Interval.
 	defaultInterval := time.Duration(getEnvInt("SCRAPE_INTERVAL_MINUTES", 15)) * time.Minute
@@ -149,6 +150,7 @@ func runPlanReconciler(
 	searchRepo *postgres.SearchSubscriptionRepo,
 	subRepo *postgres.SubscriptionRepo,
 	userRepo *postgres.UserRepo,
+	referralRepo *postgres.ReferralRepo,
 	tg *telegram.Notifier,
 	interval time.Duration,
 ) {
@@ -192,6 +194,9 @@ func runPlanReconciler(
 
 		// 4. Напоминание за сутки до истечения тарифа.
 		remindExpiring(ctx, log, userRepo, tg, now.Add(24*time.Hour))
+
+		// 5. Реферальные награды за «активных» друзей (48ч + активная подписка).
+		rewardReferralActivations(ctx, log, referralRepo, tg, now)
 	}
 
 	log.Info("plan reconciler started", "interval", interval.String())
@@ -307,6 +312,38 @@ func remindExpiring(ctx context.Context, log *slog.Logger, repo *postgres.UserRe
 		log.Error("reconcile: mark reminded", "err", err)
 	}
 	log.Info("reconcile: sent expiry reminders", "count", len(sent))
+}
+
+// rewardReferralActivations начисляет рефереру дни за «активных» друзей:
+// приглашённый прожил ReferralActivationAge и держит активную подписку.
+// Идемпотентно: UNIQUE (referee, event) в referral_rewards + потолок за год.
+func rewardReferralActivations(ctx context.Context, log *slog.Logger, repo *postgres.ReferralRepo, tg *telegram.Notifier, now time.Time) {
+	pending, err := repo.ListPendingActivations(ctx, domain.ReferralActivationAge, 100)
+	if err != nil {
+		log.Error("reconcile: list pending referral activations", "err", err)
+		return
+	}
+	for _, p := range pending {
+		referrer := domain.User{Plan: p.ReferrerPlan, PlanExpiresAt: p.ReferrerExpAt}
+		plan, expiresAt, setPlan := domain.ApplyReferralReward(&referrer, domain.ReferralActivatedRewardDays, now)
+
+		granted, err := repo.GrantReward(ctx,
+			p.ReferrerID, p.RefereeID,
+			domain.ReferralEventActivated, domain.ReferralActivatedRewardDays, domain.ReferralYearlyCapDays,
+			setPlan, plan, expiresAt)
+		if err != nil {
+			log.Error("reconcile: grant referral reward", "referrer", p.ReferrerID, "referee", p.RefereeID, "err", err)
+			continue
+		}
+		if !granted {
+			continue // потолок за год или уже начислено — без уведомления
+		}
+		log.Info("reconcile: referral reward granted",
+			"referrer", p.ReferrerID, "referee", p.RefereeID, "days", domain.ReferralActivatedRewardDays, "set_plan", setPlan)
+		if err := tg.SendReferralRewardNotice(ctx, p.ReferrerTgID, p.RefereeName, domain.ReferralActivatedRewardDays, setPlan); err != nil {
+			log.Error("reconcile: notify referral reward", "telegram_id", p.ReferrerTgID, "err", err)
+		}
+	}
 }
 
 // ── Чистые функции принятия решений (без БД, покрыты тестами) ────────────────

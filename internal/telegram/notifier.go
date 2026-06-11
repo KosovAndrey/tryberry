@@ -155,6 +155,23 @@ func (n *Notifier) SendPlanExpiringReminder(ctx context.Context, chatID int64) e
 	return n.sendMessage(ctx, chatID, text, keyboard)
 }
 
+// SendReferralRewardNotice — другу засчитана активация, рефереру начислены дни.
+// granted=false — награда записана в аудит, но план не менялся (бессрочный план).
+func (n *Notifier) SendReferralRewardNotice(ctx context.Context, chatID int64, friendName string, days int, granted bool) error {
+	who := "Твой друг"
+	if friendName != "" {
+		who = "Твой друг @" + friendName
+	}
+	text := fmt.Sprintf("🎉 <b>%s освоился в боте!</b>\n\n", who)
+	if granted {
+		text += fmt.Sprintf("За это тебе начислено <b>+%d дн.</b> тарифа — спасибо, что зовёшь друзей!\n\n", days)
+	} else {
+		text += "Награда записана — спасибо, что зовёшь друзей!\n\n"
+	}
+	text += "Твоя ссылка и статистика: /ref"
+	return n.sendMessage(ctx, chatID, text, nil)
+}
+
 func (n *Notifier) sendPhoto(ctx context.Context, chatID int64, photo, caption string, keyboard any) error {
 	payload := map[string]any{
 		"chat_id":      chatID,

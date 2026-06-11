@@ -25,12 +25,12 @@ func (r *UserRepo) Upsert(ctx context.Context, telegramID int64, username string
 		VALUES ($1, $2)
 		ON CONFLICT (telegram_id) DO UPDATE
 			SET username = EXCLUDED.username
-		RETURNING id, telegram_id, username, created_at, plan, plan_expires_at, trial_used`
+		RETURNING id, telegram_id, username, created_at, plan, plan_expires_at, trial_used, referred_by`
 
 	u := &domain.User{}
 	err := withSpan(ctx, "upsert_user", func(ctx context.Context) error {
 		return r.db.QueryRow(ctx, q, telegramID, username).
-			Scan(&u.ID, &u.TelegramID, &u.Username, &u.CreatedAt, &u.Plan, &u.PlanExpiresAt, &u.TrialUsed)
+			Scan(&u.ID, &u.TelegramID, &u.Username, &u.CreatedAt, &u.Plan, &u.PlanExpiresAt, &u.TrialUsed, &u.ReferredBy)
 	})
 	if err != nil {
 		return nil, err
@@ -40,12 +40,12 @@ func (r *UserRepo) Upsert(ctx context.Context, telegramID int64, username string
 
 func (r *UserRepo) GetByTelegramID(ctx context.Context, telegramID int64) (*domain.User, error) {
 	const q = `
-		SELECT id, telegram_id, username, created_at, plan, plan_expires_at, trial_used
+		SELECT id, telegram_id, username, created_at, plan, plan_expires_at, trial_used, referred_by
 		FROM users WHERE telegram_id = $1`
 
 	u := &domain.User{}
 	err := r.db.QueryRow(ctx, q, telegramID).
-		Scan(&u.ID, &u.TelegramID, &u.Username, &u.CreatedAt, &u.Plan, &u.PlanExpiresAt, &u.TrialUsed)
+		Scan(&u.ID, &u.TelegramID, &u.Username, &u.CreatedAt, &u.Plan, &u.PlanExpiresAt, &u.TrialUsed, &u.ReferredBy)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, domain.ErrNotFound
 	}

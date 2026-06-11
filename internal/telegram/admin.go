@@ -29,7 +29,13 @@ func (b *Bot) handleTrial(ctx context.Context, chatID int64, user *domain.User) 
 		return
 	}
 
-	exp := now.Add(domain.TrialDuration)
+	// Приглашённым по реферальной ссылке — расширенный триал.
+	dur := domain.TrialDuration
+	if user.ReferredBy != nil {
+		dur = domain.ReferralTrialDuration
+	}
+
+	exp := now.Add(dur)
 	ok, err := b.userRepo.ActivateTrial(ctx, user.TelegramID, exp)
 	if err != nil {
 		b.log.Error("activate trial", "err", err)
@@ -45,10 +51,11 @@ func (b *Bot) handleTrial(ctx context.Context, chatID int64, user *domain.User) 
 
 	p := domain.Plans["trial"]
 	b.reply(chatID, fmt.Sprintf(
-		"🎁 <b>Триал активирован на 3 дня!</b>\n\n"+
+		"🎁 <b>Триал активирован на %d %s!</b>\n\n"+
 			"Доступно поиск-подписок: <b>%d</b>.\n"+
 			"Действует до <b>%s</b>.\n\n"+
 			"Отправь ссылку на поисковую выдачу Wildberries, чтобы попробовать 🔎",
+		int(dur.Hours()/24), daysWord(int(dur.Hours()/24)),
 		p.MaxSearch, exp.Format(dateLayout)))
 }
 
