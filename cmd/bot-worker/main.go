@@ -91,6 +91,7 @@ func run(log *slog.Logger) error {
 	prodRepo := postgres.NewProductRepo(pool)
 	searchQueryRepo := postgres.NewSearchQueryRepo(pool)
 	searchSubRepo := postgres.NewSearchSubscriptionRepo(pool)
+	promoRepo := postgres.NewPromoRepo(pool)
 
 	// Боту токен скрейпа не нужен — он зовёт только разбор URL
 	// (FindByURL/NormalizeSearchURL), не ScrapeSearch. Идентично api.
@@ -105,7 +106,7 @@ func run(log *slog.Logger) error {
 	bot, err := initWithRetry(ctx, log, func() (*telegram.Bot, error) {
 		return telegram.NewBot(
 			botToken, log, userRepo, subRepo, prodRepo, registry,
-			searchQueryRepo, searchSubRepo, redisClient, parseAdminIDs(getEnv("ADMIN_IDS", "")),
+			searchQueryRepo, searchSubRepo, promoRepo, redisClient, parseAdminIDs(getEnv("ADMIN_IDS", "")),
 		)
 	})
 	if err != nil {
