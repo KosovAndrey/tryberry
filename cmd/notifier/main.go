@@ -28,6 +28,7 @@ import (
 	redisrepo "gitlab.com/KosovAndrey/tryberrybot/internal/repository/redis"
 	"gitlab.com/KosovAndrey/tryberrybot/internal/searchsub"
 	"gitlab.com/KosovAndrey/tryberrybot/internal/telegram"
+	"gitlab.com/KosovAndrey/tryberrybot/internal/vk"
 )
 
 func main() {
@@ -101,6 +102,14 @@ func run(log *slog.Logger) error {
 	// товарные, и поиск-уведомления пробиваются с RU-хостинга.
 	tgNotifier := telegram.NewNotifier(botToken)
 
+	// Маршрутизация по каналам: без VK_GROUP_TOKEN ведёт себя ровно как раньше
+	// (всё в Telegram). С токеном — смотрит на users.notify_channel.
+	sender := &deliverer{log: log, tg: tgNotifier, users: userRepo}
+	if vkToken := os.Getenv("VK_GROUP_TOKEN"); vkToken != "" {
+		sender.vk = vk.NewClient(vkToken)
+		log.Info("vk delivery enabled")
+	}
+
 	// ── Kafka ────────────────────────────────────────────────────────────────
 	// Товарный путь: price-events.
 	consumer := kafka.NewConsumer(kafkaBrokers, "price-events", kafkaGroupID)
@@ -113,7 +122,7 @@ func run(log *slog.Logger) error {
 	topN := getEnvInt("SEARCH_NOTIFY_TOP_N", 10)
 	go func() {
 		log.Info("search-events consumer started")
-		if err := searchConsumer.Run(ctx, makeSearchHandler(log, searchNotifRepo, tgNotifier, topN)); err != nil {
+		if err := searchConsumer.Run(ctx, makeSearchHandler(log, searchNotifRepo, sender, topN)); err != nil {
 			log.Error("search-events consumer stopped", "err", err)
 		}
 	}()
@@ -126,7 +135,7 @@ func run(log *slog.Logger) error {
 
 	// Дефолт-фолбэк интервала проверки для тарифов без своего Interval.
 	defaultInterval := time.Duration(getEnvInt("SCRAPE_INTERVAL_MINUTES", 15)) * time.Minute
-	handler := makeHandler(log, subRepo, notifRepo, priceHistoryRepo, priceCache, tgNotifier, defaultInterval)
+	handler := makeHandler(log, subRepo, notifRepo, priceHistoryRepo, priceCache, sender, defaultInterval)
 
 	log.Info("notifier started, waiting for price events...")
 	return consumer.Run(ctx, handler)
@@ -427,13 +436,19 @@ func shouldEvaluate(lastEval *time.Time, interval time.Duration, now time.Time) 
 	return now.Sub(*lastEval) >= interval-evalSlack
 }
 
+// alertSender — доставка алертов (deliverer; в тестах можно мокать).
+type alertSender interface {
+	SendPriceAlert(ctx context.Context, a telegram.PriceAlert) error
+	SendSearchAlert(ctx context.Context, a telegram.SearchAlert) error
+}
+
 func makeHandler(
 	log *slog.Logger,
 	subRepo *postgres.SubscriptionRepo,
 	notifRepo *postgres.NotificationRepo,
 	priceHistoryRepo *postgres.PriceHistoryRepo,
 	priceCache *redisrepo.PriceCache,
-	tgNotifier *telegram.Notifier,
+	sender alertSender,
 	defaultInterval time.Duration,
 ) kafka.HandlerFunc {
 	return func(ctx context.Context, msg kafka.Message) error {
@@ -518,8 +533,8 @@ func makeHandler(
 				continue
 			}
 
-			// Отправляем уведомление в Telegram
-			err = tgNotifier.SendPriceAlert(ctx, telegram.PriceAlert{
+			// Отправляем уведомление (роутинг по каналам — внутри sender)
+			err = sender.SendPriceAlert(ctx, telegram.PriceAlert{
 				ChatID:         sub.TelegramID,
 				SubscriptionID: sub.ID,
 				ProductName:    sub.ProductName,
@@ -570,7 +585,7 @@ func makeHandler(
 func makeSearchHandler(
 	log *slog.Logger,
 	searchNotifRepo *postgres.SearchNotificationRepo,
-	tgNotifier *telegram.Notifier,
+	sender alertSender,
 	topN int,
 ) kafka.HandlerFunc {
 	return func(ctx context.Context, msg kafka.Message) error {
@@ -618,7 +633,7 @@ func makeSearchHandler(
 		}
 
 		// Сначала отправляем; запись — только при успехе.
-		if err := tgNotifier.SendSearchAlert(ctx, alert); err != nil {
+		if err := sender.SendSearchAlert(ctx, alert); err != nil {
 			return fmt.Errorf("send search alert: %w", err)
 		}
 		// Фиксируем last-notified по ВСЕМ сработавшим товарам (не только показанным).
