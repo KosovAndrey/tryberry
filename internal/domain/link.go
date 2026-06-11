@@ -45,6 +45,28 @@ var (
 
 const linkCodeAlphabet = "ABCDEFGHJKMNPQRSTUVWXYZ23456789"
 
+// ResolveNotifyTargets — в какие каналы доставлять уведомление при настройке
+// channel и доступных идентичностях. Недоступный выбранный канал откатывается
+// на доступный (лучше доставить «не туда», чем потерять уведомление).
+func ResolveNotifyTargets(channel string, hasTG, hasVK bool) (tg, vk bool) {
+	switch channel {
+	case NotifyTG:
+		tg = hasTG
+	case NotifyVK:
+		vk = hasVK
+	case NotifyBoth:
+		tg, vk = hasTG, hasVK
+	default: // auto: куда зарегистрировался
+		tg = hasTG
+		vk = !hasTG && hasVK
+	}
+	// Фолбэк: выбранный канал недоступен → шлём в доступный.
+	if !tg && !vk {
+		tg, vk = hasTG, !hasTG && hasVK
+	}
+	return tg, vk
+}
+
 // NewLinkCode — криптослучайный код привязки.
 func NewLinkCode() (string, error) {
 	buf := make([]byte, LinkCodeLen)

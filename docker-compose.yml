@@ -305,8 +305,11 @@ services:
       NOTIFIER_HEALTH_PORT: "8091"
       OTLP_ENDPOINT: "jaeger:4317"
       # Egress к Telegram (уведомления) через WireGuard (wg-proxy + tinyproxy).
+      # api.vk.com — мимо прокси: VK доступен напрямую.
       HTTPS_PROXY: "http://xray:8888"
-      NO_PROXY: "postgres,redis,kafka,jaeger,localhost,127.0.0.1"
+      NO_PROXY: "postgres,redis,kafka,jaeger,localhost,127.0.0.1,api.vk.com"
+      # VK-доставка уведомлений (пусто = выключено, всё идёт в Telegram).
+      VK_GROUP_TOKEN: "${VK_GROUP_TOKEN:-}"
     depends_on:
       postgres:
         condition: service_healthy
