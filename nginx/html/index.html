@@ -5,6 +5,8 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>TryBerry — следит за ценой, пока вы заняты</title>
 <meta name="description" content="Telegram-бот, который отслеживает цены на Wildberries и пишет вам, когда товар или вся выдача подешевели. Бесплатный план и 3-дневный триал.">
+<link rel="icon" type="image/png" href="/logo.png">
+<link rel="apple-touch-icon" href="/logo.png">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Unbounded:wght@300;400;500;600;700;800&family=Onest:wght@300;400;500;600;700&display=swap" rel="stylesheet">
@@ -69,8 +71,8 @@ nav.scrolled{
   padding:10px 0;border-bottom:1px solid var(--line);
 }
 .nav-inner{max-width:var(--maxw);margin:0 auto;padding:0 clamp(20px,5vw,48px);display:flex;align-items:center;justify-content:space-between}
-.brand{display:flex;align-items:center;gap:11px;font-family:var(--font-display);font-weight:700;font-size:1.15rem;letter-spacing:-.01em}
-.brand .dot{width:26px;height:26px;border-radius:50% 50% 50% 4px;background:linear-gradient(135deg,var(--berry-bright),var(--berry-deep));box-shadow:0 0 22px rgba(232,51,108,.55);flex:none}
+.brand{display:flex;align-items:center;gap:10px;font-family:var(--font-display);font-weight:700;font-size:1.15rem;letter-spacing:-.01em}
+.brand-logo{width:30px;height:30px;object-fit:contain;flex:none;filter:drop-shadow(0 0 16px rgba(232,51,108,.45))}
 .nav-links{display:flex;align-items:center;gap:34px;font-size:.92rem}
 .nav-links a{color:var(--cream);opacity:.78;transition:opacity .25s}
 .nav-links a:hover{opacity:1}
@@ -127,7 +129,7 @@ nav.scrolled{
 .phone-screen{position:relative;height:100%;border-radius:30px;overflow:hidden;background:linear-gradient(180deg,#1d0815,#120510);padding:54px 16px 18px}
 .phone-notch{position:absolute;top:14px;left:50%;transform:translateX(-50%);width:110px;height:26px;background:#0d0309;border-radius:0 0 16px 16px}
 .tg-header{display:flex;align-items:center;gap:10px;padding-bottom:14px;border-bottom:1px solid rgba(255,255,255,.06)}
-.tg-ava{width:34px;height:34px;border-radius:50% 50% 50% 4px;background:linear-gradient(135deg,var(--berry-bright),var(--berry-deep));flex:none}
+.tg-ava{width:34px;height:34px;object-fit:contain;flex:none}
 .tg-header .nm{font-weight:600;font-size:.9rem}
 .tg-header .st{font-size:.7rem;color:var(--muted)}
 .bubble{
@@ -207,7 +209,7 @@ section{position:relative}
 .pin-progress i.on{background:var(--berry-bright)}
 
 /* ---------- plans ---------- */
-.plan-grid{display:grid;grid-template-columns:repeat(5,1fr);gap:14px;align-items:stretch}
+.plan-grid{display:grid;grid-template-columns:repeat(4,1fr);gap:16px;align-items:stretch}
 .plan{
   background:var(--cream);border-radius:22px;padding:28px 22px;border:1px solid rgba(58,15,43,.08);
   display:flex;flex-direction:column;transition:transform .45s var(--ease),box-shadow .45s;position:relative;
@@ -231,6 +233,36 @@ section{position:relative}
 .plan li.off svg{stroke:var(--muted)}
 .plans-note{margin-top:30px;font-size:.88rem;color:var(--muted-light);text-align:center;max-width:60ch;margin-left:auto;margin-right:auto}
 .band.cream .plans-note{color:var(--muted-light)}
+
+/* reseller block */
+.reseller{margin-top:42px;background:linear-gradient(165deg,#3a0f2b,#1f0917);border-radius:28px;padding:clamp(30px,4vw,46px);border:1px solid var(--berry);color:var(--cream)}
+.reseller-head{display:flex;align-items:flex-start;gap:18px;flex-wrap:wrap;justify-content:space-between;margin-bottom:30px}
+.reseller-head .rt{font-family:var(--font-display);font-weight:600;font-size:clamp(1.5rem,2.6vw,2.1rem);letter-spacing:-.02em;line-height:1.1}
+.reseller-head .rd{color:#c8a9b8;font-size:.98rem;margin-top:8px;max-width:52ch}
+.reseller-badge{font-family:var(--font-display);font-weight:600;font-size:.72rem;letter-spacing:.1em;text-transform:uppercase;color:#fff;background:linear-gradient(120deg,var(--berry-bright),var(--berry-deep));padding:9px 16px;border-radius:100px;white-space:nowrap;align-self:center}
+.reseller-grid{display:grid;grid-template-columns:repeat(2,1fr);gap:16px}
+.rplan{background:#2d0d22;border:1px solid rgba(255,93,143,.16);border-radius:20px;padding:26px 24px;display:flex;flex-direction:column}
+.rplan h4{font-family:var(--font-display);font-weight:600;font-size:1.15rem;margin-bottom:4px}
+.rplan .price{font-family:var(--font-display);font-weight:700;font-size:1.5rem;margin:8px 0 2px}
+.rplan .price small{font-family:var(--font-body);font-weight:400;font-size:.78rem;color:#c8a9b8}
+.rplan .desc{font-size:.84rem;color:#bd9caa;margin:10px 0 16px}
+.rplan ul{list-style:none;display:flex;flex-direction:column;gap:10px;font-size:.86rem;margin-top:auto;padding-top:16px;border-top:1px solid rgba(255,255,255,.1)}
+.rplan li{display:flex;align-items:flex-start;gap:9px;line-height:1.4}
+.rplan li svg{width:15px;height:15px;flex:none;margin-top:3px;stroke:var(--berry-bright);stroke-width:2.4;fill:none}
+.rplan li.hl{color:var(--rose);font-weight:600}
+
+/* pay & refund visible block */
+.payinfo-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:18px}
+.paycard{background:var(--cream);border-radius:24px;padding:30px 28px;border:1px solid rgba(58,15,43,.08)}
+.band.plum .paycard{background:#2d0d22;border-color:rgba(255,93,143,.1)}
+.paycard .pi-ic{width:44px;height:44px;border-radius:13px;background:linear-gradient(135deg,var(--berry-bright),var(--berry-deep));display:flex;align-items:center;justify-content:center;margin-bottom:18px}
+.paycard .pi-ic svg{width:22px;height:22px;stroke:#fff;fill:none;stroke-width:2}
+.paycard h3{font-family:var(--font-display);font-weight:500;font-size:1.12rem;letter-spacing:-.01em;margin-bottom:9px}
+.paycard p{font-size:.93rem;color:var(--muted-light);line-height:1.55}
+.band.plum .paycard p{color:#bd9caa}
+.paycard a.inline{color:var(--berry-deep);font-weight:600}
+.band.plum .paycard a.inline{color:var(--berry-bright)}
+.pay-foot{margin-top:30px;font-size:.9rem;color:var(--muted-light);text-align:center;max-width:74ch;margin-left:auto;margin-right:auto}
 
 /* ---------- FAQ ---------- */
 .faq{max-width:820px;margin:0 auto}
@@ -298,6 +330,9 @@ footer{background:var(--plum-deep);padding:70px 0 40px;border-top:1px solid var(
   .plan.featured{transform:none}
   .plan.featured:hover{transform:translateY(-6px)}
   .contact-grid{grid-template-columns:1fr}
+  .reseller-grid{grid-template-columns:1fr}
+  .payinfo-grid{grid-template-columns:1fr}
+  .reseller-head{flex-direction:column}
 }
 @media(max-width:680px){
   .nav-links{
@@ -322,11 +357,12 @@ footer{background:var(--plum-deep);padding:70px 0 40px;border-top:1px solid var(
 <!-- NAV -->
 <nav id="nav">
   <div class="nav-inner">
-    <a href="#top" class="brand"><span class="dot"></span>TryBerry</a>
+    <a href="#top" class="brand"><img src="/logo.png" class="brand-logo" alt="TryBerry">TryBerry</a>
     <div class="nav-links" id="navLinks">
       <a href="#features">Возможности</a>
       <a href="#triggers">Как работает</a>
       <a href="#plans">Тарифы</a>
+      <a href="#payment">Оплата</a>
       <a href="#faq">Вопросы</a>
       <a href="#contacts">Контакты</a>
       <a href="https://t.me/TryBerryBot" target="_blank" rel="noopener" class="nav-cta">Открыть в Telegram</a>
@@ -358,7 +394,7 @@ footer{background:var(--plum-deep);padding:70px 0 40px;border-top:1px solid var(
         <div class="phone-screen">
           <div class="phone-notch"></div>
           <div class="tg-header">
-            <div class="tg-ava"></div>
+            <img src="/logo.png" class="tg-ava" alt="TryBerry">
             <div><div class="nm">TryBerry</div><div class="st">bot · онлайн</div></div>
           </div>
           <div class="bubble">
@@ -474,7 +510,7 @@ footer{background:var(--plum-deep);padding:70px 0 40px;border-top:1px solid var(
 <section class="band plum">
   <div class="wrap statement" style="padding-top:clamp(70px,12vw,150px)">
     <h2 data-reveal>Проверяет цены <em>круглосуточно.</em></h2>
-    <p data-reveal style="--d:.1s">Товары — каждые 10 минут, выдачу поиска — каждые 20. Вы спите, едете, работаете — TryBerry не отвлекается.</p>
+    <p data-reveal style="--d:.1s">Частота зависит от тарифа: от раза в час на Free до раза в минуту на тарифах для реселлеров. Вы спите, едете, работаете — TryBerry не отвлекается.</p>
   </div>
 </section>
 
@@ -492,60 +528,112 @@ footer{background:var(--plum-deep);padding:70px 0 40px;border-top:1px solid var(
         <div class="price">0 ₽<small> / навсегда</small></div>
         <div class="desc">Для старта и слежки за избранным.</div>
         <ul>
-          <li><svg viewBox="0 0 24 24"><path d="M20 6 9 17l-5-5"/></svg>До 10 товаров</li>
+          <li><svg viewBox="0 0 24 24"><path d="M20 6 9 17l-5-5"/></svg>5 товарных подписок</li>
           <li class="off"><svg viewBox="0 0 24 24"><path d="M18 6 6 18M6 6l12 12"/></svg>Поиск по ссылке</li>
-          <li><svg viewBox="0 0 24 24"><path d="M20 6 9 17l-5-5"/></svg>Все 3 стратегии</li>
-          <li><svg viewBox="0 0 24 24"><path d="M20 6 9 17l-5-5"/></svg>Учёт баллов за отзыв</li>
+          <li><svg viewBox="0 0 24 24"><path d="M20 6 9 17l-5-5"/></svg>Проверка раз в 60 мин</li>
+          <li><svg viewBox="0 0 24 24"><path d="M20 6 9 17l-5-5"/></svg>Все 3 стратегии и учёт баллов</li>
         </ul>
       </div>
       <div class="plan" data-reveal style="--d:.06s">
         <span class="pill">3 дня бесплатно</span>
         <h3>Триал</h3>
         <div class="price">0 ₽<small> / 3 дня</small></div>
-        <div class="desc">Попробовать поиск без обязательств.</div>
+        <div class="desc">Полный доступ без обязательств.</div>
         <ul>
-          <li><svg viewBox="0 0 24 24"><path d="M20 6 9 17l-5-5"/></svg>До 10 товаров</li>
-          <li><svg viewBox="0 0 24 24"><path d="M20 6 9 17l-5-5"/></svg>До 3 поисков</li>
-          <li><svg viewBox="0 0 24 24"><path d="M20 6 9 17l-5-5"/></svg>Один раз на аккаунт</li>
-          <li><svg viewBox="0 0 24 24"><path d="M20 6 9 17l-5-5"/></svg>Без карты</li>
+          <li><svg viewBox="0 0 24 24"><path d="M20 6 9 17l-5-5"/></svg>100 товарных подписок</li>
+          <li><svg viewBox="0 0 24 24"><path d="M20 6 9 17l-5-5"/></svg>10 поиск-подписок</li>
+          <li><svg viewBox="0 0 24 24"><path d="M20 6 9 17l-5-5"/></svg>Проверка раз в 15 мин</li>
+          <li><svg viewBox="0 0 24 24"><path d="M20 6 9 17l-5-5"/></svg>Один раз на аккаунт, без карты</li>
         </ul>
       </div>
       <div class="plan" data-reveal style="--d:.12s">
-        <h3>Basic</h3>
-        <div class="price">—<small> / по запросу</small></div>
-        <div class="desc">Много товаров, без поиска.</div>
+        <h3>Lite</h3>
+        <div class="price">199 ₽<small> / мес</small></div>
+        <div class="desc">Для регулярных личных покупок.</div>
         <ul>
-          <li><svg viewBox="0 0 24 24"><path d="M20 6 9 17l-5-5"/></svg>До 100 товаров</li>
-          <li class="off"><svg viewBox="0 0 24 24"><path d="M18 6 6 18M6 6l12 12"/></svg>Поиск по ссылке</li>
-          <li><svg viewBox="0 0 24 24"><path d="M20 6 9 17l-5-5"/></svg>Все 3 стратегии</li>
-          <li><svg viewBox="0 0 24 24"><path d="M20 6 9 17l-5-5"/></svg>Приоритетная поддержка</li>
+          <li><svg viewBox="0 0 24 24"><path d="M20 6 9 17l-5-5"/></svg>20 товарных подписок</li>
+          <li><svg viewBox="0 0 24 24"><path d="M20 6 9 17l-5-5"/></svg>3 поиск-подписки</li>
+          <li><svg viewBox="0 0 24 24"><path d="M20 6 9 17l-5-5"/></svg>Проверка раз в 30 мин</li>
+          <li><svg viewBox="0 0 24 24"><path d="M20 6 9 17l-5-5"/></svg>Все 3 стратегии и учёт баллов</li>
         </ul>
       </div>
       <div class="plan featured" data-reveal style="--d:.18s">
         <span class="pill">популярный</span>
         <h3>Pro</h3>
-        <div class="price">—<small> / по запросу</small></div>
-        <div class="desc">Товары + поиск по выдаче.</div>
+        <div class="price">499 ₽<small> / мес</small></div>
+        <div class="desc">Максимум подписок и скорости.</div>
         <ul>
-          <li><svg viewBox="0 0 24 24"><path d="M20 6 9 17l-5-5"/></svg>До 100 товаров</li>
-          <li><svg viewBox="0 0 24 24"><path d="M20 6 9 17l-5-5"/></svg>До 5 поисков</li>
-          <li><svg viewBox="0 0 24 24"><path d="M20 6 9 17l-5-5"/></svg>Все 3 стратегии</li>
+          <li><svg viewBox="0 0 24 24"><path d="M20 6 9 17l-5-5"/></svg>100 товарных подписок</li>
+          <li><svg viewBox="0 0 24 24"><path d="M20 6 9 17l-5-5"/></svg>10 поиск-подписок</li>
+          <li><svg viewBox="0 0 24 24"><path d="M20 6 9 17l-5-5"/></svg>Проверка раз в 15 мин</li>
           <li><svg viewBox="0 0 24 24"><path d="M20 6 9 17l-5-5"/></svg>Приоритетная поддержка</li>
         </ul>
       </div>
-      <div class="plan" data-reveal style="--d:.24s">
-        <h3>Unlimited</h3>
-        <div class="price">—<small> / по запросу</small></div>
-        <div class="desc">Без лимитов, для самых активных.</div>
-        <ul>
-          <li><svg viewBox="0 0 24 24"><path d="M20 6 9 17l-5-5"/></svg>Безлимит товаров</li>
-          <li><svg viewBox="0 0 24 24"><path d="M20 6 9 17l-5-5"/></svg>Безлимит поисков</li>
-          <li><svg viewBox="0 0 24 24"><path d="M20 6 9 17l-5-5"/></svg>Все 3 стратегии</li>
-          <li><svg viewBox="0 0 24 24"><path d="M20 6 9 17l-5-5"/></svg>Поддержка в приоритете</li>
-        </ul>
+    </div>
+
+    <!-- RESELLER -->
+    <div class="reseller" data-reveal>
+      <div class="reseller-head">
+        <div>
+          <div class="rt">Для реселлеров</div>
+          <div class="rd">Тарифы для тех, кто закупает товары на перепродажу: цена обновляется раз в минуту, чтобы вы первыми видели лучшие предложения.</div>
+        </div>
+        <span class="reseller-badge">⚡ Проверка раз в 1 минуту</span>
+      </div>
+      <div class="reseller-grid">
+        <div class="rplan">
+          <h4>Reseller Start</h4>
+          <div class="price">990 ₽<small> / мес</small></div>
+          <div class="desc">Базовый тариф для перепродажи.</div>
+          <ul>
+            <li class="hl"><svg viewBox="0 0 24 24"><path d="M20 6 9 17l-5-5"/></svg>Проверка раз в 1 минуту</li>
+            <li><svg viewBox="0 0 24 24"><path d="M20 6 9 17l-5-5"/></svg>5 товарных подписок</li>
+            <li><svg viewBox="0 0 24 24"><path d="M20 6 9 17l-5-5"/></svg>1 поиск-подписка</li>
+          </ul>
+        </div>
+        <div class="rplan">
+          <h4>Reseller Pro</h4>
+          <div class="price">1990 ₽<small> / мес</small></div>
+          <div class="desc">Больше подписок для активной работы.</div>
+          <ul>
+            <li class="hl"><svg viewBox="0 0 24 24"><path d="M20 6 9 17l-5-5"/></svg>Проверка раз в 1 минуту</li>
+            <li><svg viewBox="0 0 24 24"><path d="M20 6 9 17l-5-5"/></svg>15 товарных подписок</li>
+            <li><svg viewBox="0 0 24 24"><path d="M20 6 9 17l-5-5"/></svg>3 поиск-подписки</li>
+          </ul>
+        </div>
       </div>
     </div>
-    <p class="plans-note" data-reveal>Сервис в раннем доступе: платные планы активируются вручную — напишите нам в Telegram, и мы всё настроим. Free и триал доступны сразу в боте по командам <b>/myplan</b> и <b>/trial</b>.</p>
+
+    <p class="plans-note" data-reveal>Оплата проходит прямо в боте через <b>ЮKassa</b> — банковской картой или через СБП. Подписка активируется автоматически сразу после подтверждения платежа. Free и триал доступны без карты по командам <b>/myplan</b> и <b>/trial</b>.</p>
+  </div>
+</section>
+
+<!-- PAYMENT & REFUND -->
+<section class="band plum" id="payment">
+  <div class="wrap">
+    <div class="sec-head">
+      <span class="eyebrow" data-reveal>Оплата и возврат</span>
+      <h2 data-reveal style="--d:.05s">Прозрачно: как платить и как вернуть.</h2>
+      <p data-reveal style="--d:.1s">Платные тарифы оформляются прямо в Telegram-боте. Приём платежей обеспечивает сервис ЮKassa.</p>
+    </div>
+    <div class="payinfo-grid">
+      <div class="paycard" data-reveal>
+        <div class="pi-ic"><svg viewBox="0 0 24 24"><rect x="2" y="5" width="20" height="14" rx="2"/><path d="M2 10h20" stroke-linecap="round"/></svg></div>
+        <h3>Способы оплаты</h3>
+        <p>Банковские карты (Visa, Mastercard, МИР) и СБП — через защищённую форму ЮKassa. Данные карты обрабатывает ЮKassa, мы их не видим и не храним.</p>
+      </div>
+      <div class="paycard" data-reveal style="--d:.08s">
+        <div class="pi-ic"><svg viewBox="0 0 24 24"><path d="M22 11.1V12a10 10 0 1 1-5.9-9.1" stroke-linecap="round"/><path d="m9 11 3 3L22 4" stroke-linecap="round" stroke-linejoin="round"/></svg></div>
+        <h3>Когда активируется</h3>
+        <p>Подписка по выбранному тарифу включается автоматически сразу после подтверждения платежа. Чек формируется через «Мой налог» в соответствии с режимом НПД.</p>
+      </div>
+      <div class="paycard" data-reveal style="--d:.16s">
+        <div class="pi-ic"><svg viewBox="0 0 24 24"><path d="M3 12a9 9 0 1 0 3-6.7L3 8" stroke-linecap="round" stroke-linejoin="round"/><path d="M3 3v5h5" stroke-linecap="round" stroke-linejoin="round"/></svg></div>
+        <h3>Отмена и возврат</h3>
+        <p>Отменить продление можно в любой момент в боте. Возврат за неиспользованный период — по заявлению на <a class="inline" href="mailto:contact@kosovandrey.ru">contact@kosovandrey.ru</a>: рассмотрим в течение 10 рабочих дней.</p>
+      </div>
+    </div>
+    <p class="pay-foot" data-reveal>Подробные условия — в <a class="inline" data-legal="offer" style="color:var(--berry-bright);font-weight:600;cursor:pointer">публичной оферте</a>. Срок подписки — 30 календарных дней с момента активации, если не указано иное.</p>
   </div>
 </section>
 
@@ -575,15 +663,19 @@ footer{background:var(--plum-deep);padding:70px 0 40px;border-top:1px solid var(
       </div>
       <div class="faq-item" data-reveal>
         <button class="faq-q">Это правда бесплатно?</button>
-        <div class="faq-a"><div class="faq-a-in">Да. Бесплатный план (до 10 товаров) доступен навсегда и без карты. Поиск по ссылке можно бесплатно попробовать 3 дня по триалу — он включается один раз на аккаунт командой /trial.</div></div>
+        <div class="faq-a"><div class="faq-a-in">Да. Бесплатный план (5 товарных подписок) доступен навсегда и без карты. Поиск по ссылке можно бесплатно попробовать 3 дня по триалу — он включается один раз на аккаунт командой /trial. Платные тарифы оплачиваются в боте через ЮKassa.</div></div>
       </div>
       <div class="faq-item" data-reveal>
         <button class="faq-q">Как часто бот проверяет цены?</button>
-        <div class="faq-a"><div class="faq-a-in">Отдельные товары — примерно раз в 10 минут, страницы поиска — раз в 20 минут. Уведомление приходит в Telegram сразу после того, как условие сработало.</div></div>
+        <div class="faq-a"><div class="faq-a-in">Зависит от тарифа: на Free — раз в 60 минут, на Lite — раз в 30, на Триале и Pro — раз в 15, на тарифах для реселлеров — раз в минуту. Уведомление приходит в Telegram сразу после того, как условие сработало.</div></div>
       </div>
       <div class="faq-item" data-reveal>
         <button class="faq-q">Что значит «учёт баллов за отзыв»?</button>
         <div class="faq-a"><div class="faq-a-in">У части товаров WB начисляет баллы за отзыв. Мы вычитаем их из цены и показываем эффективную стоимость — то, во что покупка обойдётся на деле, а не «на витрине».</div></div>
+      </div>
+      <div class="faq-item" data-reveal>
+        <button class="faq-q">Как оплатить тариф и можно ли вернуть деньги?</button>
+        <div class="faq-a"><div class="faq-a-in">Оплата проходит в боте через ЮKassa — картой или по СБП. Подписка активируется автоматически сразу после платежа, чек приходит через «Мой налог». Продление можно отменить в любой момент, а возврат за неиспользованный период оформляется по заявлению на contact@kosovandrey.ru. Подробности — в разделе «Оплата и возврат» и в публичной оферте.</div></div>
       </div>
     </div>
   </div>
@@ -595,7 +687,7 @@ footer{background:var(--plum-deep);padding:70px 0 40px;border-top:1px solid var(
     <div class="sec-head">
       <span class="eyebrow" data-reveal>Контакты</span>
       <h2 data-reveal style="--d:.05s">Мы рядом в Telegram.</h2>
-      <p data-reveal style="--d:.1s">Любой вопрос, идея или баг — пишите. Платный план тоже подключаем через переписку.</p>
+      <p data-reveal style="--d:.1s">Любой вопрос, идея или баг — пишите. По оплате, тарифам и возвратам отвечаем в Telegram и на почте.</p>
     </div>
     <div class="contact-grid">
       <div class="ccard" data-reveal>
@@ -614,6 +706,7 @@ footer{background:var(--plum-deep);padding:70px 0 40px;border-top:1px solid var(
         <div class="sub">Письмо в любое время</div>
       </div>
     </div>
+    <p class="plans-note" data-reveal style="margin-top:34px">Самозанятый Косов Андрей Александрович, ИНН 132608943050. Плательщик налога на профессиональный доход (НПД).</p>
   </div>
 </section>
 
@@ -622,7 +715,7 @@ footer{background:var(--plum-deep);padding:70px 0 40px;border-top:1px solid var(
   <div class="wrap">
     <div class="foot-top">
       <div class="foot-brand">
-        <a href="#top" class="brand"><span class="dot"></span>TryBerry</a>
+        <a href="#top" class="brand"><img src="/logo.png" class="brand-logo" alt="TryBerry">TryBerry</a>
         <p>Telegram-бот, который ловит снижение цен на Wildberries и пишет вам ровно тогда, когда выгодно.</p>
       </div>
       <div class="foot-cols">
@@ -631,6 +724,7 @@ footer{background:var(--plum-deep);padding:70px 0 40px;border-top:1px solid var(
           <a href="#features">Возможности</a>
           <a href="#triggers">Как работает</a>
           <a href="#plans">Тарифы</a>
+          <a href="#payment">Оплата и возврат</a>
           <a href="#faq">Вопросы</a>
         </div>
         <div class="foot-col">
@@ -648,7 +742,7 @@ footer{background:var(--plum-deep);padding:70px 0 40px;border-top:1px solid var(
       </div>
     </div>
     <div class="foot-bottom">
-      <span>© 2026 TryBerry. Не является частью или сервисом Wildberries.</span>
+      <span>© 2026 TryBerry · Самозанятый Косов Андрей Александрович, ИНН 132608943050. Не является частью или сервисом Wildberries.</span>
       <span>Сделано для тех, кто не хочет переплачивать.</span>
     </div>
   </div>
@@ -657,80 +751,95 @@ footer{background:var(--plum-deep);padding:70px 0 40px;border-top:1px solid var(
 <!-- LEGAL: PRIVACY -->
 <div class="legal" id="legal-privacy">
   <div class="legal-bar">
-    <a href="#" class="brand" onclick="closeLegal();return false"><span class="dot"></span>TryBerry</a>
+    <a href="#" class="brand" onclick="closeLegal();return false"><img src="/logo.png" class="brand-logo" alt="TryBerry">TryBerry</a>
     <button class="legal-close" onclick="closeLegal()">Закрыть ✕</button>
   </div>
   <div class="legal-body">
     <h1>Политика конфиденциальности</h1>
-    <div class="upd">Действует с 03 июня 2026 г.</div>
-    <p>Настоящая Политика описывает, как сервис TryBerry (далее — «Сервис», «мы») обрабатывает данные пользователей Telegram-бота <a href="https://t.me/TryBerryBot" target="_blank" rel="noopener" style="color:var(--berry-deep)">@TryBerryBot</a> и сайта tryberry.ru.</p>
+    <div class="upd">Действует с 11 июня 2026 г.</div>
+    <p>Настоящая Политика описывает, как сервис TryBerry (далее — «Сервис», «мы») обрабатывает данные пользователей Telegram-бота <a href="https://t.me/TryBerryBot" target="_blank" rel="noopener" style="color:var(--berry-deep)">@TryBerryBot</a> и сайта tryberry.ru. Оператор данных — самозанятый Косов Андрей Александрович, ИНН 132608943050.</p>
 
     <h2>1. Какие данные мы обрабатываем</h2>
     <ul>
-      <li>Идентификатор пользователя Telegram (telegram_id) и имя пользователя — для работы бота и привязки ваших подписок.</li>
+      <li>Идентификатор пользователя Telegram (telegram_id) и имя пользователя (username) — для работы бота и привязки ваших подписок.</li>
       <li>Ссылки на товары и страницы выдачи, которые вы добавляете для отслеживания, и заданные вами параметры (порог цены, процент скидки, тип триггера).</li>
+      <li>Сведения о выбранном тарифе и статусе подписки.</li>
       <li>Технические данные о работе сервиса: время проверок, результаты отслеживания цен, служебные логи.</li>
     </ul>
-    <p>Мы <b>не запрашиваем</b> и не храним логины, пароли или платёжные данные ваших аккаунтов на маркетплейсах.</p>
+    <p>Мы <b>не запрашиваем</b> и не храним логины, пароли или платёжные данные ваших аккаунтов на маркетплейсах. Данные банковской карты при оплате вводятся в защищённой форме платёжного провайдера и нам не передаются.</p>
 
     <h2>2. Зачем мы их используем</h2>
     <ul>
       <li>Чтобы отслеживать цены по вашим ссылкам и присылать уведомления в Telegram.</li>
-      <li>Чтобы применять выбранный вами тариф и лимиты.</li>
+      <li>Чтобы применять выбранный вами тариф и лимиты и проводить оплату подписки.</li>
       <li>Чтобы поддерживать работоспособность, безопасность и улучшать Сервис.</li>
     </ul>
 
     <h2>3. Передача третьим лицам</h2>
-    <p>Мы не продаём и не передаём ваши данные третьим лицам, за исключением инфраструктурных провайдеров, необходимых для работы Сервиса (хостинг, доставка сообщений через Telegram), и случаев, предусмотренных законодательством РФ.</p>
+    <p>Мы не продаём ваши данные. Передача возможна только в объёме, необходимом для работы Сервиса: платёжному провайдеру <b>ООО НКО «ЮМани»</b> (сервис ЮKassa), ИНН 7750005725 — для приёма оплаты и формирования чека; инфраструктурным провайдерам (хостинг, доставка сообщений через Telegram); а также в случаях, прямо предусмотренных законодательством РФ. Платёжные данные обрабатываются на стороне ЮKassa в соответствии с её правилами и стандартами безопасности.</p>
 
     <h2>4. Хранение и удаление</h2>
-    <p>Данные хранятся, пока вы пользуетесь Сервисом. Вы можете удалить свои подписки в боте, а для полного удаления данных — написать нам в Telegram <a href="https://t.me/kosov_andrey" target="_blank" rel="noopener" style="color:var(--berry-deep)">@kosov_andrey</a>.</p>
+    <p>Данные хранятся, пока вы пользуетесь Сервисом. Вы можете удалить свои подписки в боте, а для полного удаления данных — написать на <a href="mailto:contact@kosovandrey.ru" style="color:var(--berry-deep)">contact@kosovandrey.ru</a> или в Telegram <a href="https://t.me/kosov_andrey" target="_blank" rel="noopener" style="color:var(--berry-deep)">@kosov_andrey</a>. Запрос обрабатывается в разумный срок. Данные о платежах хранятся в сроки, установленные законодательством для учёта и налоговой отчётности.</p>
 
     <h2>5. Cookies на сайте</h2>
     <p>Сайт tryberry.ru может использовать технические cookies для корректной работы. Аналитические cookies применяются только при наличии вашего согласия.</p>
 
     <h2>6. Контакты оператора</h2>
-    <p>Оператор: <span class="ph">[ФИО / самозанятый, ИНН]</span>. Связь по вопросам обработки данных: <a href="mailto:contact@kosovandrey.ru" style="color:var(--berry-deep)">contact@kosovandrey.ru</a> или <a href="https://t.me/kosov_andrey" target="_blank" rel="noopener" style="color:var(--berry-deep)">@kosov_andrey</a>.</p>
+    <p>Оператор: самозанятый Косов Андрей Александрович, ИНН 132608943050. Связь по вопросам обработки данных: <a href="mailto:contact@kosovandrey.ru" style="color:var(--berry-deep)">contact@kosovandrey.ru</a> или <a href="https://t.me/kosov_andrey" target="_blank" rel="noopener" style="color:var(--berry-deep)">@kosov_andrey</a>.</p>
 
-    <p style="margin-top:40px;color:var(--muted-light);font-size:.88rem">Поля в <span class="ph">[квадратных скобках]</span> заполняются реквизитами владельца перед публикацией. Документ носит шаблонный характер и не является юридической консультацией.</p>
+    <p style="margin-top:40px;color:var(--muted-light);font-size:.88rem">Действующая редакция Политики размещается на сайте tryberry.ru. При изменении Политики новая редакция вступает в силу с момента публикации.</p>
   </div>
 </div>
 
 <!-- LEGAL: OFFER -->
 <div class="legal" id="legal-offer">
   <div class="legal-bar">
-    <a href="#" class="brand" onclick="closeLegal();return false"><span class="dot"></span>TryBerry</a>
+    <a href="#" class="brand" onclick="closeLegal();return false"><img src="/logo.png" class="brand-logo" alt="TryBerry">TryBerry</a>
     <button class="legal-close" onclick="closeLegal()">Закрыть ✕</button>
   </div>
   <div class="legal-body">
-    <h1>Публичная оферта</h1>
-    <div class="upd">Редакция от 03 июня 2026 г.</div>
-    <p>Настоящий документ является публичной офертой <span class="ph">[ФИО / самозанятый, ИНН]</span> (далее — «Исполнитель») о предоставлении доступа к сервису TryBerry. Начало использования бота <a href="https://t.me/TryBerryBot" target="_blank" rel="noopener" style="color:var(--berry-deep)">@TryBerryBot</a> означает полное согласие с условиями оферты.</p>
+    <h1>Публичная оферта на оказание информационных услуг</h1>
+    <div class="upd">Редакция от 11 июня 2026 г.</div>
+    <p>Настоящий документ является публичной офертой (предложением) самозанятого Косов Андрей Александрович, применяющего специальный налоговый режим «Налог на профессиональный доход» (НПД), ИНН 132608943050, email <a href="mailto:contact@kosovandrey.ru" style="color:var(--berry-deep)">contact@kosovandrey.ru</a> (далее — «Исполнитель»), заключить договор возмездного оказания информационных услуг по мониторингу цен на изложенных ниже условиях с любым дееспособным физическим лицом (далее — «Пользователь»).</p>
 
-    <h2>1. Предмет</h2>
-    <p>Исполнитель предоставляет Пользователю доступ к функциям отслеживания цен на товары и страницы выдачи маркетплейсов и отправке уведомлений в Telegram в объёме выбранного тарифа.</p>
+    <h2>1. Предмет договора</h2>
+    <p>1.1. Исполнитель предоставляет Пользователю доступ к функциям Telegram-бота <a href="https://t.me/TryBerryBot" target="_blank" rel="noopener" style="color:var(--berry-deep)">@TryBerryBot</a> (далее — «Сервис») по отслеживанию публичных цен на товары и страницы поисковой выдачи маркетплейсов и направлению Пользователю уведомлений в Telegram в объёме выбранного тарифа.</p>
+    <p>1.2. Услуга носит информационный характер. Сервис предоставляет сведения об изменении цен и не является торговой площадкой, посредником или участником сделок купли-продажи.</p>
 
-    <h2>2. Тарифы и условия</h2>
+    <h2>2. Тарифы и срок</h2>
+    <p>2.1. Действующие тарифы, лимиты и периодичность проверок указаны в разделе «Тарифы» на сайте tryberry.ru и в Сервисе. Бесплатные тарифы (Free, Триал) предоставляются без взимания платы.</p>
+    <p>2.2. Платный тариф предоставляется на оплаченный период — <b>30 (тридцать) календарных дней</b> с момента активации, если для тарифа не указан иной срок.</p>
+    <p>2.3. Исполнитель вправе изменять состав тарифов и их стоимость; новые условия применяются к будущим периодам и не затрагивают уже оплаченный период.</p>
+
+    <h2>3. Порядок оплаты и момент акцепта</h2>
+    <p>3.1. Оплата выбранного тарифа производится в Telegram-боте через сервис приёма платежей <b>ЮKassa</b> (банковской картой или через СБП).</p>
+    <p>3.2. Полным и безоговорочным акцептом настоящей оферты является оплата Пользователем выбранного тарифа. С момента акцепта договор считается заключённым на условиях настоящей оферты.</p>
+    <p>3.3. Услуга (доступ к функциям выбранного тарифа) активируется автоматически после подтверждения платежа платёжным сервисом.</p>
+    <p>3.4. Как плательщик НПД, Исполнитель формирует и направляет Пользователю чек через приложение «Мой налог» в соответствии с Федеральным законом № 422-ФЗ.</p>
+
+    <h2>4. Отказ от услуги и возврат</h2>
+    <p>4.1. Пользователь вправе отказаться от услуги и прекратить продление подписки в любой момент в Сервисе.</p>
+    <p>4.2. Для возврата денежных средств за неиспользованный (оплаченный, но не оказанный) период Пользователь направляет заявление на email <a href="mailto:contact@kosovandrey.ru" style="color:var(--berry-deep)">contact@kosovandrey.ru</a> с указанием Telegram-аккаунта и даты оплаты.</p>
+    <p>4.3. Заявление рассматривается в течение 10 (десяти) рабочих дней. Возврат за неиспользованный период производится тем же способом, которым была произведена оплата, в срок до 10 (десяти) рабочих дней с момента согласования суммы. Сумма возврата рассчитывается пропорционально неиспользованному периоду.</p>
+
+    <h2>5. Что Сервис не делает</h2>
     <ul>
-      <li><b>Free</b> — бесплатно, бессрочно: до 10 отслеживаемых товаров.</li>
-      <li><b>Триал</b> — бесплатно, 3 дня, однократно на аккаунт: до 10 товаров и до 3 поисков по выдаче.</li>
-      <li><b>Basic / Pro / Unlimited</b> — платные тарифы с расширенными лимитами. Стоимость и порядок оплаты согласуются индивидуально на момент подключения.</li>
+      <li>не запрашивает и не требует доступа к личному кабинету или аккаунту Пользователя на Wildberries или иных маркетплейсах, не запрашивает логины и пароли;</li>
+      <li>не продаёт товары и не является продавцом, представителем, партнёром или официальным сервисом Wildberries и иных маркетплейсов;</li>
+      <li>не гарантирует наличие, цену или условия покупки товара: уведомления носят справочно-информационный характер, цены на маркетплейсах могут меняться в любой момент.</li>
     </ul>
-    <p>Актуальные лимиты приведены в разделе «Тарифы» на сайте и могут уточняться Исполнителем.</p>
 
-    <h2>3. Порядок оплаты</h2>
-    <p>В период раннего доступа подключение платных тарифов выполняется вручную после обращения Пользователя. Способы оплаты и сумма сообщаются Исполнителем до активации.</p>
+    <h2>6. Перерывы в работе Сервиса</h2>
+    <p>Исполнитель вправе временно приостанавливать работу Сервиса для проведения технических, профилактических и иных работ, а также в случае сбоев, аварий и иных обстоятельств, в том числе не зависящих от Исполнителя (включая действия третьих лиц, провайдеров, операторов связи и работу маркетплейсов). Исполнитель прилагает разумные усилия для скорейшего восстановления работы Сервиса. В период недоступности Сервиса периодичность проверки цен и доставки уведомлений может изменяться, а уведомления — задерживаться или не направляться.</p>
 
-    <h2>4. Ограничение ответственности</h2>
-    <p>Сервис предоставляется «как есть». Исполнитель прилагает разумные усилия для точности и своевременности уведомлений, но не гарантирует беспрерывной работы и не несёт ответственности за решения о покупке, изменения цен и политику маркетплейсов. TryBerry не связан с Wildberries и не является его официальным сервисом.</p>
+    <h2>7. Ограничение ответственности</h2>
+    <p>Сервис предоставляется «как есть». Исполнитель прилагает разумные усилия для точности и своевременности уведомлений, но не гарантирует бесперебойной работы и не несёт ответственности за решения Пользователя о покупке, за изменения цен и политику маркетплейсов.</p>
 
-    <h2>5. Возврат</h2>
-    <p>Условия возврата за неиспользованный период платного тарифа согласуются индивидуально в соответствии с законодательством РФ.</p>
+    <h2>8. Реквизиты Исполнителя</h2>
+    <p>Самозанятый Косов Андрей Александрович, плательщик НПД, ИНН 132608943050.<br>
+    Email: <a href="mailto:contact@kosovandrey.ru" style="color:var(--berry-deep)">contact@kosovandrey.ru</a> · Telegram: <a href="https://t.me/kosov_andrey" target="_blank" rel="noopener" style="color:var(--berry-deep)">@kosov_andrey</a>, бот <a href="https://t.me/TryBerryBot" target="_blank" rel="noopener" style="color:var(--berry-deep)">@TryBerryBot</a>.</p>
 
-    <h2>6. Реквизиты и связь</h2>
-    <p>Исполнитель: <span class="ph">[ФИО / самозанятый, ИНН, контактные данные]</span>. Поддержка: <a href="mailto:contact@kosovandrey.ru" style="color:var(--berry-deep)">contact@kosovandrey.ru</a>, <a href="https://t.me/kosov_andrey" target="_blank" rel="noopener" style="color:var(--berry-deep)">@kosov_andrey</a>.</p>
-
-    <p style="margin-top:40px;color:var(--muted-light);font-size:.88rem">Шаблон. Перед публикацией заполните реквизиты в <span class="ph">[скобках]</span> и при необходимости проверьте у юриста.</p>
+    <p style="margin-top:40px;color:var(--muted-light);font-size:.88rem">Настоящая редакция Оферты является действующей и размещается на сайте tryberry.ru. Оплата тарифа означает полное согласие с её условиями.</p>
   </div>
 </div>
 
