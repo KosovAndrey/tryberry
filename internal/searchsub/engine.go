@@ -78,6 +78,17 @@ func DiscountThreshold(baselineKopecks int64, pct int) int64 {
 	return baselineKopecks * int64(100-pct) / 100
 }
 
+// RefKopecks — опорная цена товара: от неё считалось снижение в Decide и её
+// показываем пользователю как «было». last_notified, если уведомление по паре
+// уже было, иначе baseline (first_seen_price). Для товара, впервые попавшего
+// в выдачу, опорная цена равна текущей — «было» в сообщении не появится.
+func RefKopecks(st ProductState) int64 {
+	if st.HasNotified {
+		return st.LastNotifiedKopecks
+	}
+	return st.BaselineKopecks
+}
+
 // Evaluate — отобрать товары для уведомления по подписке с правилом r.
 // Возвращает попавшие ProductState (с ценами) для формирования батч-сообщения.
 // nil, если ничего не сработало.

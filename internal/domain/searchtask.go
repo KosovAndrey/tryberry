@@ -12,12 +12,18 @@ type SearchTask struct {
 }
 
 // SearchHitItem — один сработавший товар в уведомлении поиск-подписки.
+//
+// PrevPriceKopecks — опорная цена, от которой движок считал снижение:
+// last_notified (если по паре уже было уведомление) или baseline
+// (first_seen_price). Зачёркнутая цена WB (price.basic) сюда НЕ попадает:
+// она маркетинговая, к реальной динамике цены отношения не имеет и при
+// первом появлении товара давала ложное «было X ₽».
 type SearchHitItem struct {
 	ProductID             int64  `json:"product_id"`
 	Name                  string `json:"name"`
 	URL                   string `json:"url"`
 	PriceKopecks          int64  `json:"price_kopecks"`
-	OldPriceKopecks       int64  `json:"old_price_kopecks"`
+	PrevPriceKopecks      int64  `json:"prev_price_kopecks"`
 	FeedbackPointsKopecks int64  `json:"feedback_points_kopecks"`
 	EffectiveKopecks      int64  `json:"effective_kopecks"` // текущая эффективная цена (== current)
 }

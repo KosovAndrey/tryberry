@@ -70,7 +70,7 @@ type SearchAlertItem struct {
 	Name         string
 	URL          string
 	EffectiveRub float64 // цена с учётом баллов (что пользователь платит по факту)
-	OldRub       float64 // цена до скидки (basic), 0 если нет
+	PrevRub      float64 // опорная цена (baseline/last-notified); «было» в сообщении
 	PointsRub    float64 // баллы за отзыв в рублях, 0 если нет
 }
 
@@ -103,8 +103,8 @@ func (n *Notifier) SendSearchAlert(ctx context.Context, a SearchAlert) error {
 	for _, it := range a.Items {
 		name := html.EscapeString(it.Name)
 		fmt.Fprintf(&sb, "📉 <a href=\"%s\">%s</a>\n", it.URL, name)
-		if it.OldRub > it.EffectiveRub && it.OldRub > 0 {
-			fmt.Fprintf(&sb, "    <b>%.0f ₽</b>  (было %.0f ₽)", it.EffectiveRub, it.OldRub)
+		if it.PrevRub > it.EffectiveRub && it.PrevRub > 0 {
+			fmt.Fprintf(&sb, "    <b>%.0f ₽</b>  (было %.0f ₽)", it.EffectiveRub, it.PrevRub)
 		} else {
 			fmt.Fprintf(&sb, "    <b>%.0f ₽</b>", it.EffectiveRub)
 		}

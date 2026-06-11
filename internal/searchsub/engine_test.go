@@ -125,3 +125,23 @@ func TestDecide_UnknownKind(t *testing.T) {
 		t.Error("неизвестный тип триггера не должен срабатывать")
 	}
 }
+
+func TestRefKopecks(t *testing.T) {
+	// Товар впервые в выдаче: опорная цена == baseline == current →
+	// «было» в сообщении не покажется (нет ложного снижения от зачёркнутой цены).
+	st := ProductState{CurrentKopecks: 5_000_000, BaselineKopecks: 5_000_000}
+	if got := RefKopecks(st); got != 5_000_000 {
+		t.Errorf("первое появление: RefKopecks=%d, want baseline 5_000_000", got)
+	}
+
+	// Уже уведомляли: опорная цена — last_notified, не baseline.
+	st = ProductState{
+		CurrentKopecks:      4_000_000,
+		BaselineKopecks:     5_000_000,
+		LastNotifiedKopecks: 4_500_000,
+		HasNotified:         true,
+	}
+	if got := RefKopecks(st); got != 4_500_000 {
+		t.Errorf("повторное: RefKopecks=%d, want last_notified 4_500_000", got)
+	}
+}

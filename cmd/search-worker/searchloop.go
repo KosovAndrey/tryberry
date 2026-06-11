@@ -214,7 +214,7 @@ func (w *searchWorker) evaluateSubscription(ctx context.Context, q *domain.Searc
 			Name:                  e.item.Name,
 			URL:                   e.item.URL,
 			PriceKopecks:          e.item.PriceKopecks,
-			OldPriceKopecks:       e.item.OldPriceKopecks,
+			PrevPriceKopecks:      searchsub.RefKopecks(h),
 			FeedbackPointsKopecks: e.item.FeedbackPointsKopecks(),
 			EffectiveKopecks:      e.eff,
 		})

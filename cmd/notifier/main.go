@@ -546,12 +546,12 @@ func makeSearchHandler(
 			return nil
 		}
 
-		// Больше скидка (old − effective) → выше в списке.
+		// Больше реальное снижение (prev − effective) → выше в списке.
 		items := make([]domain.SearchHitItem, len(ev.Items))
 		copy(items, ev.Items)
 		sort.SliceStable(items, func(i, j int) bool {
-			return (items[i].OldPriceKopecks - items[i].EffectiveKopecks) >
-				(items[j].OldPriceKopecks - items[j].EffectiveKopecks)
+			return (items[i].PrevPriceKopecks - items[i].EffectiveKopecks) >
+				(items[j].PrevPriceKopecks - items[j].EffectiveKopecks)
 		})
 
 		total := len(items)
@@ -575,7 +575,7 @@ func makeSearchHandler(
 				Name:         it.Name,
 				URL:          it.URL,
 				EffectiveRub: searchsub.Rubles(it.EffectiveKopecks),
-				OldRub:       searchsub.Rubles(it.OldPriceKopecks),
+				PrevRub:      searchsub.Rubles(it.PrevPriceKopecks),
 				PointsRub:    searchsub.Rubles(it.FeedbackPointsKopecks),
 			})
 		}
