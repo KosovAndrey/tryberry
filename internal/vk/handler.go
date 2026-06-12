@@ -7,6 +7,9 @@ import (
 	"fmt"
 	"log/slog"
 	"strings"
+	"time"
+
+	"github.com/redis/go-redis/v9"
 
 	"gitlab.com/KosovAndrey/tryberrybot/internal/domain"
 	"gitlab.com/KosovAndrey/tryberrybot/internal/repository/postgres"
@@ -36,18 +39,27 @@ type messageNew struct {
 // Команды кнопок (payload). Роутим по ним, а не по label — текст кнопки можно
 // менять, не ломая обработку.
 const (
-	cmdProfile = "profile"
-	cmdLink    = "link"
-	cmdHelp    = "help"
-	cmdAdd     = "add"
-	cmdList    = "list"
-	cmdUntrack = "untrack"
+	cmdProfile  = "profile"
+	cmdLink     = "link"
+	cmdHelp     = "help"
+	cmdAdd      = "add"
+	cmdList     = "list"
+	cmdUntrack  = "untrack"
+	cmdSearch   = "search"   // как добавить поиск-подписку
+	cmdLSearch  = "lsearch"  // список поиск-подписок
+	cmdSTrack   = "strack"   // выбор типа триггера поиск-подписки (k=any|below|disc)
+	cmdSUntrack = "suntrack" // отписка от поиска
+	cmdPlans    = "plans"    // витрина тарифов
+	cmdPlanCard = "plan"     // карточка тарифа (k=имя плана)
+	cmdBuy      = "buy"      // заглушка оплаты (k=имя плана)
+	cmdTrial    = "trial"
 )
 
-// payloadData — payload наших кнопок: {"cmd":"...","id":N}.
+// payloadData — payload наших кнопок: {"cmd":"...","id":N,"k":"..."}.
 type payloadData struct {
-	Cmd string `json:"cmd"`
-	ID  int64  `json:"id,omitempty"`
+	Cmd  string `json:"cmd"`
+	ID   int64  `json:"id,omitempty"`
+	Kind string `json:"k,omitempty"`
 }
 
 func buttonPayload(cmd string) string {
@@ -67,15 +79,18 @@ func parsePayload(payload string) payloadData {
 }
 
 // Bot — обработчик входящих событий VK. Фаза 2: привязка аккаунтов, трекинг
-// товаров по ссылке, список подписок. Поиск-подписки и тарифы — пока в TG.
+// товаров и поиск-подписки по ссылке, тарифы (заглушка оплаты), триал.
 type Bot struct {
-	client    *Client
-	log       *slog.Logger
-	userRepo  *postgres.UserRepo
-	subRepo   *postgres.SubscriptionRepo
-	prodRepo  *postgres.ProductRepo
-	registry  *scraper.Registry
-	linkCodes *redisrepo.LinkCodeStore
+	client          *Client
+	log             *slog.Logger
+	userRepo        *postgres.UserRepo
+	subRepo         *postgres.SubscriptionRepo
+	prodRepo        *postgres.ProductRepo
+	searchQueryRepo *postgres.SearchQueryRepo
+	searchSubRepo   *postgres.SearchSubscriptionRepo
+	registry        *scraper.Registry
+	linkCodes       *redisrepo.LinkCodeStore
+	rdb             *redis.Client // FSM ввода порога (может быть nil)
 }
 
 func NewBot(
@@ -84,17 +99,23 @@ func NewBot(
 	userRepo *postgres.UserRepo,
 	subRepo *postgres.SubscriptionRepo,
 	prodRepo *postgres.ProductRepo,
+	searchQueryRepo *postgres.SearchQueryRepo,
+	searchSubRepo *postgres.SearchSubscriptionRepo,
 	registry *scraper.Registry,
 	linkCodes *redisrepo.LinkCodeStore,
+	rdb *redis.Client,
 ) *Bot {
 	return &Bot{
-		client:    client,
-		log:       log,
-		userRepo:  userRepo,
-		subRepo:   subRepo,
-		prodRepo:  prodRepo,
-		registry:  registry,
-		linkCodes: linkCodes,
+		client:          client,
+		log:             log,
+		userRepo:        userRepo,
+		subRepo:         subRepo,
+		prodRepo:        prodRepo,
+		searchQueryRepo: searchQueryRepo,
+		searchSubRepo:   searchSubRepo,
+		registry:        registry,
+		linkCodes:       linkCodes,
+		rdb:             rdb,
 	}
 }
 
@@ -130,6 +151,14 @@ func menuKeyboard(linked bool) *Keyboard {
 			TextButton("📋 Мои товары", buttonPayload(cmdList), ColorPrimary),
 		},
 		[]Button{
+			TextButton("🔎 Поиск по ссылке", buttonPayload(cmdSearch), ColorSecondary),
+			TextButton("📡 Мои поиски", buttonPayload(cmdLSearch), ColorSecondary),
+		},
+		[]Button{
+			TextButton("💳 Тарифы", buttonPayload(cmdPlans), ColorSecondary),
+			TextButton("🎁 Триал", buttonPayload(cmdTrial), ColorSecondary),
+		},
+		[]Button{
 			TextButton("👤 Профиль", buttonPayload(cmdProfile), ColorSecondary),
 			TextButton("❓ Помощь", buttonPayload(cmdHelp), ColorSecondary),
 		},
@@ -158,10 +187,19 @@ func (b *Bot) handleMessage(ctx context.Context, vkID int64, text, payload strin
 			p.Cmd = cmdList
 		case "добавить товар", "добавить":
 			p.Cmd = cmdAdd
+		case "мои поиски":
+			p.Cmd = cmdLSearch
+		case "тарифы":
+			p.Cmd = cmdPlans
+		case "триал":
+			p.Cmd = cmdTrial
 		}
 	}
 
-	if p.Cmd == "" {
+	if p.Cmd != "" {
+		// Любая кнопка/команда прерывает незавершённый ввод порога.
+		b.clearSearchFSM(ctx, vkID)
+	} else {
 		// «привязать <КОД>» / «link <КОД>» — предъявление кода, выданного в TG.
 		// Код регистронезависим (Redeem приводит к UPPER), так что lower не мешает.
 		// Кнопка «Привязать Telegram» сюда не попадает — у неё payload cmd=link.
@@ -169,10 +207,14 @@ func (b *Bot) handleMessage(ctx context.Context, vkID int64, text, payload strin
 			b.handleLink(ctx, vkID, user, strings.TrimSpace(rest))
 			return
 		}
-		// Поисковая ссылка — пока только в TG (FSM порога/типа уведомления там).
+		// Ждём число (порог/процент) для поиск-подписки?
+		if fsm, ok := b.getSearchFSM(ctx, vkID); ok {
+			b.handleSearchThreshold(ctx, vkID, user, text, fsm)
+			return
+		}
+		// Поисковая ссылка → флоу поиск-подписки.
 		if _, err := b.registry.FindSearchByURL(text); err == nil {
-			b.send(ctx, vkID, "🔎 Поиск-подписки пока доступны только в Telegram-боте: @TryBerryBot.\n\n"+
-				"Здесь я умею следить за отдельными товарами — отправь ссылку на товар.", kb)
+			b.startSearchTrack(ctx, vkID, user, text)
 			return
 		}
 		// Ссылка на товар → трекинг.
@@ -196,6 +238,25 @@ func (b *Bot) handleMessage(ctx context.Context, vkID int64, text, payload strin
 		b.handleList(ctx, vkID, user, "")
 	case cmdUntrack:
 		b.handleUntrack(ctx, vkID, user, p.ID)
+	case cmdSearch:
+		b.send(ctx, vkID, "🔎 Поиск по ссылке\n\n"+
+			"Отправь ссылку на поисковую выдачу Wildberries — буду следить за всей выдачей и напишу, когда товары подешевеют.\n\n"+
+			"Как получить ссылку: на сайте WB введи запрос в поиск и скопируй адрес страницы.\n\n"+
+			"Пример:\nhttps://www.wildberries.ru/catalog/0/search.aspx?search=наушники", kb)
+	case cmdLSearch:
+		b.handleListSearch(ctx, vkID, user, "")
+	case cmdSTrack:
+		b.handleSearchTrigger(ctx, vkID, user, p)
+	case cmdSUntrack:
+		b.handleUntrackSearch(ctx, vkID, user, p.ID)
+	case cmdPlans:
+		b.sendPlans(ctx, vkID, user)
+	case cmdPlanCard:
+		b.sendPlanCard(ctx, vkID, user, p.Kind)
+	case cmdBuy:
+		b.sendBuyStub(ctx, vkID, user, p.Kind)
+	case cmdTrial:
+		b.handleTrial(ctx, vkID, user)
 	default:
 		b.send(ctx, vkID, b.welcomeText(user), kb)
 	}
@@ -240,8 +301,16 @@ func (b *Bot) profileText(u *domain.User) string {
 	if u.TelegramID != 0 {
 		tg = "привязан ✅"
 	}
-	return fmt.Sprintf("👤 Профиль\n\nVK: привязан ✅\nTelegram: %s\nТариф: %s\n\n"+
-		"Управление подписками и тарифом — пока в Telegram-боте.", tg, u.Plan)
+	now := time.Now()
+	plan := u.EffectivePlan(now)
+	planLine := "Тариф: " + plan.Title
+	if u.PlanExpiresAt != nil && !u.PlanExpired(now) {
+		planLine += " (до " + u.PlanExpiresAt.Format(dateLayout) + ")"
+	}
+	return fmt.Sprintf("👤 Профиль\n\nVK: привязан ✅\nTelegram: %s\n%s\n"+
+		"📦 Товаров: до %d · 🔎 Поисков: до %d\n\n"+
+		"Куда слать уведомления (TG/VK/оба) — настраивается в Telegram-боте: Профиль → Уведомления.",
+		tg, planLine, plan.MaxProduct, plan.MaxSearch)
 }
 
 func (b *Bot) linkInstructionsText(u *domain.User) string {
@@ -258,16 +327,17 @@ func (b *Bot) linkInstructionsText(u *domain.User) string {
 
 func (b *Bot) helpText(u *domain.User) string {
 	base := "❓ Помощь\n\nЯ TryBerry — слежу за ценами на Wildberries и уведомляю о снижении 🍓\n\n" +
-		"Как добавить товар: отправь ссылку на товар WB прямо в чат — без команд.\n\n" +
+		"Как добавить товар: отправь ссылку на товар WB прямо в чат — без команд.\n" +
+		"Поиск по ссылке: отправь ссылку на поисковую выдачу WB — буду следить за всей выдачей.\n\n" +
 		"Кнопки внизу:\n" +
-		"➕ Добавить товар — как добавить\n" +
-		"📋 Мои товары — список подписок, там же отписка\n" +
+		"➕ Добавить товар / 🔎 Поиск по ссылке — как добавить\n" +
+		"📋 Мои товары / 📡 Мои поиски — списки, там же отписка\n" +
+		"💳 Тарифы — лимиты и цены, 🎁 Триал — попробовать поиск бесплатно\n" +
 		"👤 Профиль — статус аккаунта и тариф\n"
 	if u.TelegramID == 0 {
 		base += "🔗 Привязать Telegram — связать аккаунты\n"
 	}
-	base += "\nПоиск-подписки (слежение за всей поисковой выдачей), тарифы и тонкая настройка уведомлений — " +
-		"в Telegram-боте: @TryBerryBot.\n\nВопросы — пиши @kosov_andrey (Telegram)."
+	base += "\nВопросы — пиши @kosov_andrey (Telegram)."
 	return base
 }
 

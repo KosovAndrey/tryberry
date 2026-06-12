@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"net/url"
 	"strconv"
 	"strings"
 	"time"
@@ -114,7 +113,7 @@ func (b *Bot) startSearchTrack(ctx context.Context, chatID int64, rawURL string,
 		return
 	}
 
-	sq, _, err := b.searchQueryRepo.Upsert(ctx, string(ss.Marketplace()), normalized, queryTextFromNormalized(normalized), nil)
+	sq, _, err := b.searchQueryRepo.Upsert(ctx, string(ss.Marketplace()), normalized, domain.QueryTextFromNormalized(normalized), nil)
 	if err != nil {
 		b.log.Error("upsert search query", "err", err)
 		b.reply(chatID, "Произошла ошибка, попробуй позже.")
@@ -190,7 +189,7 @@ func (b *Bot) handleSearchTriggerCallback(ctx context.Context, cb *tgbotapi.Call
 func (b *Bot) handleSearchThreshold(ctx context.Context, chatID, tgID int64, text string, user *domain.User, fsm searchFSM) {
 	switch domain.TriggerType(fsm.Trigger) {
 	case domain.TriggerBelowTarget:
-		price, err := parsePrice(text)
+		price, err := domain.ParsePrice(text)
 		if err != nil {
 			b.reply(chatID, "Нужно число — цена в рублях, например <code>59990</code>. Или /menu чтобы отменить.")
 			return
@@ -199,7 +198,7 @@ func (b *Bot) handleSearchThreshold(ctx context.Context, chatID, tgID int64, tex
 		b.createSearchSub(ctx, chatID, user, fsm.QueryID, domain.TriggerBelowTarget, &price, nil)
 
 	case domain.TriggerDiscountPct:
-		pct, err := parsePct(text)
+		pct, err := domain.ParsePct(text)
 		if err != nil {
 			b.reply(chatID, "Нужно целое число от 1 до 99, например <code>20</code>. Или /menu чтобы отменить.")
 			return
@@ -248,7 +247,7 @@ func (b *Bot) createSearchSub(ctx context.Context, chatID int64, user *domain.Us
 			tgbotapi.NewInlineKeyboardButtonData("◀️ В меню", "menu:main"),
 		),
 	)
-	m := tgbotapi.NewMessage(chatID, "✅ <b>Готово!</b> "+triggerDescription(trigger, target, pct)+"\n\nПроверяю выдачу регулярно и пришлю, когда товары подешевеют 🔔")
+	m := tgbotapi.NewMessage(chatID, "✅ <b>Готово!</b> "+domain.TriggerDescription(trigger, target, pct)+"\n\nПроверяю выдачу регулярно и пришлю, когда товары подешевеют 🔔")
 	m.ParseMode = "HTML"
 	m.ReplyMarkup = keyboard
 	b.send(m)
@@ -287,7 +286,7 @@ func (b *Bot) buildSearchListView(subs []*domain.SearchSubscription) (string, tg
 	fmt.Fprintf(&sb, "🔎 <b>Поиск-подписки — %d активных</b>\n\n", len(subs))
 	for i, s := range subs {
 		fmt.Fprintf(&sb, "%d. <b>%s</b>\n   %s\n\n",
-			i+1, htmlEscape(s.QueryText), triggerDescription(s.TriggerType, s.TargetPrice, s.DiscountPct))
+			i+1, htmlEscape(s.QueryText), domain.TriggerDescription(s.TriggerType, s.TargetPrice, s.DiscountPct))
 	}
 
 	var rows [][]tgbotapi.InlineKeyboardButton
@@ -340,65 +339,6 @@ func (b *Bot) callbackUntrackSearch(ctx context.Context, cb *tgbotapi.CallbackQu
 }
 
 // ── helpers ───────────────────────────────────────────────────────────────────
-
-// queryTextFromNormalized — достать человекочитаемый запрос из нормализованного
-// URL (...search.aspx?search=...&sort=...) для отображения.
-func queryTextFromNormalized(normalized string) string {
-	const marker = "search="
-	i := strings.Index(normalized, marker)
-	if i < 0 {
-		return normalized
-	}
-	rest := normalized[i+len(marker):]
-	if amp := strings.IndexByte(rest, '&'); amp >= 0 {
-		rest = rest[:amp]
-	}
-	rest = strings.ReplaceAll(rest, "+", " ")
-	if dec, err := url.QueryUnescape(rest); err == nil {
-		return dec
-	}
-	return rest
-}
-
-func triggerDescription(t domain.TriggerType, target *float64, pct *int16) string {
-	switch t {
-	case domain.TriggerBelowTarget:
-		if target != nil {
-			return fmt.Sprintf("📉 уведомлю, когда цена опустится ниже %.0f ₽", *target)
-		}
-		return "📉 уведомлю при достижении целевой цены"
-	case domain.TriggerAnyDrop:
-		return "🔻 уведомлю при любом снижении цены"
-	case domain.TriggerDiscountPct:
-		if pct != nil {
-			return fmt.Sprintf("％ уведомлю при скидке от %d%%", *pct)
-		}
-		return "％ уведомлю при заметной скидке"
-	default:
-		return ""
-	}
-}
-
-func parsePrice(s string) (float64, error) {
-	s = strings.TrimSpace(strings.ReplaceAll(s, ",", "."))
-	s = strings.ReplaceAll(s, " ", "")
-	s = strings.TrimSuffix(s, "₽")
-	s = strings.TrimSuffix(s, "руб")
-	v, err := strconv.ParseFloat(strings.TrimSpace(s), 64)
-	if err != nil || v <= 0 {
-		return 0, errors.New("invalid price")
-	}
-	return v, nil
-}
-
-func parsePct(s string) (int16, error) {
-	s = strings.TrimSpace(strings.TrimSuffix(strings.TrimSpace(s), "%"))
-	v, err := strconv.Atoi(s)
-	if err != nil || v < 1 || v > 99 {
-		return 0, errors.New("invalid pct")
-	}
-	return int16(v), nil
-}
 
 func htmlEscape(s string) string {
 	r := strings.NewReplacer("&", "&amp;", "<", "&lt;", ">", "&gt;")

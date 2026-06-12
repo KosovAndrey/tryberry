@@ -39,24 +39,11 @@ func (b *Bot) handleRefStart(ctx context.Context, chatID int64, user *domain.Use
 			"🎁 За приглашение тебе доступен расширенный триал — "+
 			"<b>%d %s вместо %d</b>. Жми «Триал» ниже, когда захочешь попробовать поиск по ссылке.\n\n"+
 			"А начать можно просто: отправь мне ссылку на любой товар WB 👇",
-		days, daysWord(days), int(domain.TrialDuration.Hours()/24))
+		days, domain.DaysWord(days), int(domain.TrialDuration.Hours()/24))
 	b.showView(chatID, 0, text, mainMenuKeyboard())
 }
 
 // ── /ref — моя реферальная ссылка и статистика ───────────────────────────────
-
-// daysWord — «3 дня», «7 дней», «21 день».
-func daysWord(n int) string {
-	n10, n100 := n%10, n%100
-	switch {
-	case n10 == 1 && n100 != 11:
-		return "день"
-	case n10 >= 2 && n10 <= 4 && (n100 < 12 || n100 > 14):
-		return "дня"
-	default:
-		return "дней"
-	}
-}
 
 // handleRef — экран рефералки. messageID != 0 → в том же сообщении (меню),
 // 0 → новым сообщением (команда /ref).
@@ -91,14 +78,14 @@ func (b *Bot) handleRef(ctx context.Context, chatID int64, messageID int, user *
 			"Освоились в боте: <b>%d</b>\n"+
 			"Начислено дней: <b>%d</b>",
 		link,
-		trialDays, daysWord(trialDays), int(domain.TrialDuration.Hours()/24),
-		domain.ReferralActivatedRewardDays, daysWord(domain.ReferralActivatedRewardDays),
-		domain.ReferralPaidRewardDays, daysWord(domain.ReferralPaidRewardDays),
+		trialDays, domain.DaysWord(trialDays), int(domain.TrialDuration.Hours()/24),
+		domain.ReferralActivatedRewardDays, domain.DaysWord(domain.ReferralActivatedRewardDays),
+		domain.ReferralPaidRewardDays, domain.DaysWord(domain.ReferralPaidRewardDays),
 		stats.Invited, stats.Activated, stats.DaysGranted)
 
 	shareText := fmt.Sprintf(
 		"Бот следит за ценами на Wildberries и пишет, когда они падают. По моей ссылке — триал %d %s 🍓",
-		trialDays, daysWord(trialDays))
+		trialDays, domain.DaysWord(trialDays))
 	shareURL := "https://t.me/share/url?url=" + url.QueryEscape(link) + "&text=" + url.QueryEscape(shareText)
 
 	keyboard := tgbotapi.NewInlineKeyboardMarkup(

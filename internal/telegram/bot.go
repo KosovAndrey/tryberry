@@ -411,7 +411,7 @@ func (b *Bot) buildListView(subs []*domain.Subscription) (string, tgbotapi.Inlin
 
 		fmt.Fprintf(&sb, "%d. %s <b>%s</b>\n   сейчас %s  |  при подписке %.0f ₽\n   %s\n\n",
 			i+1, marketplaceIcon(sub.ProductMarketplace), sub.ProductName, currentPriceStr, sub.FirstSeenPrice,
-			triggerDescription(sub.TriggerType, sub.TargetPrice, sub.DiscountPct),
+			domain.TriggerDescription(sub.TriggerType, sub.TargetPrice, sub.DiscountPct),
 		)
 	}
 

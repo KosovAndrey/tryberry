@@ -3,39 +3,16 @@ package telegram
 import (
 	"fmt"
 	"strings"
-	"time"
 
 	tgbotapi "github.com/go-telegram-bot-api/telegram-bot-api/v5"
 
 	"gitlab.com/KosovAndrey/tryberrybot/internal/domain"
 )
 
-// Витрина тарифов: порядок и слоганы — здесь, цифры (цены/лимиты/интервалы) —
-// в domain.Plans. Кнопка «Оплатить» пока ведёт на заглушку: платёжный сервис
-// (ЮKassa) на подключении, подписки НЕ выдаются. После запуска оплаты
-// plan:buy:* заменяется на создание платежа.
-var showcasePlans = []struct {
-	name    string
-	tagline string
-}{
-	{"lite", "следить за своими покупками"},
-	{"pro", "большие списки и быстрые проверки"},
-	{"reseller_start", "для перекупов: проверка раз в минуту"},
-	{"reseller_pro", "максимум скорости и объёма"},
-}
-
-// intervalPhrase — «каждую минуту / каждые 15 минут / каждый час».
-func intervalPhrase(d time.Duration) string {
-	m := int(d.Minutes())
-	switch {
-	case m <= 1:
-		return "каждую минуту"
-	case m == 60:
-		return "каждый час"
-	default:
-		return fmt.Sprintf("каждые %d минут", m)
-	}
-}
+// Витрина тарифов: порядок/слоганы — domain.PlanShowcase, цифры — domain.Plans.
+// Кнопка «Оплатить» пока ведёт на заглушку: платёжный сервис (ЮKassa) на
+// подключении, подписки НЕ выдаются. После запуска оплаты plan:buy:*
+// заменяется на создание платежа.
 
 // sendPlansMenu — список тарифов с ценами. messageID != 0 → в том же сообщении.
 func (b *Bot) sendPlansMenu(chatID int64, messageID int) {
@@ -44,14 +21,14 @@ func (b *Bot) sendPlansMenu(chatID int64, messageID int) {
 		"Подписка открывает больше отслеживаемых товаров, поиск-подписки и частые проверки цен. Действует 30 дней с момента оплаты.\n\n")
 
 	var rows [][]tgbotapi.InlineKeyboardButton
-	for _, sp := range showcasePlans {
-		p, ok := domain.PlanByName(sp.name)
+	for _, sp := range domain.PlanShowcase {
+		p, ok := domain.PlanByName(sp.Name)
 		if !ok {
 			continue
 		}
-		fmt.Fprintf(&sb, "▫️ <b>%s</b> — %d ₽/мес · %s\n", p.Title, p.PriceRub, sp.tagline)
+		fmt.Fprintf(&sb, "▫️ <b>%s</b> — %d ₽/мес · %s\n", p.Title, p.PriceRub, sp.Tagline)
 		fmt.Fprintf(&sb, "    📦 %d товаров · 🔎 %d поисков · ⏱ %s\n\n",
-			p.MaxProduct, p.MaxSearch, intervalPhrase(p.Interval))
+			p.MaxProduct, p.MaxSearch, domain.IntervalPhrase(p.Interval))
 		rows = append(rows, tgbotapi.NewInlineKeyboardRow(
 			tgbotapi.NewInlineKeyboardButtonData(
 				fmt.Sprintf("%s — %d ₽/мес", p.Title, p.PriceRub),
@@ -76,9 +53,9 @@ func (b *Bot) sendPlanCard(chatID int64, messageID int, name string) {
 		return
 	}
 	tagline := ""
-	for _, sp := range showcasePlans {
-		if sp.name == name {
-			tagline = sp.tagline
+	for _, sp := range domain.PlanShowcase {
+		if sp.Name == name {
+			tagline = sp.Tagline
 			break
 		}
 	}
@@ -91,7 +68,7 @@ func (b *Bot) sendPlanCard(chatID int64, messageID int, name string) {
 	sb.WriteString("\n<b>Что входит:</b>\n")
 	fmt.Fprintf(&sb, "📦 До %d отслеживаемых товаров\n", p.MaxProduct)
 	fmt.Fprintf(&sb, "🔎 До %d поиск-подписок (слежу за всей поисковой выдачей)\n", p.MaxSearch)
-	fmt.Fprintf(&sb, "⏱ Проверка цен %s\n", intervalPhrase(p.Interval))
+	fmt.Fprintf(&sb, "⏱ Проверка цен %s\n", domain.IntervalPhrase(p.Interval))
 	sb.WriteString("🔔 Уведомления о снижении цены в Telegram и VK\n\n")
 	sb.WriteString("Подписка действует <b>30 дней</b> с момента оплаты.")
 
