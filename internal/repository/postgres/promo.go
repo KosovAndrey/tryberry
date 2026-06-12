@@ -55,8 +55,9 @@ func (r *PromoRepo) GetActiveByCode(ctx context.Context, code string) (*domain.P
 }
 
 // RedeemGrant атомарно гасит grant-код и выдаёт план: инкремент used_count под
-// лимитом, запись погашения (UNIQUE отсекает повтор) и установка плана — в одной
-// транзакции, чтобы не было «код сгорел, а план не выдан».
+// лимитом, запись погашения (UNIQUE отсекает повтор), ВЕЧНЫЕ promo_claims по
+// идентичностям (анти-фарм через отвязку, как trial_claims) и установка плана —
+// в одной транзакции, чтобы не было «код сгорел, а план не выдан».
 func (r *PromoRepo) RedeemGrant(ctx context.Context, codeID, userID int64, plan string, expiresAt time.Time) error {
 	tx, err := r.db.Begin(ctx)
 	if err != nil {
@@ -83,6 +84,34 @@ func (r *PromoRepo) RedeemGrant(ctx context.Context, codeID, userID int64, plan 
 			return domain.ErrPromoAlreadyRedeemed
 		}
 		return err
+	}
+
+	// «Один код один раз на идентичность»: строка users пересоздаётся при
+	// отвязке платформы, а клеймы по telegram_id/vk_id — вечные.
+	var tgID, vkID *int64
+	if err := tx.QueryRow(ctx,
+		`SELECT telegram_id, vk_id FROM users WHERE id = $1`, userID).Scan(&tgID, &vkID); err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return domain.ErrNotFound
+		}
+		return err
+	}
+	for _, c := range []struct {
+		platform string
+		id       *int64
+	}{{"tg", tgID}, {"vk", vkID}} {
+		if c.id == nil {
+			continue
+		}
+		if _, err := tx.Exec(ctx,
+			`INSERT INTO promo_claims (code_id, platform, external_id) VALUES ($1, $2, $3)`,
+			codeID, c.platform, *c.id); err != nil {
+			var pgErr *pgconn.PgError
+			if errors.As(err, &pgErr) && pgErr.Code == "23505" { // идентичность уже гасила код
+				return domain.ErrPromoAlreadyRedeemed
+			}
+			return err
+		}
 	}
 
 	tag, err = tx.Exec(ctx,
