@@ -60,6 +60,26 @@ func (r *UserRepo) GetByTelegramID(ctx context.Context, telegramID int64) (*doma
 	return u, nil
 }
 
+// GetByID — юзер по внутреннему id (роутинг уведомлений, рефералка).
+func (r *UserRepo) GetByID(ctx context.Context, id int64) (*domain.User, error) {
+	const q = `
+		SELECT id, COALESCE(telegram_id, 0), COALESCE(username, ''), created_at, plan, plan_expires_at,
+		       trial_used, referred_by, vk_id, notify_channel
+		FROM users WHERE id = $1`
+
+	u := &domain.User{}
+	err := r.db.QueryRow(ctx, q, id).
+		Scan(&u.ID, &u.TelegramID, &u.Username, &u.CreatedAt, &u.Plan, &u.PlanExpiresAt, &u.TrialUsed, &u.ReferredBy,
+			&u.VKID, &u.NotifyChannel)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return nil, domain.ErrNotFound
+	}
+	if err != nil {
+		return nil, err
+	}
+	return u, nil
+}
+
 // GetByVKID — юзер по VK-идентичности. telegram_id может быть NULL (VK-only) →
 // COALESCE в 0.
 func (r *UserRepo) GetByVKID(ctx context.Context, vkID int64) (*domain.User, error) {
@@ -158,6 +178,62 @@ func (r *UserRepo) UnlinkVK(ctx context.Context, userID int64) error {
 	return err
 }
 
+// LinkTG привязывает telegram_id к юзеру userID (зеркало LinkVK: код выдан в VK,
+// предъявлен в TG). Пустой TG-аккаунт (free, без триала и подписок) поглощаем,
+// непустой → domain.ErrTGAccountBusy (merge только вручную).
+func (r *UserRepo) LinkTG(ctx context.Context, userID, telegramID int64, username string) error {
+	tx, err := r.db.Begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback(ctx) //nolint:errcheck // rollback после commit — no-op
+
+	// Кто уже держит этот telegram_id? FOR UPDATE против гонки двух привязок.
+	var holderID int64
+	var holderTrialUsed bool
+	var holderEmpty bool
+	err = tx.QueryRow(ctx, `
+		SELECT u.id, u.trial_used,
+		       u.plan = 'free' AND NOT EXISTS (SELECT 1 FROM subscriptions s WHERE s.user_id = u.id)
+		                       AND NOT EXISTS (SELECT 1 FROM search_subscriptions ss WHERE ss.user_id = u.id)
+		FROM users u WHERE u.telegram_id = $1
+		FOR UPDATE`, telegramID).Scan(&holderID, &holderTrialUsed, &holderEmpty)
+	switch {
+	case errors.Is(err, pgx.ErrNoRows):
+		// telegram_id свободен — просто привязываем.
+	case err != nil:
+		return err
+	case holderID == userID:
+		return nil // уже привязан к этому же юзеру
+	case !holderEmpty || holderTrialUsed:
+		return domain.ErrTGAccountBusy
+	default:
+		// Поглощаем пустой TG-аккаунт (см. LinkVK: FK-зависимость → «занят»).
+		if _, err := tx.Exec(ctx, `DELETE FROM users WHERE id = $1`, holderID); err != nil {
+			var pgErr *pgconn.PgError
+			if errors.As(err, &pgErr) && pgErr.Code == "23503" { // foreign_key_violation
+				return domain.ErrTGAccountBusy
+			}
+			return err
+		}
+	}
+
+	if _, err := tx.Exec(ctx, `UPDATE users SET telegram_id = $2, username = $3 WHERE id = $1`,
+		userID, telegramID, username); err != nil {
+		return err
+	}
+	return tx.Commit(ctx)
+}
+
+// UnlinkTG — отвязать Telegram (для смены привязки из VK). Бывший TG-юзер при
+// следующем /start создаст свежий пустой аккаунт.
+func (r *UserRepo) UnlinkTG(ctx context.Context, userID int64) error {
+	// CHECK chk_user_has_identity не даст отвязать TG у TG-only юзера.
+	_, err := r.db.Exec(ctx,
+		`UPDATE users SET telegram_id = NULL, username = NULL WHERE id = $1 AND vk_id IS NOT NULL`, userID)
+	return err
+}
+
 // SetNotifyChannel — куда слать уведомления (auto|tg|vk|both).
 func (r *UserRepo) SetNotifyChannel(ctx context.Context, userID int64, channel string) error {
 	_, err := r.db.Exec(ctx, `UPDATE users SET notify_channel = $2 WHERE id = $1`, userID, channel)
@@ -193,12 +269,12 @@ func (r *UserRepo) ActivateTrial(ctx context.Context, userID int64, expiresAt ti
 	return tag.RowsAffected() > 0, nil
 }
 
-// ListExpiringUnreminded — telegram_id юзеров с тарифом, истекающим в окне
+// ListExpiringUnreminded — users.id юзеров с тарифом, истекающим в окне
 // (now, until], которым ещё не слали напоминание. Reconciler в notifier шлёт им
-// разовое уведомление об истечении и помечает MarkReminded.
+// разовое уведомление об истечении (TG/VK по notify_channel) и помечает MarkReminded.
 func (r *UserRepo) ListExpiringUnreminded(ctx context.Context, until time.Time) ([]int64, error) {
 	const q = `
-		SELECT telegram_id
+		SELECT id
 		FROM users
 		WHERE plan_expires_at IS NOT NULL
 		  AND plan_expires_at > NOW() AND plan_expires_at <= $1
@@ -221,12 +297,12 @@ func (r *UserRepo) ListExpiringUnreminded(ctx context.Context, until time.Time) 
 }
 
 // MarkReminded ставит plan_reminded_at=NOW() — защита от повторной отправки.
-func (r *UserRepo) MarkReminded(ctx context.Context, telegramIDs []int64) error {
-	if len(telegramIDs) == 0 {
+func (r *UserRepo) MarkReminded(ctx context.Context, userIDs []int64) error {
+	if len(userIDs) == 0 {
 		return nil
 	}
-	const q = `UPDATE users SET plan_reminded_at = NOW() WHERE telegram_id = ANY($1)`
-	_, err := r.db.Exec(ctx, q, telegramIDs)
+	const q = `UPDATE users SET plan_reminded_at = NOW() WHERE id = ANY($1)`
+	_, err := r.db.Exec(ctx, q, userIDs)
 	return err
 }
 
@@ -244,7 +320,7 @@ type UserUsage struct {
 // ListWithUsage — пользователи с числом активных подписок, по убыванию активности.
 func (r *UserRepo) ListWithUsage(ctx context.Context, limit int) ([]UserUsage, error) {
 	const q = `
-		SELECT u.telegram_id, COALESCE(u.username, ''), u.plan, u.plan_expires_at, u.trial_used,
+		SELECT COALESCE(u.telegram_id, 0), COALESCE(u.username, ''), u.plan, u.plan_expires_at, u.trial_used,
 		       (SELECT count(*) FROM subscriptions s WHERE s.user_id = u.id AND s.active) AS products,
 		       (SELECT count(*) FROM search_subscriptions ss WHERE ss.user_id = u.id AND ss.active) AS searches
 		FROM users u

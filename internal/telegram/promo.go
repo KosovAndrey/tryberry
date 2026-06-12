@@ -62,7 +62,7 @@ func (b *Bot) applyGrantPromo(ctx context.Context, chatID int64, user *domain.Us
 		return
 	}
 
-	if err := b.promoRepo.RedeemGrant(ctx, promo.ID, user.ID, user.TelegramID, promo.Plan, expiresAt); err != nil {
+	if err := b.promoRepo.RedeemGrant(ctx, promo.ID, user.ID, promo.Plan, expiresAt); err != nil {
 		switch {
 		case errors.Is(err, domain.ErrPromoAlreadyRedeemed):
 			b.reply(chatID, "🎟 Этот промокод ты уже активировал.")

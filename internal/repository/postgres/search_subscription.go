@@ -108,7 +108,7 @@ func (r *SearchSubscriptionRepo) GetActiveByQueryID(ctx context.Context, queryID
 	const q = `
 		SELECT s.id, s.user_id, s.search_query_id, s.trigger_type,
 		       s.target_price, s.discount_pct, s.active, s.created_at, s.updated_at,
-		       s.last_evaluated_at, u.telegram_id, u.plan, u.plan_expires_at
+		       s.last_evaluated_at, COALESCE(u.telegram_id, 0), u.plan, u.plan_expires_at
 		FROM search_subscriptions s
 		JOIN users u ON u.id = s.user_id
 		WHERE s.search_query_id = $1 AND s.active = TRUE`
@@ -233,7 +233,7 @@ type PausedSearchSub struct {
 
 // PauseExpiredSearchSubs ставит на паузу активные поиск-подписки пользователей с
 // истёкшим планом (effective plan = free → MaxSearch=0, поиск не положен вовсе).
-// Возвращает telegram_id затронутых пользователей (без дублей) для разового
+// Возвращает users.id затронутых пользователей (без дублей) для разового
 // уведомления. Идемпотентна: паузные (active=FALSE) под условие не попадают,
 // поэтому повторный вызов не шлёт уведомление снова.
 func (r *SearchSubscriptionRepo) PauseExpiredSearchSubs(ctx context.Context) ([]int64, error) {
@@ -244,7 +244,7 @@ func (r *SearchSubscriptionRepo) PauseExpiredSearchSubs(ctx context.Context) ([]
 		WHERE s.user_id = u.id
 		  AND s.active = TRUE AND s.paused_at IS NULL
 		  AND u.plan_expires_at IS NOT NULL AND u.plan_expires_at < NOW()
-		RETURNING u.telegram_id`
+		RETURNING u.id`
 
 	rows, err := r.db.Query(ctx, q)
 	if err != nil {

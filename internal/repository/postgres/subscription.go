@@ -127,7 +127,7 @@ func (r *SubscriptionRepo) GetActiveByProductIDWithTelegramID(ctx context.Contex
 		       s.trigger_type, s.target_price, s.discount_pct, s.notified,
 		       s.active, s.created_at, s.updated_at, s.last_evaluated_at,
 		       p.name, p.url, COALESCE(p.image_url, ''), p.marketplace,
-		       u.telegram_id, u.plan, u.plan_expires_at
+		       COALESCE(u.telegram_id, 0), u.plan, u.plan_expires_at
 		FROM subscriptions s
 		JOIN products p ON p.id = s.product_id
 		JOIN users u ON u.id = s.user_id
@@ -269,7 +269,7 @@ type ProductSubForReconcile struct {
 // Упорядочено (user_id, created_at): вызывающий оставляет старые, гасит лишние.
 func (r *SubscriptionRepo) ListActiveOfExpiredUsers(ctx context.Context) ([]ProductSubForReconcile, error) {
 	const q = `
-		SELECT s.id, s.user_id, u.telegram_id, u.plan, u.plan_expires_at, s.created_at
+		SELECT s.id, s.user_id, COALESCE(u.telegram_id, 0), u.plan, u.plan_expires_at, s.created_at
 		FROM subscriptions s
 		JOIN users u ON u.id = s.user_id
 		WHERE s.active = TRUE AND s.paused_at IS NULL
@@ -311,7 +311,7 @@ func (r *SubscriptionRepo) PauseProductSubs(ctx context.Context, ids []int64) er
 // (чтобы вернуть ровно до лимита нового плана). Упорядочено (user_id, created_at).
 func (r *SubscriptionRepo) ListPausedWithinGrace(ctx context.Context, cutoff time.Time) ([]ProductSubForReconcile, error) {
 	const q = `
-		SELECT s.id, s.user_id, u.telegram_id, u.plan, u.plan_expires_at, s.created_at,
+		SELECT s.id, s.user_id, COALESCE(u.telegram_id, 0), u.plan, u.plan_expires_at, s.created_at,
 		       (SELECT count(*) FROM subscriptions a WHERE a.user_id = s.user_id AND a.active) AS active_count
 		FROM subscriptions s
 		JOIN users u ON u.id = s.user_id

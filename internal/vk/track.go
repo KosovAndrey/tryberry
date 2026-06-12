@@ -2,6 +2,7 @@ package vk
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"strings"
@@ -66,7 +67,7 @@ func (b *Bot) handleTrack(ctx context.Context, vkID int64, user *domain.User, ra
 		return
 	}
 
-	_, created, err := b.subRepo.Upsert(ctx, user.ID, product.ID, result.Price)
+	sub, created, err := b.subRepo.Upsert(ctx, user.ID, product.ID, result.Price)
 	if err != nil {
 		b.log.Error("vk: upsert subscription", "err", err)
 		b.send(ctx, vkID, "Произошла ошибка, попробуй позже.", nil)
@@ -79,8 +80,138 @@ func (b *Bot) handleTrack(ctx context.Context, vkID int64, user *domain.User, ra
 	}
 	b.send(ctx, vkID, fmt.Sprintf(
 		"%s\n\n%s\n💰 Текущая цена: %.0f ₽\n\n"+
-			"🔔 Напишу при любом снижении цены. Сменить тип уведомления (порог, процент) можно в Telegram-боте.",
-		head, result.Name, result.Price), menuKeyboard(user.TelegramID != 0))
+			"🔔 Сейчас уведомлю при любом снижении. Сменить тип уведомления — кнопками ниже 👇",
+		head, result.Name, result.Price), vkTriggerKeyboard(sub.ID, domain.TriggerAnyDrop))
+}
+
+// ── Тип триггера товарной подписки ────────────────────────────────────────────
+
+// vkTrackFSM — ждём число (цену/процент) для уже созданной подписки.
+type vkTrackFSM struct {
+	SubID   int64  `json:"s"`
+	Trigger string `json:"t"`
+}
+
+func trackFSMKey(vkID int64) string { return fmt.Sprintf("vk_track_fsm:%d", vkID) }
+
+func (b *Bot) getTrackFSM(ctx context.Context, vkID int64) (vkTrackFSM, bool) {
+	if b.rdb == nil {
+		return vkTrackFSM{}, false
+	}
+	raw, err := b.rdb.Get(ctx, trackFSMKey(vkID)).Result()
+	if err != nil {
+		return vkTrackFSM{}, false
+	}
+	var fsm vkTrackFSM
+	if err := json.Unmarshal([]byte(raw), &fsm); err != nil {
+		return vkTrackFSM{}, false
+	}
+	return fsm, true
+}
+
+func (b *Bot) setTrackFSM(ctx context.Context, vkID int64, fsm vkTrackFSM) error {
+	if b.rdb == nil {
+		return errors.New("redis unavailable")
+	}
+	raw, err := json.Marshal(fsm)
+	if err != nil {
+		return err
+	}
+	return b.rdb.Set(ctx, trackFSMKey(vkID), raw, fsmTTL).Err()
+}
+
+func (b *Bot) clearTrackFSM(ctx context.Context, vkID int64) {
+	if b.rdb == nil {
+		return
+	}
+	b.rdb.Del(ctx, trackFSMKey(vkID))
+}
+
+// vkTriggerKeyboard — inline-выбор стратегии под сообщением товара,
+// текущая помечена галочкой (как в TG).
+func vkTriggerKeyboard(subID int64, current domain.TriggerType) *Keyboard {
+	mark := func(label string, t domain.TriggerType) string {
+		if current == t {
+			return "✅ " + label
+		}
+		return label
+	}
+	pl := func(kind string) string {
+		return fmt.Sprintf(`{"cmd":%q,"id":%d,"k":%q}`, cmdPTrack, subID, kind)
+	}
+	return &Keyboard{Inline: true, Buttons: [][]Button{
+		{TextButton(mark("🔻 Любое снижение", domain.TriggerAnyDrop), pl("any"), ColorPrimary)},
+		{
+			TextButton(mark("📉 Ниже цены", domain.TriggerBelowTarget), pl("below"), ColorSecondary),
+			TextButton(mark("％ Скидка %", domain.TriggerDiscountPct), pl("disc"), ColorSecondary),
+		},
+	}}
+}
+
+// handleProductTrigger — нажатие кнопки типа триггера (cmd=ptrack).
+func (b *Bot) handleProductTrigger(ctx context.Context, vkID int64, user *domain.User, p payloadData) {
+	switch p.Kind {
+	case "any":
+		// id — из payload (недоверенный ввод); SetTrigger фильтрует по владельцу.
+		if err := b.subRepo.SetTrigger(ctx, p.ID, user.ID, string(domain.TriggerAnyDrop), nil, nil); err != nil {
+			b.log.Error("vk: set trigger any", "sub_id", p.ID, "err", err)
+			b.send(ctx, vkID, "Произошла ошибка, попробуй позже.", nil)
+			return
+		}
+		b.send(ctx, vkID, "🔔 Тип уведомления: "+domain.TriggerDescription(domain.TriggerAnyDrop, nil, nil),
+			vkTriggerKeyboard(p.ID, domain.TriggerAnyDrop))
+	case "below":
+		if err := b.setTrackFSM(ctx, vkID, vkTrackFSM{SubID: p.ID, Trigger: string(domain.TriggerBelowTarget)}); err != nil {
+			b.send(ctx, vkID, "Не получилось начать ввод (нет связи с хранилищем). Останется «Любое снижение».", nil)
+			return
+		}
+		b.send(ctx, vkID, "💰 Введи целевую цену в рублях (например 1499).\nУведомлю, когда цена опустится до неё или ниже.", nil)
+	case "disc":
+		if err := b.setTrackFSM(ctx, vkID, vkTrackFSM{SubID: p.ID, Trigger: string(domain.TriggerDiscountPct)}); err != nil {
+			b.send(ctx, vkID, "Не получилось начать ввод (нет связи с хранилищем). Останется «Любое снижение».", nil)
+			return
+		}
+		b.send(ctx, vkID, "％ Введи процент скидки от текущей цены (1–99, например 20).", nil)
+	}
+}
+
+// handleTrackThreshold — приём числа (порог/процент) для товарной подписки.
+func (b *Bot) handleTrackThreshold(ctx context.Context, vkID int64, user *domain.User, text string, fsm vkTrackFSM) {
+	switch domain.TriggerType(fsm.Trigger) {
+	case domain.TriggerBelowTarget:
+		price, err := domain.ParsePrice(text)
+		if err != nil {
+			b.send(ctx, vkID, "Нужно число — цена в рублях, например 1499. Любая кнопка внизу отменит ввод.", nil)
+			return
+		}
+		b.clearTrackFSM(ctx, vkID)
+		if err := b.subRepo.SetTrigger(ctx, fsm.SubID, user.ID, string(domain.TriggerBelowTarget), &price, nil); err != nil {
+			b.log.Error("vk: set trigger below", "sub_id", fsm.SubID, "err", err)
+			b.send(ctx, vkID, "Произошла ошибка, попробуй позже.", nil)
+			return
+		}
+		b.send(ctx, vkID, "✅ Готово! "+domain.TriggerDescription(domain.TriggerBelowTarget, &price, nil),
+			vkTriggerKeyboard(fsm.SubID, domain.TriggerBelowTarget))
+
+	case domain.TriggerDiscountPct:
+		pct, err := domain.ParsePct(text)
+		if err != nil {
+			b.send(ctx, vkID, "Нужно целое число от 1 до 99, например 20. Любая кнопка внизу отменит ввод.", nil)
+			return
+		}
+		b.clearTrackFSM(ctx, vkID)
+		if err := b.subRepo.SetTrigger(ctx, fsm.SubID, user.ID, string(domain.TriggerDiscountPct), nil, &pct); err != nil {
+			b.log.Error("vk: set trigger disc", "sub_id", fsm.SubID, "err", err)
+			b.send(ctx, vkID, "Произошла ошибка, попробуй позже.", nil)
+			return
+		}
+		b.send(ctx, vkID, "✅ Готово! "+domain.TriggerDescription(domain.TriggerDiscountPct, nil, &pct),
+			vkTriggerKeyboard(fsm.SubID, domain.TriggerDiscountPct))
+
+	default:
+		b.clearTrackFSM(ctx, vkID)
+		b.send(ctx, vkID, "Что-то пошло не так, отправь ссылку на товар заново.", menuKeyboard(user.TelegramID != 0))
+	}
 }
 
 // handleList — список подписок + inline-кнопки отписки. prefix — строка над

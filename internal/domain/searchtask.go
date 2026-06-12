@@ -32,10 +32,11 @@ type SearchHitItem struct {
 // одной поиск-подписки. Продюсит scraper (после оценки триггеров), разбирает
 // notifier: шлёт в Telegram и ТОЛЬКО после успешной доставки пишет
 // search_notifications (как в товарном пути). Ключ партиционирования —
-// TelegramID, чтобы уведомления одного пользователя не разъезжались по партициям.
+// UserID, чтобы уведомления одного пользователя не разъезжались по партициям.
 type SearchHitEvent struct {
 	SubID       int64           `json:"sub_id"`
-	TelegramID  int64           `json:"telegram_id"`
+	TelegramID  int64           `json:"telegram_id"` // 0 — TG не привязан (VK-only)
+	UserID      int64           `json:"user_id"`     // users.id — роутинг по notify_channel
 	QueryText   string          `json:"query_text"`
 	SearchURL   string          `json:"search_url"`
 	TriggerType string          `json:"trigger_type"`

@@ -57,7 +57,7 @@ func (r *PromoRepo) GetActiveByCode(ctx context.Context, code string) (*domain.P
 // RedeemGrant атомарно гасит grant-код и выдаёт план: инкремент used_count под
 // лимитом, запись погашения (UNIQUE отсекает повтор) и установка плана — в одной
 // транзакции, чтобы не было «код сгорел, а план не выдан».
-func (r *PromoRepo) RedeemGrant(ctx context.Context, codeID, userID, telegramID int64, plan string, expiresAt time.Time) error {
+func (r *PromoRepo) RedeemGrant(ctx context.Context, codeID, userID int64, plan string, expiresAt time.Time) error {
 	tx, err := r.db.Begin(ctx)
 	if err != nil {
 		return err
@@ -87,7 +87,7 @@ func (r *PromoRepo) RedeemGrant(ctx context.Context, codeID, userID, telegramID 
 
 	tag, err = tx.Exec(ctx,
 		`UPDATE users SET plan = $2, plan_expires_at = $3, plan_reminded_at = NULL
-		 WHERE telegram_id = $1`, telegramID, plan, expiresAt)
+		 WHERE id = $1`, userID, plan, expiresAt)
 	if err != nil {
 		return err
 	}
