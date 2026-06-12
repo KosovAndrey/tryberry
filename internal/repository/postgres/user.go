@@ -225,6 +225,152 @@ func (r *UserRepo) LinkTG(ctx context.Context, userID, telegramID int64, usernam
 	return tx.Commit(ctx)
 }
 
+// MergeAccounts — слияние двух непустых аккаунтов (владение обоими доказано
+// кодом привязки): весь контент absorbed переезжает на kept, absorbed
+// удаляется, kept получает обе идентичности и итоговый тариф (выбор юзера —
+// см. domain.ComputeMerge). detail — JSON для аудита (account_merges).
+func (r *UserRepo) MergeAccounts(ctx context.Context, keptID, absorbedID int64, plan string, expiresAt *time.Time, detail []byte) error {
+	if keptID == absorbedID {
+		return domain.ErrNotFound
+	}
+	tx, err := r.db.Begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback(ctx) //nolint:errcheck // rollback после commit — no-op
+
+	// Лочим обе строки в порядке id (анти-deadlock при встречных слияниях).
+	type row struct {
+		tgID, vkID    *int64
+		username      *string
+		plan          string
+		planExpiresAt *time.Time
+		trialUsed     bool
+		referredBy    *int64
+	}
+	read := func(id int64) (row, error) {
+		var x row
+		err := tx.QueryRow(ctx, `
+			SELECT telegram_id, vk_id, username, plan, plan_expires_at, trial_used, referred_by
+			FROM users WHERE id = $1 FOR UPDATE`, id).
+			Scan(&x.tgID, &x.vkID, &x.username, &x.plan, &x.planExpiresAt, &x.trialUsed, &x.referredBy)
+		return x, err
+	}
+	var kept, absorbed row
+	if keptID < absorbedID {
+		if kept, err = read(keptID); err != nil {
+			return err
+		}
+		if absorbed, err = read(absorbedID); err != nil {
+			return err
+		}
+	} else {
+		if absorbed, err = read(absorbedID); err != nil {
+			return err
+		}
+		if kept, err = read(keptID); err != nil {
+			return err
+		}
+	}
+
+	// Товарные подписки: UNIQUE(user_id, product_id) — дубликаты absorbed
+	// удаляем (вместе с их notifications, FK без каскада), остальные переносим.
+	if _, err := tx.Exec(ctx, `
+		DELETE FROM notifications WHERE subscription_id IN (
+			SELECT a.id FROM subscriptions a
+			JOIN subscriptions k ON k.user_id = $1 AND k.product_id = a.product_id
+			WHERE a.user_id = $2)`, keptID, absorbedID); err != nil {
+		return err
+	}
+	if _, err := tx.Exec(ctx, `
+		DELETE FROM subscriptions a USING subscriptions k
+		WHERE a.user_id = $2 AND k.user_id = $1 AND k.product_id = a.product_id`,
+		keptID, absorbedID); err != nil {
+		return err
+	}
+	if _, err := tx.Exec(ctx,
+		`UPDATE subscriptions SET user_id = $1 WHERE user_id = $2`, keptID, absorbedID); err != nil {
+		return err
+	}
+
+	// Поиск-подписки: уникальных констрейнтов по (user, query) нет — переносим всё.
+	if _, err := tx.Exec(ctx,
+		`UPDATE search_subscriptions SET user_id = $1 WHERE user_id = $2`, keptID, absorbedID); err != nil {
+		return err
+	}
+
+	// Погашенные промокоды: UNIQUE(code_id, user_id) — дубликаты удаляем.
+	if _, err := tx.Exec(ctx, `
+		DELETE FROM promo_redemptions a USING promo_redemptions k
+		WHERE a.user_id = $2 AND k.user_id = $1 AND k.code_id = a.code_id`,
+		keptID, absorbedID); err != nil {
+		return err
+	}
+	if _, err := tx.Exec(ctx,
+		`UPDATE promo_redemptions SET user_id = $1 WHERE user_id = $2`, keptID, absorbedID); err != nil {
+		return err
+	}
+
+	// Рефералка: награды и указатели «кто привёл».
+	if _, err := tx.Exec(ctx,
+		`UPDATE referral_rewards SET referrer_id = $1 WHERE referrer_id = $2`, keptID, absorbedID); err != nil {
+		return err
+	}
+	if _, err := tx.Exec(ctx, `
+		DELETE FROM referral_rewards a USING referral_rewards k
+		WHERE a.referee_id = $2 AND k.referee_id = $1 AND k.event = a.event`,
+		keptID, absorbedID); err != nil {
+		return err
+	}
+	if _, err := tx.Exec(ctx,
+		`UPDATE referral_rewards SET referee_id = $1 WHERE referee_id = $2`, keptID, absorbedID); err != nil {
+		return err
+	}
+	if _, err := tx.Exec(ctx,
+		`UPDATE users SET referred_by = $1 WHERE referred_by = $2`, keptID, absorbedID); err != nil {
+		return err
+	}
+
+	// Аудит — до удаления absorbed, чтобы зафиксировать исходное состояние.
+	if _, err := tx.Exec(ctx, `
+		INSERT INTO account_merges
+			(kept_user_id, absorbed_user_id, kept_plan, kept_expires_at,
+			 absorbed_plan, absorbed_expires_at, result_plan, result_expires_at, detail)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)`,
+		keptID, absorbedID, kept.plan, kept.planExpiresAt,
+		absorbed.plan, absorbed.planExpiresAt, plan, expiresAt, detail); err != nil {
+		return err
+	}
+
+	// Удаляем absorbed (контент уже переехал) и собираем kept: обе идентичности,
+	// итоговый тариф, trial_used = OR, referred_by наследуется, если не было.
+	if _, err := tx.Exec(ctx, `DELETE FROM users WHERE id = $1`, absorbedID); err != nil {
+		return err
+	}
+	newTG, newUsername := kept.tgID, kept.username
+	if newTG == nil {
+		newTG, newUsername = absorbed.tgID, absorbed.username
+	}
+	newVK := kept.vkID
+	if newVK == nil {
+		newVK = absorbed.vkID
+	}
+	newRef := kept.referredBy
+	if newRef == nil && absorbed.referredBy != nil && *absorbed.referredBy != keptID {
+		newRef = absorbed.referredBy
+	}
+	if _, err := tx.Exec(ctx, `
+		UPDATE users SET telegram_id = $2, username = $3, vk_id = $4,
+		       plan = $5, plan_expires_at = $6, plan_reminded_at = NULL,
+		       trial_used = $7, referred_by = $8
+		WHERE id = $1`,
+		keptID, newTG, newUsername, newVK, plan, expiresAt,
+		kept.trialUsed || absorbed.trialUsed, newRef); err != nil {
+		return err
+	}
+	return tx.Commit(ctx)
+}
+
 // UnlinkTG — отвязать Telegram (для смены привязки из VK). Бывший TG-юзер при
 // следующем /start создаст свежий пустой аккаунт.
 func (r *UserRepo) UnlinkTG(ctx context.Context, userID int64) error {
@@ -255,18 +401,64 @@ func (r *UserRepo) SetPlan(ctx context.Context, telegramID int64, plan string, e
 }
 
 // ActivateTrial — однократно включить триал. Возвращает false, если триал уже
-// использовался (или пользователь не найден). Ключ — users.id, чтобы работало
-// и для VK-аккаунтов без telegram_id.
+// использовался. Однократность держат ВЕЧНЫЕ trial_claims по идентичностям
+// (telegram_id/vk_id): строка users пересоздаётся при отвязке платформы, и
+// флаг trial_used сам по себе позволял фармить триалы циклом отвязок.
 func (r *UserRepo) ActivateTrial(ctx context.Context, userID int64, expiresAt time.Time) (bool, error) {
-	const q = `
-		UPDATE users
-		SET plan = 'trial', plan_expires_at = $2, trial_used = TRUE, plan_reminded_at = NULL
-		WHERE id = $1 AND trial_used = FALSE`
-	tag, err := r.db.Exec(ctx, q, userID, expiresAt)
+	tx, err := r.db.Begin(ctx)
 	if err != nil {
 		return false, err
 	}
-	return tag.RowsAffected() > 0, nil
+	defer tx.Rollback(ctx) //nolint:errcheck // rollback после commit — no-op
+
+	var tgID, vkID *int64
+	var used bool
+	err = tx.QueryRow(ctx,
+		`SELECT telegram_id, vk_id, trial_used FROM users WHERE id = $1 FOR UPDATE`, userID).
+		Scan(&tgID, &vkID, &used)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return false, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	if used {
+		return false, nil
+	}
+
+	claim := func(platform string, id *int64) (bool, error) {
+		if id == nil {
+			return true, nil
+		}
+		if _, err := tx.Exec(ctx,
+			`INSERT INTO trial_claims (platform, external_id) VALUES ($1, $2)`, platform, *id); err != nil {
+			var pgErr *pgconn.PgError
+			if errors.As(err, &pgErr) && pgErr.Code == "23505" { // идентичность уже брала триал
+				return false, nil
+			}
+			return false, err
+		}
+		return true, nil
+	}
+	for _, c := range []struct {
+		platform string
+		id       *int64
+	}{{"tg", tgID}, {"vk", vkID}} {
+		ok, err := claim(c.platform, c.id)
+		if err != nil {
+			return false, err
+		}
+		if !ok {
+			return false, nil
+		}
+	}
+
+	if _, err := tx.Exec(ctx,
+		`UPDATE users SET plan = 'trial', plan_expires_at = $2, trial_used = TRUE, plan_reminded_at = NULL
+		 WHERE id = $1`, userID, expiresAt); err != nil {
+		return false, err
+	}
+	return true, tx.Commit(ctx)
 }
 
 // ListExpiringUnreminded — users.id юзеров с тарифом, истекающим в окне

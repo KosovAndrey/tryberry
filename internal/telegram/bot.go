@@ -736,6 +736,9 @@ func (b *Bot) handleCallback(ctx context.Context, cb *tgbotapi.CallbackQuery) {
 	case cb.Data == "menu:help":
 		b.sendHelpMenu(chatID, messageID, true)
 
+	case strings.HasPrefix(cb.Data, "merge:"):
+		b.handleMergeCallback(ctx, cb)
+
 	case strings.HasPrefix(cb.Data, "untrack:"):
 		b.callbackUntrack(ctx, cb)
 

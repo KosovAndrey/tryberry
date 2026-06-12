@@ -58,6 +58,7 @@ const (
 	cmdTrial    = "trial"
 	cmdPromo    = "promo" // как активировать промокод
 	cmdRef      = "ref"   // пригласить друга (код + статистика)
+	cmdMerge    = "merge" // слияние аккаунтов (k = opt:<i>|confirm:<i>|back|cancel)
 )
 
 // payloadData — payload наших кнопок: {"cmd":"...","id":N,"k":"..."}.
@@ -307,6 +308,8 @@ func (b *Bot) handleMessage(ctx context.Context, vkID int64, text, payload strin
 			"Промокоды дают дни тарифа бесплатно или скидку на оплату.", kb)
 	case cmdRef:
 		b.sendRef(ctx, vkID, user)
+	case cmdMerge:
+		b.handleMergeAction(ctx, vkID, user, p.Kind)
 	default:
 		b.send(ctx, vkID, b.welcomeText(user), kb)
 	}
@@ -330,8 +333,9 @@ func (b *Bot) handleLink(ctx context.Context, vkID int64, vkUser *domain.User, c
 
 	if err := b.userRepo.LinkVK(ctx, tgUserID, vkID); err != nil {
 		if errors.Is(err, domain.ErrVKAccountBusy) {
-			b.send(ctx, vkID, "Этот VK-аккаунт уже пользуется ботом отдельно — "+
-				"автоматически объединить аккаунты нельзя. Напиши @kosov_andrey (Telegram), объединим вручную.", nil)
+			// Оба аккаунта непустые — предлагаем объединение (код уже доказал
+			// владение обеими сторонами).
+			b.startMergeFlow(ctx, vkID, vkUser, tgUserID)
 			return
 		}
 		b.log.Error("vk: link", "err", err)
@@ -343,7 +347,6 @@ func (b *Bot) handleLink(ctx context.Context, vkID int64, vkUser *domain.User, c
 		"Теперь в Профиле (кнопка внизу) можно выбрать, куда слать уведомления — "+
 		"в Telegram, сюда или в оба места.",
 		menuKeyboard(true))
-	_ = vkUser // пустая VK-строка поглощена в LinkVK
 }
 
 // sendProfile — экран профиля: идентичности, тариф, использование лимитов,

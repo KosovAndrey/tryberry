@@ -36,7 +36,7 @@ const (
 
 var (
 	// ErrVKAccountBusy — VK-аккаунт уже привязан к другому непустому аккаунту;
-	// автоматический merge запрещён (v1), объединение — вручную через поддержку.
+	// тихое поглощение невозможно → боты предлагают слияние (ComputeMerge).
 	ErrVKAccountBusy = errors.New("vk account busy")
 
 	// ErrTGAccountBusy — то же для Telegram-аккаунта (направление vk2tg).
