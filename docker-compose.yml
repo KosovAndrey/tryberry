@@ -267,7 +267,7 @@ services:
       KAFKA_GROUP_ID: "reseller-workers"
       SEARCH_TASKS_TOPIC: "reseller-tasks"
       WB_TOKEN_POOL_PREFIX: "wb:reseller:"
-      WB_TOKEN_POOL_SIZE: "20"
+      WB_TOKEN_POOL_SIZE: "5"
       SEARCH_SCRAPE_INTERVAL_MINUTES: "20"
       SEARCH_MAX_PAGES: "2"
       SEARCH_PAGE_DELAY_MS: "400"
@@ -351,8 +351,10 @@ services:
         service: "token-miner"
 
   # ── Майнер пула токенов перекупов (wb:reseller:) ───────────────────────────
-  # Отдельный пул: больше слотов, чаще ремонтируется, свой egress-прокси (чтобы
-  # exit-IP не пересекались с обычной дорожкой и не делили rate-limit WB).
+  # Отдельный пул со своим egress-прокси (чтобы exit-IP не пересекались с
+  # обычной дорожкой и не делили rate-limit WB). Размер пула должен совпадать
+  # с WB_TOKEN_POOL_SIZE у reseller-worker; при сокращении удалить хвостовые
+  # слоты wb:reseller:pool:{i} из Redis — Go-пул не проверяет exp.
   token-miner-reseller:
       build:
         context: ./token-miner
@@ -363,7 +365,7 @@ services:
         REDIS_URL: "redis://redis:6379"
         WB_TOKEN_POOL_PREFIX: "wb:reseller:"
         WB_DISABLE_LEGACY_MIRROR: "true"
-        WB_TOKEN_POOL_SIZE: "20"
+        WB_TOKEN_POOL_SIZE: "5"
         WB_SEARCH_QUERY: "телефон"
         MINE_CHECK_INTERVAL_MINUTES: "3"
         MINE_RETRY_MINUTES: "5"
