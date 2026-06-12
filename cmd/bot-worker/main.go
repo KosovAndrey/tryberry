@@ -125,7 +125,7 @@ func run(log *slog.Logger) error {
 		if redisClient != nil {
 			linkCodes = redisrepo.NewLinkCodeStore(redisClient)
 		}
-		vkBot := vk.NewBot(vk.NewClient(vkToken), log, userRepo, linkCodes)
+		vkBot := vk.NewBot(vk.NewClient(vkToken), log, userRepo, subRepo, prodRepo, registry, linkCodes)
 		vkConsumer := kafka.NewConsumer(kafkaBrokers, "vk-updates", "vk-workers")
 		defer vkConsumer.Close()
 		go func() {

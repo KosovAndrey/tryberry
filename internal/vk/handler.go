@@ -11,6 +11,7 @@ import (
 	"gitlab.com/KosovAndrey/tryberrybot/internal/domain"
 	"gitlab.com/KosovAndrey/tryberrybot/internal/repository/postgres"
 	redisrepo "gitlab.com/KosovAndrey/tryberrybot/internal/repository/redis"
+	"gitlab.com/KosovAndrey/tryberrybot/internal/scraper"
 )
 
 // CallbackEvent — событие VK Callback API (сырой формат, публикуется в Kafka
@@ -38,37 +39,63 @@ const (
 	cmdProfile = "profile"
 	cmdLink    = "link"
 	cmdHelp    = "help"
+	cmdAdd     = "add"
+	cmdList    = "list"
+	cmdUntrack = "untrack"
 )
+
+// payloadData — payload наших кнопок: {"cmd":"...","id":N}.
+type payloadData struct {
+	Cmd string `json:"cmd"`
+	ID  int64  `json:"id,omitempty"`
+}
 
 func buttonPayload(cmd string) string {
 	return fmt.Sprintf(`{"cmd":%q}`, cmd)
 }
 
-// payloadCmd — извлекает cmd из payload кнопки ("" — не кнопка/не наш формат).
-func payloadCmd(payload string) string {
+// parsePayload — payload кнопки (zero value — не кнопка/не наш формат).
+func parsePayload(payload string) payloadData {
+	var p payloadData
 	if payload == "" {
-		return ""
-	}
-	var p struct {
-		Cmd string `json:"cmd"`
+		return p
 	}
 	if err := json.Unmarshal([]byte(payload), &p); err != nil {
-		return ""
+		return payloadData{}
 	}
-	return p.Cmd
+	return p
 }
 
-// Bot — обработчик входящих событий VK. Фаза 1: регистрация, привязка по коду,
-// статус профиля. Трекинг/меню в VK — фаза 2.
+// Bot — обработчик входящих событий VK. Фаза 2: привязка аккаунтов, трекинг
+// товаров по ссылке, список подписок. Поиск-подписки и тарифы — пока в TG.
 type Bot struct {
 	client    *Client
 	log       *slog.Logger
 	userRepo  *postgres.UserRepo
+	subRepo   *postgres.SubscriptionRepo
+	prodRepo  *postgres.ProductRepo
+	registry  *scraper.Registry
 	linkCodes *redisrepo.LinkCodeStore
 }
 
-func NewBot(client *Client, log *slog.Logger, userRepo *postgres.UserRepo, linkCodes *redisrepo.LinkCodeStore) *Bot {
-	return &Bot{client: client, log: log, userRepo: userRepo, linkCodes: linkCodes}
+func NewBot(
+	client *Client,
+	log *slog.Logger,
+	userRepo *postgres.UserRepo,
+	subRepo *postgres.SubscriptionRepo,
+	prodRepo *postgres.ProductRepo,
+	registry *scraper.Registry,
+	linkCodes *redisrepo.LinkCodeStore,
+) *Bot {
+	return &Bot{
+		client:    client,
+		log:       log,
+		userRepo:  userRepo,
+		subRepo:   subRepo,
+		prodRepo:  prodRepo,
+		registry:  registry,
+		linkCodes: linkCodes,
+	}
 }
 
 // HandleEvent — точка входа для события из Kafka.
@@ -89,7 +116,7 @@ func (b *Bot) HandleEvent(ctx context.Context, ev CallbackEvent) {
 }
 
 // menuKeyboard — постоянная клавиатура: до привязки на первом месте
-// «Привязать Telegram», после — только профиль и помощь.
+// «Привязать Telegram».
 func menuKeyboard(linked bool) *Keyboard {
 	var rows [][]Button
 	if !linked {
@@ -97,10 +124,16 @@ func menuKeyboard(linked bool) *Keyboard {
 			TextButton("🔗 Привязать Telegram", buttonPayload(cmdLink), ColorPrimary),
 		})
 	}
-	rows = append(rows, []Button{
-		TextButton("👤 Профиль", buttonPayload(cmdProfile), ColorPrimary),
-		TextButton("❓ Помощь", buttonPayload(cmdHelp), ColorSecondary),
-	})
+	rows = append(rows,
+		[]Button{
+			TextButton("➕ Добавить товар", buttonPayload(cmdAdd), ColorPrimary),
+			TextButton("📋 Мои товары", buttonPayload(cmdList), ColorPrimary),
+		},
+		[]Button{
+			TextButton("👤 Профиль", buttonPayload(cmdProfile), ColorSecondary),
+			TextButton("❓ Помощь", buttonPayload(cmdHelp), ColorSecondary),
+		},
+	)
 	return &Keyboard{Buttons: rows}
 }
 
@@ -113,34 +146,56 @@ func (b *Bot) handleMessage(ctx context.Context, vkID int64, text, payload strin
 	}
 	kb := menuKeyboard(user.TelegramID != 0)
 
-	cmd := payloadCmd(payload)
+	p := parsePayload(payload)
 	lower := strings.ToLower(text)
-	if cmd == "" {
+	if p.Cmd == "" {
 		switch lower {
 		case "профиль", "profile":
-			cmd = cmdProfile
+			p.Cmd = cmdProfile
 		case "помощь", "help", "начать", "start":
-			cmd = cmdHelp
+			p.Cmd = cmdHelp
+		case "мои товары", "список", "list":
+			p.Cmd = cmdList
+		case "добавить товар", "добавить":
+			p.Cmd = cmdAdd
 		}
 	}
 
-	// «привязать <КОД>» / «link <КОД>» — предъявление кода, выданного в TG.
-	// Код регистронезависим (Redeem приводит к UPPER), так что lower не мешает.
-	// Кнопка «Привязать Telegram» сюда не попадает — у неё payload cmd=link.
-	if cmd == "" {
+	if p.Cmd == "" {
+		// «привязать <КОД>» / «link <КОД>» — предъявление кода, выданного в TG.
+		// Код регистронезависим (Redeem приводит к UPPER), так что lower не мешает.
+		// Кнопка «Привязать Telegram» сюда не попадает — у неё payload cmd=link.
 		if rest, ok := cutAnyPrefix(lower, "привязать ", "link "); ok {
 			b.handleLink(ctx, vkID, user, strings.TrimSpace(rest))
 			return
 		}
+		// Поисковая ссылка — пока только в TG (FSM порога/типа уведомления там).
+		if _, err := b.registry.FindSearchByURL(text); err == nil {
+			b.send(ctx, vkID, "🔎 Поиск-подписки пока доступны только в Telegram-боте: @TryBerryBot.\n\n"+
+				"Здесь я умею следить за отдельными товарами — отправь ссылку на товар.", kb)
+			return
+		}
+		// Ссылка на товар → трекинг.
+		if _, err := b.registry.FindByURL(text); err == nil {
+			b.handleTrack(ctx, vkID, user, text)
+			return
+		}
 	}
 
-	switch cmd {
+	switch p.Cmd {
 	case cmdProfile:
 		b.send(ctx, vkID, b.profileText(user), kb)
 	case cmdLink:
 		b.send(ctx, vkID, b.linkInstructionsText(user), kb)
 	case cmdHelp:
 		b.send(ctx, vkID, b.helpText(user), kb)
+	case cmdAdd:
+		b.send(ctx, vkID, "➕ Отправь мне ссылку на товар Wildberries — начну отслеживать цену.\n\n"+
+			"Пример:\nhttps://www.wildberries.ru/catalog/252334498/detail.aspx", kb)
+	case cmdList:
+		b.handleList(ctx, vkID, user, "")
+	case cmdUntrack:
+		b.handleUntrack(ctx, vkID, user, p.ID)
 	default:
 		b.send(ctx, vkID, b.welcomeText(user), kb)
 	}
@@ -203,26 +258,30 @@ func (b *Bot) linkInstructionsText(u *domain.User) string {
 
 func (b *Bot) helpText(u *domain.User) string {
 	base := "❓ Помощь\n\nЯ TryBerry — слежу за ценами на Wildberries и уведомляю о снижении 🍓\n\n" +
-		"Добавление товаров, поиск-подписки и тарифы — в Telegram-боте: @TryBerryBot. " +
-		"Сюда, в VK, могут приходить уведомления о ценах.\n\n" +
-		"Кнопки внизу:\n👤 Профиль — статус аккаунта\n"
+		"Как добавить товар: отправь ссылку на товар WB прямо в чат — без команд.\n\n" +
+		"Кнопки внизу:\n" +
+		"➕ Добавить товар — как добавить\n" +
+		"📋 Мои товары — список подписок, там же отписка\n" +
+		"👤 Профиль — статус аккаунта и тариф\n"
 	if u.TelegramID == 0 {
 		base += "🔗 Привязать Telegram — связать аккаунты\n"
 	}
-	base += "\nВопросы — пиши @kosov_andrey (Telegram)."
+	base += "\nПоиск-подписки (слежение за всей поисковой выдачей), тарифы и тонкая настройка уведомлений — " +
+		"в Telegram-боте: @TryBerryBot.\n\nВопросы — пиши @kosov_andrey (Telegram)."
 	return base
 }
 
 func (b *Bot) welcomeText(u *domain.User) string {
 	if u.TelegramID != 0 {
 		return "Привет! Твой аккаунт связан с Telegram ✅\n\n" +
-			"Сюда будут приходить уведомления о ценах (настройка — в Telegram-боте: Профиль → Уведомления).\n\n" +
-			"Кнопки внизу: «Профиль» — статус аккаунта, «Помощь» — что я умею."
+			"Отправь ссылку на товар Wildberries — начну отслеживать. " +
+			"Подписки общие с Telegram, уведомления — куда настроишь (Профиль → Уведомления в TG-боте).\n\n" +
+			"Кнопки внизу: «Мои товары» — список, «Помощь» — что я умею."
 	}
 	return "Привет! Я TryBerry — слежу за ценами на Wildberries 🍓\n\n" +
-		"Пока я живу в основном в Telegram: @TryBerryBot\n\n" +
-		"Если ты уже пользуешься Telegram-ботом — нажми «Привязать Telegram» внизу, " +
-		"и уведомления о ценах смогут приходить сюда."
+		"Отправь мне ссылку на товар — начну отслеживать и напишу, когда цена снизится.\n\n" +
+		"Уже пользуешься Telegram-ботом @TryBerryBot? Нажми «Привязать Telegram» внизу — " +
+		"подписки и тариф станут общими."
 }
 
 func (b *Bot) send(ctx context.Context, peerID int64, text string, kb *Keyboard) {
