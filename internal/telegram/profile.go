@@ -141,8 +141,9 @@ func (b *Bot) handleLinkCode(ctx context.Context, chatID int64, user *domain.Use
 
 	if err := b.userRepo.LinkTG(ctx, vkUserID, user.TelegramID, username); err != nil {
 		if errors.Is(err, domain.ErrTGAccountBusy) {
-			b.reply(chatID, "У этого Telegram-аккаунта уже есть подписки или тариф — "+
-				"автоматически объединить аккаунты нельзя. Напиши @kosov_andrey, объединим вручную.")
+			// Оба аккаунта непустые — предлагаем объединение (код уже доказал
+			// владение обеими сторонами).
+			b.startMergeFlow(ctx, chatID, user, vkUserID)
 			return
 		}
 		b.log.Error("link tg", "err", err)
