@@ -167,9 +167,15 @@
 - Отозвать старый bot-токен у @BotFather.
 
 ### D. Инфраструктура
-- Ротация docker-логов (`logging: max-size/max-file` в compose).
-- Cron на `docker builder prune -af` (диск RU-VM был на 94%).
-- Переезд на 8 CPU / 16 ГБ / 180 ГБ NVMe снимет тесноту.
+- СДЕЛАНО (2026-06-12): переезд на 8 CPU / 16 ГБ / 180 ГБ NVMe; S3-бэкапы →
+  Selectel (`S3_ENDPOINT`/`S3_REGION` в .env, дефолты selcloud). Тюнинг под
+  новое железо: Postgres (shared_buffers 1GB, effective_cache_size 4GB,
+  random_page_cost 1.1 под NVMe, shm 1g), Redis maxmemory 768mb volatile-lru
+  (TTL-ключи вытесняются, пулы токенов — нет), Kafka retention 72h,
+  Prometheus 60d/10GB, Loki 30 дней.
+- Осталось на хосте (не в compose): ротация docker-логов через
+  `/etc/docker/daemon.json` (json-file, max-size 20m × 5) и cron на
+  `docker builder prune -af --filter until=72h` (диск на старой VM был на 94%).
 - При росте нагрузки на приём команд — Шаг 2b: убрать `container_name` у bot-worker →
   `up -d --scale bot-worker=N` (безопасно: FSM в Redis, ключ = user ID).
 

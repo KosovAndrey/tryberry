@@ -408,6 +408,28 @@ services:
   postgres:
     image: postgres:16
     container_name: pt_postgres
+    # Тюнинг под сервер 8 CPU / 16 ГБ RAM / NVMe (дефолты PG рассчитаны на
+    # машину прошлого века: shared_buffers=128MB и т.п.). PG здесь не один —
+    # рядом Kafka и два Chromium-майнера, поэтому берём умеренные ~25% RAM.
+    command:
+      - postgres
+      - -c
+      - shared_buffers=1GB
+      - -c
+      - effective_cache_size=4GB
+      - -c
+      - work_mem=16MB
+      - -c
+      - maintenance_work_mem=256MB
+      - -c
+      - max_wal_size=2GB
+      - -c
+      - random_page_cost=1.1
+      - -c
+      - effective_io_concurrency=200
+      - -c
+      - wal_compression=on
+    shm_size: 1gb
     environment:
       POSTGRES_DB: tryberrybot
       POSTGRES_USER: user
@@ -425,6 +447,15 @@ services:
   redis:
     image: redis:7-alpine
     container_name: pt_redis
+    # Потолок памяти, чтобы Redis не разрастался бесконтрольно. Политика
+    # volatile-lru: вытесняются ТОЛЬКО ключи с TTL (FSM, коды привязки,
+    # price-cache) — пулы WB-токенов без TTL не трогаются.
+    command:
+      - redis-server
+      - --maxmemory
+      - 768mb
+      - --maxmemory-policy
+      - volatile-lru
     ports:
       - "6379:6379"
     healthcheck:
@@ -458,6 +489,9 @@ services:
       KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
       KAFKA_AUTO_CREATE_TOPICS_ENABLE: "true"
       KAFKA_NUM_PARTITIONS: 10
+      # События транзитные (апдейты, цены, поисковые хиты) — 3 суток с запасом
+      # на любой даунтайм консьюмеров; дефолтные 7 дней просто жгли диск.
+      KAFKA_LOG_RETENTION_HOURS: 72
     healthcheck:
       test: ["CMD-SHELL", "kafka-topics --bootstrap-server localhost:9092 --list"]
       interval: 10s
@@ -479,7 +513,10 @@ services:
     command:
       - '--config.file=/etc/prometheus/prometheus.yml'
       - '--storage.tsdb.path=/prometheus'
-      - '--storage.tsdb.retention.time=14d'
+      # 180 ГБ NVMe позволяют хранить больше истории; на всякий случай ещё и
+      # потолок по размеру (срабатывает то, что наступит раньше).
+      - '--storage.tsdb.retention.time=60d'
+      - '--storage.tsdb.retention.size=10GB'
       - '--web.enable-lifecycle'  # позволяет reload конфига без рестарта
     # Linux — нужен extra_hosts чтобы достучаться до хоста
     extra_hosts:
