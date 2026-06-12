@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	"gitlab.com/KosovAndrey/tryberrybot/internal/domain"
+	"gitlab.com/KosovAndrey/tryberrybot/internal/metrics"
 	"gitlab.com/KosovAndrey/tryberrybot/internal/repository/postgres"
 	"gitlab.com/KosovAndrey/tryberrybot/internal/telegram"
 	"gitlab.com/KosovAndrey/tryberrybot/internal/vk"
@@ -62,6 +63,7 @@ func (d *deliverer) deliver(ctx context.Context, userID, telegramID int64, sendT
 		// Некуда доставлять (например, VK-only юзер при выключенном VK).
 		// Возвращаем nil: retry не поможет, кафку зацикливать нельзя.
 		d.log.Warn("deliver: no channel available", "user_id", userID, "telegram_id", telegramID)
+		metrics.NotificationsDelivered.WithLabelValues("none", "skipped").Inc()
 		return nil
 	}
 
@@ -72,11 +74,13 @@ func (d *deliverer) deliver(ctx context.Context, userID, telegramID int64, sendT
 		if tgErr = sendTG(ctx); tgErr == nil {
 			delivered = true
 		}
+		metrics.NotificationsDelivered.WithLabelValues("tg", statusLabel(tgErr)).Inc()
 	}
 	if vkPeer != 0 {
 		if vkErr = d.vk.SendMessage(ctx, vkPeer, vkText); vkErr == nil {
 			delivered = true
 		}
+		metrics.NotificationsDelivered.WithLabelValues("vk", statusLabel(vkErr)).Inc()
 	}
 
 	if delivered {
@@ -92,6 +96,13 @@ func (d *deliverer) deliver(ctx context.Context, userID, telegramID int64, sendT
 		return tgErr
 	}
 	return vkErr
+}
+
+func statusLabel(err error) string {
+	if err != nil {
+		return "error"
+	}
+	return "ok"
 }
 
 func (d *deliverer) SendPriceAlert(ctx context.Context, a telegram.PriceAlert) error {

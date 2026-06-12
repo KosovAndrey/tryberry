@@ -65,6 +65,51 @@ var (
 		},
 		[]string{"marketplace"},
 	)
+
+	// NotificationsDelivered — попытки доставки уведомлений по каналам
+	// (notifier, deliverer). channel=none/status=skipped — доставлять
+	// было некуда (например, VK-only юзер при выключенном VK).
+	NotificationsDelivered = promauto.NewCounterVec(
+		prometheus.CounterOpts{
+			Namespace: namespace,
+			Name:      "notifications_delivered_total",
+			Help:      "Notification delivery attempts by channel",
+		},
+		[]string{"channel", "status"}, // tg|vk|none × ok|error|skipped
+	)
+
+	// VKMessages — входящие личные сообщения VK-бота по распознанному
+	// типу: имя команды (profile, link, plans…) либо текстовый флоу
+	// (link_code, promo_code, ref_code, track_url, search_url,
+	// track_threshold, search_threshold, other).
+	VKMessages = promauto.NewCounterVec(
+		prometheus.CounterOpts{
+			Namespace: namespace,
+			Name:      "vk_messages_total",
+			Help:      "Incoming VK messages by resolved command/flow",
+		},
+		[]string{"command"},
+	)
+
+	// PromoRedeems — успешные погашения промокодов (единая точка —
+	// PromoRepo.RedeemGrant, канал TG/VK тут не различим).
+	PromoRedeems = promauto.NewCounter(
+		prometheus.CounterOpts{
+			Namespace: namespace,
+			Name:      "promo_redeems_total",
+			Help:      "Successful promo code redemptions",
+		},
+	)
+
+	// AccountMerges — успешные слияния TG/VK-аккаунтов
+	// (UserRepo.MergeAccounts).
+	AccountMerges = promauto.NewCounter(
+		prometheus.CounterOpts{
+			Namespace: namespace,
+			Name:      "account_merges_total",
+			Help:      "Successful TG/VK account merges",
+		},
+	)
 )
 
 // ── Поиск-подписки ───────────────────────────────────────────────────────────

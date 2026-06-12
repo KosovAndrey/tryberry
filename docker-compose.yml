@@ -573,7 +573,7 @@ services:
       - "9121:9121"
     command:
       - '--redis.addr=redis://redis:6379'
-      - '--check-single-keys=wb:search:token:mined_at,wb:search:token:exp,wb:search:pool:healthy,wb:search:pool:oldest_mined_at,wb:reseller:pool:healthy,wb:reseller:pool:oldest_mined_at'
+      - '--check-single-keys=wb:search:token:mined_at,wb:search:token:exp,wb:search:pool:healthy,wb:search:pool:oldest_mined_at,wb:search:pool:mined_total,wb:search:pool:mine_failed_total,wb:reseller:pool:healthy,wb:reseller:pool:oldest_mined_at,wb:reseller:pool:mined_total,wb:reseller:pool:mine_failed_total'
     depends_on:
       redis:
         condition: service_healthy

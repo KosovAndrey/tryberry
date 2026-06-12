@@ -228,6 +228,48 @@
           "refId": "A"
         }
       ]
+    },
+    {
+      "id": 8,
+      "type": "timeseries",
+      "title": "Майны через прокси (в час) — расход трафика",
+      "gridPos": { "h": 8, "w": 24, "x": 0, "y": 20 },
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "min": 0,
+          "custom": { "drawStyle": "bars", "fillOpacity": 60, "lineWidth": 1 }
+        },
+        "overrides": []
+      },
+      "options": { "legend": { "displayMode": "list", "placement": "bottom" }, "tooltip": { "mode": "multi" } },
+      "targets": [
+        {
+          "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+          "expr": "increase(redis_key_value{key=\"wb:search:pool:mined_total\"}[1h])",
+          "legendFormat": "поиск: успешные",
+          "refId": "A"
+        },
+        {
+          "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+          "expr": "increase(redis_key_value{key=\"wb:search:pool:mine_failed_total\"}[1h])",
+          "legendFormat": "поиск: фейлы",
+          "refId": "B"
+        },
+        {
+          "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+          "expr": "increase(redis_key_value{key=\"wb:reseller:pool:mined_total\"}[1h])",
+          "legendFormat": "перекупы: успешные",
+          "refId": "C"
+        },
+        {
+          "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+          "expr": "increase(redis_key_value{key=\"wb:reseller:pool:mine_failed_total\"}[1h])",
+          "legendFormat": "перекупы: фейлы",
+          "refId": "D"
+        }
+      ]
     }
   ]
 }

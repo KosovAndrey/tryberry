@@ -12,6 +12,7 @@ import (
 	"github.com/redis/go-redis/v9"
 
 	"gitlab.com/KosovAndrey/tryberrybot/internal/domain"
+	"gitlab.com/KosovAndrey/tryberrybot/internal/metrics"
 	"gitlab.com/KosovAndrey/tryberrybot/internal/repository/postgres"
 	redisrepo "gitlab.com/KosovAndrey/tryberrybot/internal/repository/redis"
 	"gitlab.com/KosovAndrey/tryberrybot/internal/scraper"
@@ -226,11 +227,13 @@ func (b *Bot) handleMessage(ctx context.Context, vkID int64, text, payload strin
 		// Код регистронезависим (Redeem приводит к UPPER), так что lower не мешает.
 		// Кнопка «Привязать Telegram» сюда не попадает — у неё payload cmd=link.
 		if rest, ok := cutAnyPrefix(lower, "привязать ", "link "); ok {
+			metrics.VKMessages.WithLabelValues("link_code").Inc()
 			b.handleLink(ctx, vkID, user, strings.TrimSpace(rest))
 			return
 		}
 		// «промокод <КОД>» — активация промокода.
 		if rest, ok := cutAnyPrefix(lower, "промокод ", "promo "); ok {
+			metrics.VKMessages.WithLabelValues("promo_code").Inc()
 			b.clearSearchFSM(ctx, vkID)
 			b.clearTrackFSM(ctx, vkID)
 			b.handlePromoCode(ctx, vkID, user, strings.TrimSpace(rest))
@@ -238,6 +241,7 @@ func (b *Bot) handleMessage(ctx context.Context, vkID int64, text, payload strin
 		}
 		// «друг <КОД>» — код приглашения (= users.id реферера).
 		if rest, ok := cutAnyPrefix(lower, "друг ", "friend "); ok {
+			metrics.VKMessages.WithLabelValues("ref_code").Inc()
 			b.clearSearchFSM(ctx, vkID)
 			b.clearTrackFSM(ctx, vkID)
 			b.handleRefCode(ctx, vkID, user, strings.TrimSpace(rest))
@@ -245,23 +249,33 @@ func (b *Bot) handleMessage(ctx context.Context, vkID int64, text, payload strin
 		}
 		// Ждём число (порог/процент)? Сначала товарный FSM, потом поисковый.
 		if fsm, ok := b.getTrackFSM(ctx, vkID); ok {
+			metrics.VKMessages.WithLabelValues("track_threshold").Inc()
 			b.handleTrackThreshold(ctx, vkID, user, text, fsm)
 			return
 		}
 		if fsm, ok := b.getSearchFSM(ctx, vkID); ok {
+			metrics.VKMessages.WithLabelValues("search_threshold").Inc()
 			b.handleSearchThreshold(ctx, vkID, user, text, fsm)
 			return
 		}
 		// Поисковая ссылка → флоу поиск-подписки.
 		if _, err := b.registry.FindSearchByURL(text); err == nil {
+			metrics.VKMessages.WithLabelValues("search_url").Inc()
 			b.startSearchTrack(ctx, vkID, user, text)
 			return
 		}
 		// Ссылка на товар → трекинг.
 		if _, err := b.registry.FindByURL(text); err == nil {
+			metrics.VKMessages.WithLabelValues("track_url").Inc()
 			b.handleTrack(ctx, vkID, user, text)
 			return
 		}
+	}
+
+	if p.Cmd != "" {
+		metrics.VKMessages.WithLabelValues(p.Cmd).Inc()
+	} else {
+		metrics.VKMessages.WithLabelValues("other").Inc()
 	}
 
 	switch p.Cmd {

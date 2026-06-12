@@ -10,6 +10,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"gitlab.com/KosovAndrey/tryberrybot/internal/domain"
+	"gitlab.com/KosovAndrey/tryberrybot/internal/metrics"
 )
 
 type PromoRepo struct {
@@ -124,7 +125,11 @@ func (r *PromoRepo) RedeemGrant(ctx context.Context, codeID, userID int64, plan 
 		return domain.ErrNotFound
 	}
 
-	return tx.Commit(ctx)
+	if err := tx.Commit(ctx); err != nil {
+		return err
+	}
+	metrics.PromoRedeems.Inc()
+	return nil
 }
 
 // SetActive — включить/выключить код. Для /promo_off.
