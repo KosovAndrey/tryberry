@@ -156,6 +156,12 @@ func (b *Bot) handleMessage(ctx context.Context, msg *tgbotapi.Message) {
 		return
 	}
 
+	// 1c. Код привязки, выданный в VK-боте («привязать XXXX», направление vk2tg).
+	if rest, ok := cutLinkPrefix(text); ok {
+		b.handleLinkCode(ctx, msg.Chat.ID, user, msg.From.UserName, rest)
+		return
+	}
+
 	// 2. Поисковая ссылка WB (?search=...) → флоу поиск-подписки.
 	if b.isSearchURL(text) {
 		b.startSearchTrack(ctx, msg.Chat.ID, text, user)

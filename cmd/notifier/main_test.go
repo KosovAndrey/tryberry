@@ -44,7 +44,9 @@ func TestSelectProductPauses(t *testing.T) {
 	if want := []int64{6, 7, 8, 9, 10, 11, 12, 18, 19, 20}; !eq(pause, want) {
 		t.Fatalf("pause = %v, want %v", pause, want)
 	}
-	if want := []int64{100, 200}; !eq(affected, want) {
+	// affected — users.id (не telegram_id): уведомление о паузе роутится по
+	// notify_channel и должно доходить и до VK-only юзеров.
+	if want := []int64{1, 2}; !eq(affected, want) {
 		t.Fatalf("affected = %v, want %v", affected, want)
 	}
 }

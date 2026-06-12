@@ -39,6 +39,9 @@ var (
 	// автоматический merge запрещён (v1), объединение — вручную через поддержку.
 	ErrVKAccountBusy = errors.New("vk account busy")
 
+	// ErrTGAccountBusy — то же для Telegram-аккаунта (направление vk2tg).
+	ErrTGAccountBusy = errors.New("tg account busy")
+
 	// ErrLinkCodeRateLimited — код уже выдавался только что, подожди минуту.
 	ErrLinkCodeRateLimited = errors.New("link code rate limited")
 )

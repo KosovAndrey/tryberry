@@ -35,6 +35,25 @@ func (r *ReferralRepo) SetReferrer(ctx context.Context, refereeTgID, referrerTgI
 	return tag.RowsAffected() > 0, nil
 }
 
+// SetReferrerByID — то же по внутренним id (VK: код приглашения = users.id
+// реферера, приглашённый известен по своей строке).
+func (r *ReferralRepo) SetReferrerByID(ctx context.Context, refereeID, referrerID int64, window time.Duration) (bool, error) {
+	const q = `
+		UPDATE users u
+		SET referred_by = ref.id
+		FROM users ref
+		WHERE u.id = $1
+		  AND ref.id = $2
+		  AND u.referred_by IS NULL
+		  AND u.id <> ref.id
+		  AND u.created_at > NOW() - $3::interval`
+	tag, err := r.db.Exec(ctx, q, refereeID, referrerID, window)
+	if err != nil {
+		return false, err
+	}
+	return tag.RowsAffected() > 0, nil
+}
+
 // PendingActivation — кандидат на награду за «активного» друга.
 type PendingActivation struct {
 	ReferrerID    int64
@@ -49,7 +68,7 @@ type PendingActivation struct {
 // (товарной или поисковой), за которых награда 'activated' ещё не начислена.
 func (r *ReferralRepo) ListPendingActivations(ctx context.Context, minAge time.Duration, limit int) ([]PendingActivation, error) {
 	const q = `
-		SELECT ref.id, ref.telegram_id, ref.plan, ref.plan_expires_at,
+		SELECT ref.id, COALESCE(ref.telegram_id, 0), ref.plan, ref.plan_expires_at,
 		       u.id, COALESCE(u.username, '')
 		FROM users u
 		JOIN users ref ON ref.id = u.referred_by

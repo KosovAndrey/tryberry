@@ -131,7 +131,7 @@ func run(log *slog.Logger) error {
 	// действующему плану. Живёт здесь, т.к. notifier — единственный синглтон с
 	// БД И egress в Telegram (scheduler без HTTPS_PROXY юзеру написать не может).
 	reconcileInterval := time.Duration(getEnvInt("PLAN_RECONCILE_INTERVAL_MINUTES", 15)) * time.Minute
-	go runPlanReconciler(ctx, log, searchSubRepo, subRepo, userRepo, referralRepo, tgNotifier, reconcileInterval)
+	go runPlanReconciler(ctx, log, searchSubRepo, subRepo, userRepo, referralRepo, sender, reconcileInterval)
 
 	// Дефолт-фолбэк интервала проверки для тарифов без своего Interval.
 	defaultInterval := time.Duration(getEnvInt("SCRAPE_INTERVAL_MINUTES", 15)) * time.Minute
@@ -160,7 +160,7 @@ func runPlanReconciler(
 	subRepo *postgres.SubscriptionRepo,
 	userRepo *postgres.UserRepo,
 	referralRepo *postgres.ReferralRepo,
-	tg *telegram.Notifier,
+	sender *deliverer,
 	interval time.Duration,
 ) {
 	tick := func() {
@@ -170,17 +170,17 @@ func runPlanReconciler(
 		// 1. Пауза сверхлимитных подписок истёкших юзеров (поиск + товары).
 		//    Затронутых уведомляем ОДИН раз, объединяя оба типа.
 		notify := make(map[int64]struct{})
-		for _, tgID := range pauseExpiredSearch(ctx, log, searchRepo) {
-			notify[tgID] = struct{}{}
+		for _, uid := range pauseExpiredSearch(ctx, log, searchRepo) {
+			notify[uid] = struct{}{}
 		}
-		for _, tgID := range pauseExpiredProducts(ctx, log, subRepo, now) {
-			notify[tgID] = struct{}{}
+		for _, uid := range pauseExpiredProducts(ctx, log, subRepo, now) {
+			notify[uid] = struct{}{}
 		}
 		if len(notify) > 0 {
 			log.Info("reconcile: notifying paused users", "users", len(notify))
-			for tgID := range notify {
-				if err := tg.SendPlanPausedNotice(ctx, tgID); err != nil {
-					log.Error("reconcile: notify paused", "telegram_id", tgID, "err", err)
+			for uid := range notify {
+				if err := sender.SendPlanPausedNotice(ctx, uid); err != nil {
+					log.Error("reconcile: notify paused", "user_id", uid, "err", err)
 				}
 			}
 		}
@@ -202,10 +202,10 @@ func runPlanReconciler(
 		}
 
 		// 4. Напоминание за сутки до истечения тарифа.
-		remindExpiring(ctx, log, userRepo, tg, now.Add(24*time.Hour))
+		remindExpiring(ctx, log, userRepo, sender, now.Add(24*time.Hour))
 
 		// 5. Реферальные награды за «активных» друзей (48ч + активная подписка).
-		rewardReferralActivations(ctx, log, referralRepo, tg, now)
+		rewardReferralActivations(ctx, log, referralRepo, sender, now)
 	}
 
 	log.Info("plan reconciler started", "interval", interval.String())
@@ -223,7 +223,7 @@ func runPlanReconciler(
 }
 
 // pauseExpiredSearch ставит на паузу ВСЕ активные поиск-подписки истёкших юзеров
-// (free → MaxSearch=0). Возвращает telegram_id затронутых.
+// (free → MaxSearch=0). Возвращает users.id затронутых.
 func pauseExpiredSearch(ctx context.Context, log *slog.Logger, repo *postgres.SearchSubscriptionRepo) []int64 {
 	paused, err := repo.PauseExpiredSearchSubs(ctx)
 	if err != nil {
@@ -237,7 +237,7 @@ func pauseExpiredSearch(ctx context.Context, log *slog.Logger, repo *postgres.Se
 }
 
 // pauseExpiredProducts гасит ИЗБЫТОК товарных подписок истёкших юзеров сверх
-// лимита плана (самые старые остаются). Возвращает telegram_id затронутых.
+// лимита плана (самые старые остаются). Возвращает users.id затронутых.
 func pauseExpiredProducts(ctx context.Context, log *slog.Logger, repo *postgres.SubscriptionRepo, now time.Time) []int64 {
 	cands, err := repo.ListActiveOfExpiredUsers(ctx)
 	if err != nil {
@@ -297,7 +297,7 @@ func restoreProducts(ctx context.Context, log *slog.Logger, repo *postgres.Subsc
 // remindExpiring шлёт разовое напоминание юзерам, чей тариф истекает в окне
 // (now, until], и помечает их MarkReminded — только тех, кому реально отправили
 // (сбой отправки → повтор на следующем тике).
-func remindExpiring(ctx context.Context, log *slog.Logger, repo *postgres.UserRepo, tg *telegram.Notifier, until time.Time) {
+func remindExpiring(ctx context.Context, log *slog.Logger, repo *postgres.UserRepo, sender *deliverer, until time.Time) {
 	ids, err := repo.ListExpiringUnreminded(ctx, until)
 	if err != nil {
 		log.Error("reconcile: list expiring", "err", err)
@@ -307,12 +307,12 @@ func remindExpiring(ctx context.Context, log *slog.Logger, repo *postgres.UserRe
 		return
 	}
 	var sent []int64
-	for _, tgID := range ids {
-		if err := tg.SendPlanExpiringReminder(ctx, tgID); err != nil {
-			log.Error("reconcile: send expiry reminder", "telegram_id", tgID, "err", err)
+	for _, uid := range ids {
+		if err := sender.SendPlanExpiringReminder(ctx, uid); err != nil {
+			log.Error("reconcile: send expiry reminder", "user_id", uid, "err", err)
 			continue
 		}
-		sent = append(sent, tgID)
+		sent = append(sent, uid)
 	}
 	if len(sent) == 0 {
 		return
@@ -326,7 +326,7 @@ func remindExpiring(ctx context.Context, log *slog.Logger, repo *postgres.UserRe
 // rewardReferralActivations начисляет рефереру дни за «активных» друзей:
 // приглашённый прожил ReferralActivationAge и держит активную подписку.
 // Идемпотентно: UNIQUE (referee, event) в referral_rewards + потолок за год.
-func rewardReferralActivations(ctx context.Context, log *slog.Logger, repo *postgres.ReferralRepo, tg *telegram.Notifier, now time.Time) {
+func rewardReferralActivations(ctx context.Context, log *slog.Logger, repo *postgres.ReferralRepo, sender *deliverer, now time.Time) {
 	pending, err := repo.ListPendingActivations(ctx, domain.ReferralActivationAge, 100)
 	if err != nil {
 		log.Error("reconcile: list pending referral activations", "err", err)
@@ -349,8 +349,8 @@ func rewardReferralActivations(ctx context.Context, log *slog.Logger, repo *post
 		}
 		log.Info("reconcile: referral reward granted",
 			"referrer", p.ReferrerID, "referee", p.RefereeID, "days", domain.ReferralActivatedRewardDays, "set_plan", setPlan)
-		if err := tg.SendReferralRewardNotice(ctx, p.ReferrerTgID, p.RefereeName, domain.ReferralActivatedRewardDays, setPlan); err != nil {
-			log.Error("reconcile: notify referral reward", "telegram_id", p.ReferrerTgID, "err", err)
+		if err := sender.SendReferralRewardNotice(ctx, p.ReferrerID, p.RefereeName, domain.ReferralActivatedRewardDays, setPlan); err != nil {
+			log.Error("reconcile: notify referral reward", "referrer_id", p.ReferrerID, "err", err)
 		}
 	}
 }
@@ -380,7 +380,7 @@ func selectSearchRestores(cands []postgres.PausedSearchSub, now time.Time) []int
 }
 
 // selectProductPauses — id товарных подписок к паузе (избыток сверх лимита плана,
-// самые старые остаются) и telegram_id затронутых юзеров.
+// самые старые остаются) и users.id затронутых юзеров.
 func selectProductPauses(cands []postgres.ProductSubForReconcile, now time.Time) (pause, affected []int64) {
 	for i := 0; i < len(cands); {
 		j := i
@@ -394,7 +394,7 @@ func selectProductPauses(cands []postgres.ProductSubForReconcile, now time.Time)
 			for k := limit; k < len(group); k++ {
 				pause = append(pause, group[k].ID)
 			}
-			affected = append(affected, group[0].TelegramID)
+			affected = append(affected, group[0].UserID)
 		}
 		i = j
 	}
@@ -536,6 +536,7 @@ func makeHandler(
 			// Отправляем уведомление (роутинг по каналам — внутри sender)
 			err = sender.SendPriceAlert(ctx, telegram.PriceAlert{
 				ChatID:         sub.TelegramID,
+				UserID:         sub.UserID,
 				SubscriptionID: sub.ID,
 				ProductName:    sub.ProductName,
 				ProductURL:     sub.ProductURL,
@@ -618,6 +619,7 @@ func makeSearchHandler(
 
 		alert := telegram.SearchAlert{
 			ChatID:    ev.TelegramID,
+			UserID:    ev.UserID,
 			QueryText: ev.QueryText,
 			SearchURL: ev.SearchURL,
 			TotalHits: total,

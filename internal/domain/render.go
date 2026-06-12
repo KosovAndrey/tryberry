@@ -37,6 +37,20 @@ func IntervalPhrase(d time.Duration) string {
 	}
 }
 
+// NotifyChannelTitle — человекочитаемое имя канала уведомлений.
+func NotifyChannelTitle(ch string) string {
+	switch ch {
+	case NotifyTG:
+		return "Telegram"
+	case NotifyVK:
+		return "VK"
+	case NotifyBoth:
+		return "Telegram + VK"
+	default:
+		return "Telegram" // auto у привязанных трактуем как TG (зарегался в TG)
+	}
+}
+
 // TriggerDescription — человекочитаемое описание условия уведомления.
 func TriggerDescription(t TriggerType, target *float64, pct *int16) string {
 	switch t {

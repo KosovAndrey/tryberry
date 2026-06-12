@@ -25,7 +25,8 @@ func NewNotifier(token string) *Notifier {
 }
 
 type PriceAlert struct {
-	ChatID         int64
+	ChatID         int64 // telegram_id (0 — TG не привязан, доставка только в VK)
+	UserID         int64 // users.id — роутинг по notify_channel в deliverer
 	SubscriptionID int64
 	ProductName    string
 	ProductURL     string
@@ -75,7 +76,8 @@ type SearchAlertItem struct {
 }
 
 type SearchAlert struct {
-	ChatID    int64
+	ChatID    int64 // telegram_id (0 — TG не привязан, доставка только в VK)
+	UserID    int64 // users.id — роутинг по notify_channel в deliverer
 	QueryText string
 	SearchURL string // ссылка на выдачу (кнопка «Открыть выдачу»)
 	TotalHits int    // сколько всего товаров подешевело (может быть > len(Items))

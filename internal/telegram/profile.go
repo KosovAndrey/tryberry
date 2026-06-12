@@ -37,7 +37,7 @@ func (b *Bot) handleProfile(ctx context.Context, chatID int64, messageID int, us
 
 	if user.VKID != nil {
 		fmt.Fprintf(&sb, "VK: ✅ привязан (id%d)\n", *user.VKID)
-		fmt.Fprintf(&sb, "Уведомления: <b>%s</b>\n", notifyChannelTitle(user.NotifyChannel))
+		fmt.Fprintf(&sb, "Уведомления: <b>%s</b>\n", domain.NotifyChannelTitle(user.NotifyChannel))
 	} else {
 		sb.WriteString("VK: ❌ не привязан\n")
 	}
@@ -59,19 +59,6 @@ func (b *Bot) handleProfile(ctx context.Context, chatID int64, messageID int, us
 	))
 
 	b.showView(chatID, messageID, sb.String(), tgbotapi.NewInlineKeyboardMarkup(rows...))
-}
-
-func notifyChannelTitle(ch string) string {
-	switch ch {
-	case domain.NotifyTG:
-		return "Telegram"
-	case domain.NotifyVK:
-		return "VK"
-	case domain.NotifyBoth:
-		return "Telegram + VK"
-	default:
-		return "Telegram" // auto: зарегался в TG → TG
-	}
 }
 
 // profileLinkVK — выдать код привязки VK (направление tg2vk).
@@ -123,6 +110,48 @@ func (b *Bot) profileLinkVK(ctx context.Context, chatID int64, messageID int, us
 		tgbotapi.NewInlineKeyboardButtonData("◀️ В меню", "menu:main"),
 	))
 	b.showView(chatID, messageID, text, tgbotapi.NewInlineKeyboardMarkup(rows...))
+}
+
+// cutLinkPrefix — «привязать XXXX» / «link XXXX» (регистронезависимо) → код.
+func cutLinkPrefix(text string) (string, bool) {
+	lower := strings.ToLower(text)
+	for _, p := range []string{"привязать ", "link "} {
+		if strings.HasPrefix(lower, p) {
+			return strings.TrimSpace(text[len(p):]), true
+		}
+	}
+	return "", false
+}
+
+// handleLinkCode — предъявление кода, выданного в VK-боте (vk2tg): владение
+// обоими аккаунтами доказано, телеграм-идентичность переезжает на VK-аккаунт
+// (пустой TG-аккаунт поглощается, непустой → ручной merge).
+func (b *Bot) handleLinkCode(ctx context.Context, chatID int64, user *domain.User, username, code string) {
+	if b.linkCodes == nil {
+		b.reply(chatID, "Привязка временно недоступна, попробуй позже.")
+		return
+	}
+	dir, vkUserID, err := b.linkCodes.Redeem(ctx, code)
+	if err != nil || dir != domain.LinkDirVK2TG {
+		// Неверный/истёкший код и чужое направление неразличимы для юзера.
+		b.reply(chatID, "Код не подошёл 😕 Проверь, что скопировал его целиком, "+
+			"или получи новый в VK-боте: кнопка «Привязать Telegram» (код живёт 15 минут).")
+		return
+	}
+
+	if err := b.userRepo.LinkTG(ctx, vkUserID, user.TelegramID, username); err != nil {
+		if errors.Is(err, domain.ErrTGAccountBusy) {
+			b.reply(chatID, "У этого Telegram-аккаунта уже есть подписки или тариф — "+
+				"автоматически объединить аккаунты нельзя. Напиши @kosov_andrey, объединим вручную.")
+			return
+		}
+		b.log.Error("link tg", "err", err)
+		b.reply(chatID, "Произошла ошибка, попробуй позже.")
+		return
+	}
+
+	b.reply(chatID, "Готово! 🎉 Аккаунты связаны.\n\n"+
+		"Подписки и тариф теперь общие с VK. Куда слать уведомления — настраивается в Профиле (/profile).")
 }
 
 // profileToggleNotify — циклически переключить канал уведомлений (доступно,

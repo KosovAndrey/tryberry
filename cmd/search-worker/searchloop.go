@@ -203,6 +203,7 @@ func (w *searchWorker) evaluateSubscription(ctx context.Context, q *domain.Searc
 	ev := domain.SearchHitEvent{
 		SubID:       sub.ID,
 		TelegramID:  sub.TelegramID,
+		UserID:      sub.UserID,
 		QueryText:   q.QueryText,
 		SearchURL:   q.NormalizedURL,
 		TriggerType: string(sub.TriggerType),
@@ -220,7 +221,7 @@ func (w *searchWorker) evaluateSubscription(ctx context.Context, q *domain.Searc
 		})
 	}
 
-	key := strconv.FormatInt(sub.TelegramID, 10)
+	key := strconv.FormatInt(sub.UserID, 10)
 	if err := w.events.Send(ctx, key, ev); err != nil {
 		// Событие не ушло — notifier ничего не запишет, значит на следующем
 		// скрейпе те же хиты сработают снова и переотправятся. Самовосстановление.

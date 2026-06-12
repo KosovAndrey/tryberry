@@ -41,10 +41,13 @@ type messageNew struct {
 const (
 	cmdProfile  = "profile"
 	cmdLink     = "link"
+	cmdUnlinkTG = "unlinktg" // отвязать Telegram (k=confirm — подтверждено)
+	cmdNotify   = "notify"   // цикл канала уведомлений tg→vk→both
 	cmdHelp     = "help"
 	cmdAdd      = "add"
 	cmdList     = "list"
 	cmdUntrack  = "untrack"
+	cmdPTrack   = "ptrack"   // тип триггера товарной подписки (k=any|below|disc)
 	cmdSearch   = "search"   // как добавить поиск-подписку
 	cmdLSearch  = "lsearch"  // список поиск-подписок
 	cmdSTrack   = "strack"   // выбор типа триггера поиск-подписки (k=any|below|disc)
@@ -53,6 +56,8 @@ const (
 	cmdPlanCard = "plan"     // карточка тарифа (k=имя плана)
 	cmdBuy      = "buy"      // заглушка оплаты (k=имя плана)
 	cmdTrial    = "trial"
+	cmdPromo    = "promo" // как активировать промокод
+	cmdRef      = "ref"   // пригласить друга (код + статистика)
 )
 
 // payloadData — payload наших кнопок: {"cmd":"...","id":N,"k":"..."}.
@@ -88,9 +93,12 @@ type Bot struct {
 	prodRepo        *postgres.ProductRepo
 	searchQueryRepo *postgres.SearchQueryRepo
 	searchSubRepo   *postgres.SearchSubscriptionRepo
+	promoRepo       *postgres.PromoRepo
+	referralRepo    *postgres.ReferralRepo
 	registry        *scraper.Registry
 	linkCodes       *redisrepo.LinkCodeStore
 	rdb             *redis.Client // FSM ввода порога (может быть nil)
+	botURL          string        // ссылка на VK-бота для приглашений ("" — не показывать)
 }
 
 func NewBot(
@@ -101,9 +109,12 @@ func NewBot(
 	prodRepo *postgres.ProductRepo,
 	searchQueryRepo *postgres.SearchQueryRepo,
 	searchSubRepo *postgres.SearchSubscriptionRepo,
+	promoRepo *postgres.PromoRepo,
+	referralRepo *postgres.ReferralRepo,
 	registry *scraper.Registry,
 	linkCodes *redisrepo.LinkCodeStore,
 	rdb *redis.Client,
+	botURL string,
 ) *Bot {
 	return &Bot{
 		client:          client,
@@ -113,9 +124,12 @@ func NewBot(
 		prodRepo:        prodRepo,
 		searchQueryRepo: searchQueryRepo,
 		searchSubRepo:   searchSubRepo,
+		promoRepo:       promoRepo,
+		referralRepo:    referralRepo,
 		registry:        registry,
 		linkCodes:       linkCodes,
 		rdb:             rdb,
+		botURL:          botURL,
 	}
 }
 
@@ -159,6 +173,10 @@ func menuKeyboard(linked bool) *Keyboard {
 			TextButton("🎁 Триал", buttonPayload(cmdTrial), ColorSecondary),
 		},
 		[]Button{
+			TextButton("🎟 Промокод", buttonPayload(cmdPromo), ColorSecondary),
+			TextButton("👥 Пригласить друга", buttonPayload(cmdRef), ColorSecondary),
+		},
+		[]Button{
 			TextButton("👤 Профиль", buttonPayload(cmdProfile), ColorSecondary),
 			TextButton("❓ Помощь", buttonPayload(cmdHelp), ColorSecondary),
 		},
@@ -193,12 +211,15 @@ func (b *Bot) handleMessage(ctx context.Context, vkID int64, text, payload strin
 			p.Cmd = cmdPlans
 		case "триал":
 			p.Cmd = cmdTrial
+		case "промокод":
+			p.Cmd = cmdPromo
 		}
 	}
 
 	if p.Cmd != "" {
 		// Любая кнопка/команда прерывает незавершённый ввод порога.
 		b.clearSearchFSM(ctx, vkID)
+		b.clearTrackFSM(ctx, vkID)
 	} else {
 		// «привязать <КОД>» / «link <КОД>» — предъявление кода, выданного в TG.
 		// Код регистронезависим (Redeem приводит к UPPER), так что lower не мешает.
@@ -207,7 +228,25 @@ func (b *Bot) handleMessage(ctx context.Context, vkID int64, text, payload strin
 			b.handleLink(ctx, vkID, user, strings.TrimSpace(rest))
 			return
 		}
-		// Ждём число (порог/процент) для поиск-подписки?
+		// «промокод <КОД>» — активация промокода.
+		if rest, ok := cutAnyPrefix(lower, "промокод ", "promo "); ok {
+			b.clearSearchFSM(ctx, vkID)
+			b.clearTrackFSM(ctx, vkID)
+			b.handlePromoCode(ctx, vkID, user, strings.TrimSpace(rest))
+			return
+		}
+		// «друг <КОД>» — код приглашения (= users.id реферера).
+		if rest, ok := cutAnyPrefix(lower, "друг ", "friend "); ok {
+			b.clearSearchFSM(ctx, vkID)
+			b.clearTrackFSM(ctx, vkID)
+			b.handleRefCode(ctx, vkID, user, strings.TrimSpace(rest))
+			return
+		}
+		// Ждём число (порог/процент)? Сначала товарный FSM, потом поисковый.
+		if fsm, ok := b.getTrackFSM(ctx, vkID); ok {
+			b.handleTrackThreshold(ctx, vkID, user, text, fsm)
+			return
+		}
 		if fsm, ok := b.getSearchFSM(ctx, vkID); ok {
 			b.handleSearchThreshold(ctx, vkID, user, text, fsm)
 			return
@@ -226,9 +265,13 @@ func (b *Bot) handleMessage(ctx context.Context, vkID int64, text, payload strin
 
 	switch p.Cmd {
 	case cmdProfile:
-		b.send(ctx, vkID, b.profileText(user), kb)
+		b.sendProfile(ctx, vkID, user)
+	case cmdNotify:
+		b.toggleNotify(ctx, vkID, user)
 	case cmdLink:
-		b.send(ctx, vkID, b.linkInstructionsText(user), kb)
+		b.issueLinkCode(ctx, vkID, user)
+	case cmdUnlinkTG:
+		b.handleUnlinkTG(ctx, vkID, user, p.Kind == "confirm")
 	case cmdHelp:
 		b.send(ctx, vkID, b.helpText(user), kb)
 	case cmdAdd:
@@ -238,6 +281,8 @@ func (b *Bot) handleMessage(ctx context.Context, vkID int64, text, payload strin
 		b.handleList(ctx, vkID, user, "")
 	case cmdUntrack:
 		b.handleUntrack(ctx, vkID, user, p.ID)
+	case cmdPTrack:
+		b.handleProductTrigger(ctx, vkID, user, p)
 	case cmdSearch:
 		b.send(ctx, vkID, "🔎 Поиск по ссылке\n\n"+
 			"Отправь ссылку на поисковую выдачу Wildberries — буду следить за всей выдачей и напишу, когда товары подешевеют.\n\n"+
@@ -257,6 +302,11 @@ func (b *Bot) handleMessage(ctx context.Context, vkID int64, text, payload strin
 		b.sendBuyStub(ctx, vkID, user, p.Kind)
 	case cmdTrial:
 		b.handleTrial(ctx, vkID, user)
+	case cmdPromo:
+		b.send(ctx, vkID, "🎟 Промокод\n\nЕсть код? Отправь его сообщением:\nпромокод КОД\n\n"+
+			"Промокоды дают дни тарифа бесплатно или скидку на оплату.", kb)
+	case cmdRef:
+		b.sendRef(ctx, vkID, user)
 	default:
 		b.send(ctx, vkID, b.welcomeText(user), kb)
 	}
@@ -290,39 +340,132 @@ func (b *Bot) handleLink(ctx context.Context, vkID int64, vkUser *domain.User, c
 	}
 
 	b.send(ctx, vkID, "Готово! 🎉 Аккаунты связаны.\n\n"+
-		"Теперь в Telegram-боте в Профиле можно выбрать, куда слать уведомления — "+
-		"в Telegram, сюда или в оба места.\n\nКнопка «Профиль» покажет статус.",
+		"Теперь в Профиле (кнопка внизу) можно выбрать, куда слать уведомления — "+
+		"в Telegram, сюда или в оба места.",
 		menuKeyboard(true))
 	_ = vkUser // пустая VK-строка поглощена в LinkVK
 }
 
-func (b *Bot) profileText(u *domain.User) string {
-	tg := "не привязан"
-	if u.TelegramID != 0 {
-		tg = "привязан ✅"
-	}
+// sendProfile — экран профиля: идентичности, тариф, использование лимитов,
+// настройка уведомлений и управление привязкой Telegram (только TG — VK здесь
+// менять нельзя, симметрично TG-боту, где меняется только VK).
+func (b *Bot) sendProfile(ctx context.Context, vkID int64, u *domain.User) {
 	now := time.Now()
 	plan := u.EffectivePlan(now)
+
+	prod, _ := b.subRepo.CountActiveByUserID(ctx, u.ID)
+	srch, _ := b.searchSubRepo.CountActiveByUserID(ctx, u.ID)
+
+	tg := "❌ не привязан (кнопка внизу)"
+	if u.TelegramID != 0 {
+		tg = "✅ привязан"
+	}
 	planLine := "Тариф: " + plan.Title
 	if u.PlanExpiresAt != nil && !u.PlanExpired(now) {
 		planLine += " (до " + u.PlanExpiresAt.Format(dateLayout) + ")"
 	}
-	return fmt.Sprintf("👤 Профиль\n\nVK: привязан ✅\nTelegram: %s\n%s\n"+
-		"📦 Товаров: до %d · 🔎 Поисков: до %d\n\n"+
-		"Куда слать уведомления (TG/VK/оба) — настраивается в Telegram-боте: Профиль → Уведомления.",
-		tg, planLine, plan.MaxProduct, plan.MaxSearch)
+
+	var sb strings.Builder
+	sb.WriteString("👤 Профиль\n\n")
+	fmt.Fprintf(&sb, "VK: ✅ привязан\nTelegram: %s\n%s\n", tg, planLine)
+	fmt.Fprintf(&sb, "📦 Товаров: %d из %d · 🔎 Поисков: %d из %d\n", prod, plan.MaxProduct, srch, plan.MaxSearch)
+
+	var kb *Keyboard
+	if u.TelegramID != 0 {
+		fmt.Fprintf(&sb, "🔔 Уведомления: %s\n", domain.NotifyChannelTitle(u.NotifyChannel))
+		kb = &Keyboard{Inline: true, Buttons: [][]Button{
+			{TextButton("🔔 Уведомления: "+domain.NotifyChannelTitle(u.NotifyChannel),
+				buttonPayload(cmdNotify), ColorPrimary)},
+			{TextButton("🔗 Отвязать Telegram", buttonPayload(cmdUnlinkTG), ColorSecondary)},
+		}}
+	} else {
+		kb = menuKeyboard(false)
+	}
+	b.send(ctx, vkID, sb.String(), kb)
 }
 
-func (b *Bot) linkInstructionsText(u *domain.User) string {
-	if u.TelegramID != 0 {
-		return "Твой аккаунт уже связан с Telegram ✅\n\n" +
-			"Уведомления настраиваются в Telegram-боте: Профиль → Уведомления."
+// toggleNotify — циклически переключить канал уведомлений: tg → vk → both → tg.
+func (b *Bot) toggleNotify(ctx context.Context, vkID int64, u *domain.User) {
+	if u.TelegramID == 0 {
+		b.sendProfile(ctx, vkID, u)
+		return
 	}
-	return "🔗 Как привязать Telegram:\n\n" +
-		"1. Открой Telegram-бота @TryBerryBot (t.me/TryBerryBot)\n" +
-		"2. Нажми «Профиль» → «Привязать VK» — бот выдаст код\n" +
-		"3. Отправь код сюда сообщением:\nпривязать КОД\n\n" +
-		"Код живёт 15 минут. После привязки уведомления о ценах смогут приходить сюда."
+	next := domain.NotifyVK
+	switch u.NotifyChannel {
+	case domain.NotifyVK:
+		next = domain.NotifyBoth
+	case domain.NotifyBoth:
+		next = domain.NotifyTG
+	}
+	if err := b.userRepo.SetNotifyChannel(ctx, u.ID, next); err != nil {
+		b.log.Error("vk: set notify channel", "err", err)
+		b.send(ctx, vkID, "Произошла ошибка, попробуй позже.", nil)
+		return
+	}
+	u.NotifyChannel = next
+	b.sendProfile(ctx, vkID, u)
+}
+
+// issueLinkCode — выдать код привязки Telegram (направление vk2tg: код выдан
+// здесь, предъявляется в TG-боте).
+func (b *Bot) issueLinkCode(ctx context.Context, vkID int64, u *domain.User) {
+	if u.TelegramID != 0 {
+		b.send(ctx, vkID, "Твой аккаунт уже связан с Telegram ✅\n\n"+
+			"Сменить привязку: сначала «Отвязать Telegram» в Профиле, потом привязать заново.",
+			menuKeyboard(true))
+		return
+	}
+	if b.linkCodes == nil {
+		b.send(ctx, vkID, "Привязка временно недоступна, попробуй позже.", nil)
+		return
+	}
+	code, err := b.linkCodes.Issue(ctx, u.ID, domain.LinkDirVK2TG)
+	if err != nil {
+		if errors.Is(err, domain.ErrLinkCodeRateLimited) {
+			b.send(ctx, vkID, "⏳ Код уже выдан — подожди минуту и попробуй снова, если не успел его использовать.", nil)
+			return
+		}
+		b.log.Error("vk: issue link code", "err", err)
+		b.send(ctx, vkID, "Произошла ошибка, попробуй позже.", nil)
+		return
+	}
+	ttlMin := int(domain.LinkCodeTTL.Minutes())
+	b.send(ctx, vkID, fmt.Sprintf(
+		"🔗 Привязка Telegram\n\n"+
+			"1. Открой Telegram-бота @TryBerryBot (t.me/TryBerryBot)\n"+
+			"2. Отправь ему сообщение:\n\nпривязать %s\n\n"+
+			"Код действует %d минут и работает один раз. Никому его не пересылай — "+
+			"это ключ к твоему аккаунту.\n\n"+
+			"Если уже пользуешься Telegram-ботом, можно наоборот: в TG Профиль → "+
+			"«Привязать VK» и прислать код сюда.",
+		code, ttlMin), menuKeyboard(false))
+}
+
+// handleUnlinkTG — отвязка Telegram из VK (с подтверждением). VK-идентичность
+// отсюда отвязать нельзя — только Telegram (зеркально TG-боту).
+func (b *Bot) handleUnlinkTG(ctx context.Context, vkID int64, u *domain.User, confirmed bool) {
+	if u.TelegramID == 0 {
+		b.sendProfile(ctx, vkID, u)
+		return
+	}
+	if !confirmed {
+		kb := &Keyboard{Inline: true, Buttons: [][]Button{
+			{TextButton("⚠️ Да, отвязать", fmt.Sprintf(`{"cmd":%q,"k":"confirm"}`, cmdUnlinkTG), ColorSecondary)},
+			{TextButton("◀️ Отмена", buttonPayload(cmdProfile), ColorPrimary)},
+		}}
+		b.send(ctx, vkID, "Отвязать Telegram от этого аккаунта?\n\n"+
+			"Подписки и тариф останутся здесь, в VK. Telegram-аккаунт начнёт с чистого листа "+
+			"при следующем заходе в TG-бота.", kb)
+		return
+	}
+	if err := b.userRepo.UnlinkTG(ctx, u.ID); err != nil {
+		b.log.Error("vk: unlink tg", "err", err)
+		b.send(ctx, vkID, "Произошла ошибка, попробуй позже.", nil)
+		return
+	}
+	u.TelegramID = 0
+	b.send(ctx, vkID, "✅ Telegram отвязан. Уведомления теперь приходят сюда, в VK.\n\n"+
+		"Привязать снова — кнопка «Привязать Telegram» внизу.", menuKeyboard(false))
 }
 
 func (b *Bot) helpText(u *domain.User) string {
@@ -333,7 +476,8 @@ func (b *Bot) helpText(u *domain.User) string {
 		"➕ Добавить товар / 🔎 Поиск по ссылке — как добавить\n" +
 		"📋 Мои товары / 📡 Мои поиски — списки, там же отписка\n" +
 		"💳 Тарифы — лимиты и цены, 🎁 Триал — попробовать поиск бесплатно\n" +
-		"👤 Профиль — статус аккаунта и тариф\n"
+		"🎟 Промокод — активировать код, 👥 Пригласить друга — бонусные дни\n" +
+		"👤 Профиль — аккаунт, уведомления, привязка\n"
 	if u.TelegramID == 0 {
 		base += "🔗 Привязать Telegram — связать аккаунты\n"
 	}
