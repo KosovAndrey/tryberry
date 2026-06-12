@@ -410,18 +410,18 @@ func htmlEscape(s string) string {
 func productLimitText(plan domain.Plan, used int) string {
 	return fmt.Sprintf(
 		"🚫 Достигнут лимит тарифа <b>%s</b>: товаров %d из %d.\n\n"+
-			"Чтобы отслеживать больше — отмени ненужное в /list или напиши @kosov_andrey про расширение тарифа.",
+			"Чтобы отслеживать больше — оформи тариф повыше (/plans) или отмени ненужное в /list.",
 		plan.Title, used, plan.MaxProduct)
 }
 
 func (b *Bot) searchLimitText(plan domain.Plan, used int) string {
 	if plan.MaxSearch == 0 {
 		return "🔎 Поиск-подписки на твоём тарифе пока недоступны.\n\n" +
-			"Поиск по ссылке есть на тарифах <b>Lite</b> и выше. Также можно попробовать бесплатный триал на 3 дня — команда /trial.\n\n" +
+			"Поиск по ссылке есть на тарифах <b>Lite</b> и выше — /plans. Также можно попробовать бесплатный триал на 3 дня — команда /trial.\n\n" +
 			"По вопросам — @kosov_andrey."
 	}
 	return fmt.Sprintf(
 		"🚫 Достигнут лимит поиск-подписок тарифа <b>%s</b>: %d из %d.\n\n"+
-			"Отмени ненужное в /list_search или напиши @kosov_andrey про расширение.",
+			"Оформи тариф повыше (/plans) или отмени ненужное в /list_search.",
 		plan.Title, used, plan.MaxSearch)
 }

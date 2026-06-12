@@ -96,6 +96,9 @@ func (b *Bot) handleMyPlan(ctx context.Context, chatID int64, messageID int, use
 		))
 	}
 	rows = append(rows, tgbotapi.NewInlineKeyboardRow(
+		tgbotapi.NewInlineKeyboardButtonData("💳 Тарифы", "menu:plans"),
+	))
+	rows = append(rows, tgbotapi.NewInlineKeyboardRow(
 		tgbotapi.NewInlineKeyboardButtonData("👥 Пригласить друга", "menu:ref"),
 		tgbotapi.NewInlineKeyboardButtonData("🎟 Промокод", "menu:promo"),
 	))
