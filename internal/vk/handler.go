@@ -21,13 +21,41 @@ type CallbackEvent struct {
 	Object  json.RawMessage `json:"object"`
 }
 
-// messageNew — object события message_new.
+// messageNew — object события message_new. Payload приходит от нажатий
+// text-кнопок клавиатуры (JSON-строка, см. TextButton).
 type messageNew struct {
 	Message struct {
-		FromID int64  `json:"from_id"`
-		PeerID int64  `json:"peer_id"`
-		Text   string `json:"text"`
+		FromID  int64  `json:"from_id"`
+		PeerID  int64  `json:"peer_id"`
+		Text    string `json:"text"`
+		Payload string `json:"payload"`
 	} `json:"message"`
+}
+
+// Команды кнопок (payload). Роутим по ним, а не по label — текст кнопки можно
+// менять, не ломая обработку.
+const (
+	cmdProfile = "profile"
+	cmdLink    = "link"
+	cmdHelp    = "help"
+)
+
+func buttonPayload(cmd string) string {
+	return fmt.Sprintf(`{"cmd":%q}`, cmd)
+}
+
+// payloadCmd — извлекает cmd из payload кнопки ("" — не кнопка/не наш формат).
+func payloadCmd(payload string) string {
+	if payload == "" {
+		return ""
+	}
+	var p struct {
+		Cmd string `json:"cmd"`
+	}
+	if err := json.Unmarshal([]byte(payload), &p); err != nil {
+		return ""
+	}
+	return p.Cmd
 }
 
 // Bot — обработчик входящих событий VK. Фаза 1: регистрация, привязка по коду,
@@ -57,31 +85,64 @@ func (b *Bot) HandleEvent(ctx context.Context, ev CallbackEvent) {
 	if m.Message.PeerID != m.Message.FromID {
 		return
 	}
-	b.handleMessage(ctx, m.Message.FromID, strings.TrimSpace(m.Message.Text))
+	b.handleMessage(ctx, m.Message.FromID, strings.TrimSpace(m.Message.Text), m.Message.Payload)
 }
 
-func (b *Bot) handleMessage(ctx context.Context, vkID int64, text string) {
+// menuKeyboard — постоянная клавиатура: до привязки на первом месте
+// «Привязать Telegram», после — только профиль и помощь.
+func menuKeyboard(linked bool) *Keyboard {
+	var rows [][]Button
+	if !linked {
+		rows = append(rows, []Button{
+			TextButton("🔗 Привязать Telegram", buttonPayload(cmdLink), ColorPrimary),
+		})
+	}
+	rows = append(rows, []Button{
+		TextButton("👤 Профиль", buttonPayload(cmdProfile), ColorPrimary),
+		TextButton("❓ Помощь", buttonPayload(cmdHelp), ColorSecondary),
+	})
+	return &Keyboard{Buttons: rows}
+}
+
+func (b *Bot) handleMessage(ctx context.Context, vkID int64, text, payload string) {
 	user, err := b.userRepo.UpsertVK(ctx, vkID)
 	if err != nil {
 		b.log.Error("vk: upsert user", "err", err)
-		b.send(ctx, vkID, "Произошла ошибка, попробуй позже.")
+		b.send(ctx, vkID, "Произошла ошибка, попробуй позже.", nil)
 		return
 	}
+	kb := menuKeyboard(user.TelegramID != 0)
 
+	cmd := payloadCmd(payload)
 	lower := strings.ToLower(text)
+	if cmd == "" {
+		switch lower {
+		case "профиль", "profile":
+			cmd = cmdProfile
+		case "помощь", "help", "начать", "start":
+			cmd = cmdHelp
+		}
+	}
 
 	// «привязать <КОД>» / «link <КОД>» — предъявление кода, выданного в TG.
 	// Код регистронезависим (Redeem приводит к UPPER), так что lower не мешает.
-	if rest, ok := cutAnyPrefix(lower, "привязать ", "link "); ok {
-		b.handleLink(ctx, vkID, user, strings.TrimSpace(rest))
-		return
+	// Кнопка «Привязать Telegram» сюда не попадает — у неё payload cmd=link.
+	if cmd == "" {
+		if rest, ok := cutAnyPrefix(lower, "привязать ", "link "); ok {
+			b.handleLink(ctx, vkID, user, strings.TrimSpace(rest))
+			return
+		}
 	}
 
-	switch lower {
-	case "профиль", "profile":
-		b.send(ctx, vkID, b.profileText(user))
+	switch cmd {
+	case cmdProfile:
+		b.send(ctx, vkID, b.profileText(user), kb)
+	case cmdLink:
+		b.send(ctx, vkID, b.linkInstructionsText(user), kb)
+	case cmdHelp:
+		b.send(ctx, vkID, b.helpText(user), kb)
 	default:
-		b.send(ctx, vkID, b.welcomeText(user))
+		b.send(ctx, vkID, b.welcomeText(user), kb)
 	}
 }
 
@@ -89,31 +150,33 @@ func (b *Bot) handleMessage(ctx context.Context, vkID int64, text string) {
 // предъявлен здесь — владение обоими аккаунтами доказано).
 func (b *Bot) handleLink(ctx context.Context, vkID int64, vkUser *domain.User, code string) {
 	if b.linkCodes == nil {
-		b.send(ctx, vkID, "Привязка временно недоступна, попробуй позже.")
+		b.send(ctx, vkID, "Привязка временно недоступна, попробуй позже.", nil)
 		return
 	}
 	dir, tgUserID, err := b.linkCodes.Redeem(ctx, code)
 	if err != nil || dir != domain.LinkDirTG2VK {
 		// Неверный/истёкший код и чужое направление неразличимы для юзера.
 		b.send(ctx, vkID, "Код не подошёл 😕 Проверь, что скопировал его целиком, "+
-			"или получи новый в Telegram-боте: Профиль → Привязать VK (код живёт 15 минут).")
+			"или получи новый в Telegram-боте: Профиль → Привязать VK (код живёт 15 минут).",
+			menuKeyboard(false))
 		return
 	}
 
 	if err := b.userRepo.LinkVK(ctx, tgUserID, vkID); err != nil {
 		if errors.Is(err, domain.ErrVKAccountBusy) {
 			b.send(ctx, vkID, "Этот VK-аккаунт уже пользуется ботом отдельно — "+
-				"автоматически объединить аккаунты нельзя. Напиши @kosov_andrey (Telegram), объединим вручную.")
+				"автоматически объединить аккаунты нельзя. Напиши @kosov_andrey (Telegram), объединим вручную.", nil)
 			return
 		}
 		b.log.Error("vk: link", "err", err)
-		b.send(ctx, vkID, "Произошла ошибка, попробуй позже.")
+		b.send(ctx, vkID, "Произошла ошибка, попробуй позже.", nil)
 		return
 	}
 
 	b.send(ctx, vkID, "Готово! 🎉 Аккаунты связаны.\n\n"+
 		"Теперь в Telegram-боте в Профиле можно выбрать, куда слать уведомления — "+
-		"в Telegram, сюда или в оба места.\n\nНапиши «профиль», чтобы проверить статус.")
+		"в Telegram, сюда или в оба места.\n\nКнопка «Профиль» покажет статус.",
+		menuKeyboard(true))
 	_ = vkUser // пустая VK-строка поглощена в LinkVK
 }
 
@@ -126,21 +189,44 @@ func (b *Bot) profileText(u *domain.User) string {
 		"Управление подписками и тарифом — пока в Telegram-боте.", tg, u.Plan)
 }
 
+func (b *Bot) linkInstructionsText(u *domain.User) string {
+	if u.TelegramID != 0 {
+		return "Твой аккаунт уже связан с Telegram ✅\n\n" +
+			"Уведомления настраиваются в Telegram-боте: Профиль → Уведомления."
+	}
+	return "🔗 Как привязать Telegram:\n\n" +
+		"1. Открой Telegram-бота @TryBerryBot (t.me/TryBerryBot)\n" +
+		"2. Нажми «Профиль» → «Привязать VK» — бот выдаст код\n" +
+		"3. Отправь код сюда сообщением:\nпривязать КОД\n\n" +
+		"Код живёт 15 минут. После привязки уведомления о ценах смогут приходить сюда."
+}
+
+func (b *Bot) helpText(u *domain.User) string {
+	base := "❓ Помощь\n\nЯ TryBerry — слежу за ценами на Wildberries и уведомляю о снижении 🍓\n\n" +
+		"Добавление товаров, поиск-подписки и тарифы — в Telegram-боте: @TryBerryBot. " +
+		"Сюда, в VK, могут приходить уведомления о ценах.\n\n" +
+		"Кнопки внизу:\n👤 Профиль — статус аккаунта\n"
+	if u.TelegramID == 0 {
+		base += "🔗 Привязать Telegram — связать аккаунты\n"
+	}
+	base += "\nВопросы — пиши @kosov_andrey (Telegram)."
+	return base
+}
+
 func (b *Bot) welcomeText(u *domain.User) string {
 	if u.TelegramID != 0 {
 		return "Привет! Твой аккаунт связан с Telegram ✅\n\n" +
 			"Сюда будут приходить уведомления о ценах (настройка — в Telegram-боте: Профиль → Уведомления).\n\n" +
-			"Команды: «профиль» — статус аккаунта."
+			"Кнопки внизу: «Профиль» — статус аккаунта, «Помощь» — что я умею."
 	}
 	return "Привет! Я TryBerry — слежу за ценами на Wildberries 🍓\n\n" +
 		"Пока я живу в основном в Telegram: @TryBerryBot\n\n" +
-		"Если ты уже пользуешься Telegram-ботом — привяжи аккаунт, и уведомления смогут приходить сюда:\n" +
-		"в Telegram-боте открой Профиль → «Привязать VK», получи код и отправь мне:\n" +
-		"привязать КОД"
+		"Если ты уже пользуешься Telegram-ботом — нажми «Привязать Telegram» внизу, " +
+		"и уведомления о ценах смогут приходить сюда."
 }
 
-func (b *Bot) send(ctx context.Context, peerID int64, text string) {
-	if err := b.client.SendMessage(ctx, peerID, text); err != nil {
+func (b *Bot) send(ctx context.Context, peerID int64, text string, kb *Keyboard) {
+	if err := b.client.SendMessageKeyboard(ctx, peerID, text, kb); err != nil {
 		b.log.Error("vk: send", "err", err, "peer", peerID)
 	}
 }
