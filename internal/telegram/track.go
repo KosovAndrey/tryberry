@@ -117,7 +117,7 @@ func (b *Bot) handleTrackTriggerCallback(ctx context.Context, cb *tgbotapi.Callb
 			return
 		}
 		b.editMenu(chatID, cb.Message.MessageID,
-			"🔔 Тип уведомления: "+triggerDescription(domain.TriggerAnyDrop, nil, nil),
+			"🔔 Тип уведомления: "+domain.TriggerDescription(domain.TriggerAnyDrop, nil, nil),
 			trackTriggerKeyboard(subID, domain.TriggerAnyDrop))
 		b.answerCallback(cb.ID, "Готово")
 
@@ -154,7 +154,7 @@ func (b *Bot) handleTrackThreshold(ctx context.Context, chatID, tgID int64, text
 
 	switch domain.TriggerType(fsm.Trigger) {
 	case domain.TriggerBelowTarget:
-		price, err := parsePrice(text)
+		price, err := domain.ParsePrice(text)
 		if err != nil {
 			b.reply(chatID, "Нужно число — цена в рублях, например <code>1499</code>. Или /menu чтобы отменить.")
 			return
@@ -168,7 +168,7 @@ func (b *Bot) handleTrackThreshold(ctx context.Context, chatID, tgID int64, text
 		b.confirmTrackTrigger(chatID, fsm.SubID, domain.TriggerBelowTarget, &price, nil)
 
 	case domain.TriggerDiscountPct:
-		pct, err := parsePct(text)
+		pct, err := domain.ParsePct(text)
 		if err != nil {
 			b.reply(chatID, "Нужно целое число от 1 до 99, например <code>20</code>. Или /menu чтобы отменить.")
 			return
@@ -188,7 +188,7 @@ func (b *Bot) handleTrackThreshold(ctx context.Context, chatID, tgID int64, text
 }
 
 func (b *Bot) confirmTrackTrigger(chatID, subID int64, t domain.TriggerType, target *float64, pct *int16) {
-	m := tgbotapi.NewMessage(chatID, "✅ <b>Готово!</b> "+triggerDescription(t, target, pct))
+	m := tgbotapi.NewMessage(chatID, "✅ <b>Готово!</b> "+domain.TriggerDescription(t, target, pct))
 	m.ParseMode = "HTML"
 	kb := trackTriggerKeyboard(subID, t)
 	m.ReplyMarkup = kb

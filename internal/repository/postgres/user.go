@@ -179,13 +179,14 @@ func (r *UserRepo) SetPlan(ctx context.Context, telegramID int64, plan string, e
 }
 
 // ActivateTrial — однократно включить триал. Возвращает false, если триал уже
-// использовался (или пользователь не найден).
-func (r *UserRepo) ActivateTrial(ctx context.Context, telegramID int64, expiresAt time.Time) (bool, error) {
+// использовался (или пользователь не найден). Ключ — users.id, чтобы работало
+// и для VK-аккаунтов без telegram_id.
+func (r *UserRepo) ActivateTrial(ctx context.Context, userID int64, expiresAt time.Time) (bool, error) {
 	const q = `
 		UPDATE users
 		SET plan = 'trial', plan_expires_at = $2, trial_used = TRUE, plan_reminded_at = NULL
-		WHERE telegram_id = $1 AND trial_used = FALSE`
-	tag, err := r.db.Exec(ctx, q, telegramID, expiresAt)
+		WHERE id = $1 AND trial_used = FALSE`
+	tag, err := r.db.Exec(ctx, q, userID, expiresAt)
 	if err != nil {
 		return false, err
 	}

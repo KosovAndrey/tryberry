@@ -41,7 +41,7 @@ func (b *Bot) handleTrial(ctx context.Context, chatID int64, messageID int, user
 	}
 
 	exp := now.Add(dur)
-	ok, err := b.userRepo.ActivateTrial(ctx, user.TelegramID, exp)
+	ok, err := b.userRepo.ActivateTrial(ctx, user.ID, exp)
 	if err != nil {
 		b.log.Error("activate trial", "err", err)
 		b.reply(chatID, "Произошла ошибка, попробуй позже.")
@@ -61,7 +61,7 @@ func (b *Bot) handleTrial(ctx context.Context, chatID int64, messageID int, user
 			"Доступно поиск-подписок: <b>%d</b>.\n"+
 			"Действует до <b>%s</b>.\n\n"+
 			"Отправь ссылку на поисковую выдачу Wildberries, чтобы попробовать 🔎",
-		days, daysWord(days), p.MaxSearch, exp.Format(dateLayout)),
+		days, domain.DaysWord(days), p.MaxSearch, exp.Format(dateLayout)),
 		backToMenuKeyboard())
 }
 
