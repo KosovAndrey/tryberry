@@ -107,6 +107,7 @@ func (b *Bot) SetCommands() error {
 		{Command: "list", Description: "Мои подписки"},
 		{Command: "track_search", Description: "Отслеживать поиск — /track_search <ссылка>"},
 		{Command: "list_search", Description: "Мои поиск-подписки"},
+		{Command: "plans", Description: "💳 Тарифы и подписка"},
 		{Command: "trial", Description: "🎁 Триал поиска (3 дня)"},
 		{Command: "promo", Description: "🎟 Активировать промокод"},
 		{Command: "ref", Description: "👥 Пригласить друга"},
@@ -221,6 +222,8 @@ func (b *Bot) handleCommand(ctx context.Context, msg *tgbotapi.Message) {
 		b.startSearchTrack(ctx, msg.Chat.ID, args, user)
 	case "list_search":
 		b.handleListSearch(ctx, msg.Chat.ID, user)
+	case "plans":
+		b.sendPlansMenu(msg.Chat.ID, 0)
 	case "trial":
 		b.handleTrial(ctx, msg.Chat.ID, 0, user)
 	case "promo":
@@ -267,6 +270,9 @@ func mainMenuKeyboard() tgbotapi.InlineKeyboardMarkup {
 		tgbotapi.NewInlineKeyboardRow(
 			tgbotapi.NewInlineKeyboardButtonData("📋 Мои товары", "menu:list"),
 			tgbotapi.NewInlineKeyboardButtonData("📡 Мои поиски", "menu:lsearch"),
+		),
+		tgbotapi.NewInlineKeyboardRow(
+			tgbotapi.NewInlineKeyboardButtonData("💳 Тарифы и подписка", "menu:plans"),
 		),
 		tgbotapi.NewInlineKeyboardRow(
 			tgbotapi.NewInlineKeyboardButtonData("👤 Профиль", "menu:profile"),
@@ -331,6 +337,7 @@ func (b *Bot) sendHelpMenu(chatID int64, messageID int, edit bool) {
 		"<code>/list</code> — мои подписки\n" +
 		"<code>/track_search &lt;ссылка&gt;</code> — отслеживать поиск\n" +
 		"<code>/list_search</code> — мои поиск-подписки\n" +
+		"<code>/plans</code> — тарифы и подписка\n"+
 		"<code>/promo КОД</code> — активировать промокод\n" +
 		"<code>/ref</code> — пригласить друга\n" +
 		"<code>/myplan</code> — мой тариф и лимиты\n" +
@@ -707,6 +714,15 @@ func (b *Bot) handleCallback(ctx context.Context, cb *tgbotapi.CallbackQuery) {
 			return
 		}
 		b.profileToggleNotify(ctx, chatID, messageID, user)
+
+	case cb.Data == "menu:plans":
+		b.sendPlansMenu(chatID, messageID)
+
+	case strings.HasPrefix(cb.Data, "plan:view:"):
+		b.sendPlanCard(chatID, messageID, strings.TrimPrefix(cb.Data, "plan:view:"))
+
+	case strings.HasPrefix(cb.Data, "plan:buy:"):
+		b.sendPlanBuyStub(chatID, messageID, strings.TrimPrefix(cb.Data, "plan:buy:"))
 
 	case cb.Data == "menu:promo":
 		b.sendPromoMenu(chatID, messageID)
