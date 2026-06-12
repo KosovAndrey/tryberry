@@ -45,6 +45,41 @@ scrape_configs:
         labels:
           service: notifier
 
+  - job_name: tryberrybot-bot-worker
+    metrics_path: /metrics
+    static_configs:
+      - targets: [ 'bot-worker:8093' ]
+        labels:
+          service: bot-worker
+
+  - job_name: tryberrybot-scheduler
+    metrics_path: /metrics
+    static_configs:
+      - targets: [ 'scheduler:8092' ]
+        labels:
+          service: scheduler
+
+  - job_name: tryberrybot-search-worker
+    metrics_path: /metrics
+    static_configs:
+      - targets: [ 'search-worker:8094' ]
+        labels:
+          service: search-worker
+
+  # Дорожка перекупов масштабируется (--scale reseller-worker=N) без
+  # container_name, поэтому DNS-discovery: A-запись имени сервиса возвращает
+  # IP всех реплик — статический target видел бы только одну.
+  - job_name: tryberrybot-reseller-worker
+    metrics_path: /metrics
+    dns_sd_configs:
+      - names: [ 'reseller-worker' ]
+        type: A
+        port: 8094
+        refresh_interval: 30s
+    relabel_configs:
+      - target_label: service
+        replacement: reseller-worker
+
   # Сам Prometheus — стандартная практика мониторить и его
   - job_name: prometheus
     static_configs:

@@ -1,12 +1,15 @@
-# Алерты по ПУЛУ WB-токенов (этап 2).
+# Алерты по ПУЛАМ WB-токенов: обычная дорожка (wb:search:) и перекупы
+# (wb:reseller:).
 #
 # Источник метрик — redis-exporter (REDIS_EXPORTER_CHECK_SINGLE_KEYS):
 #   redis_key_value{key="wb:search:pool:healthy"}          — живых токенов в пуле
 #   redis_key_value{key="wb:search:pool:oldest_mined_at"}  — самый старый mined_at (unix)
+#   (аналогичные ключи с префиксом wb:reseller: — пул перекупов)
 #
-# Майнер держит пул из WB_TOKEN_POOL_SIZE (по умолчанию 5) живых токенов,
-# проверяет/доливает раз в ~5 мин, каждый токен живёт ~72ч.
-# ВНИМАНИЕ: порог "< 5" в WBSearchPoolDegraded должен совпадать с размером пула.
+# Майнер держит пул из WB_TOKEN_POOL_SIZE (по 5 на дорожку) живых токенов,
+# проверяет/доливает раз в ~3-5 мин, каждый токен живёт ~72ч.
+# ВНИМАНИЕ: пороги "< 5" в *PoolDegraded должны совпадать с размером пулов
+# (WB_TOKEN_POOL_SIZE у token-miner и token-miner-reseller в docker-compose.yml).
 groups:
   - name: tryberrybot_wb_token_pool
     interval: 30s
@@ -45,3 +48,41 @@ groups:
         annotations:
           summary: "Самый старый WB-токен старше 49ч"
           description: "Самый старый токен в пуле намайнен {{ $value | humanizeDuration }} назад — майнер, вероятно, залип. Проверь pt_token_miner."
+
+  # Те же три правила для пула перекупов. Severity ниже (warning вместо
+  # critical на Empty): дорожка вторична, при пустом пуле встаёт только
+  # reseller-worker, обычный поиск работает.
+  - name: tryberrybot_wb_reseller_token_pool
+    interval: 30s
+    rules:
+      - alert: WBResellerPoolEmpty
+        expr: |
+          (redis_key_value{key="wb:reseller:pool:healthy"} == 0)
+          or absent(redis_key_value{key="wb:reseller:pool:healthy"})
+        for: 15m
+        labels:
+          severity: warning
+          service: token-miner-reseller
+        annotations:
+          summary: "Пул WB-токенов перекупов пуст"
+          description: "В пуле перекупов нет ни одного живого токена (или метрика отсутствует) 15+ мин — дорожка перекупов стоит. Проверь: docker logs pt_token_miner_reseller."
+
+      - alert: WBResellerPoolDegraded
+        expr: redis_key_value{key="wb:reseller:pool:healthy"} < 5
+        for: 30m
+        labels:
+          severity: warning
+          service: token-miner-reseller
+        annotations:
+          summary: "Пул WB-токенов перекупов неполный ({{ $value }} из 5)"
+          description: "Живых токенов перекупов меньше размера пула дольше 30 мин. Проверь pt_token_miner_reseller."
+
+      - alert: WBResellerPoolStale
+        expr: time() - redis_key_value{key="wb:reseller:pool:oldest_mined_at"} > 176400
+        for: 15m
+        labels:
+          severity: warning
+          service: token-miner-reseller
+        annotations:
+          summary: "Самый старый WB-токен перекупов старше 49ч"
+          description: "Самый старый токен в пуле перекупов намайнен {{ $value | humanizeDuration }} назад — майнер, вероятно, залип. Проверь pt_token_miner_reseller."

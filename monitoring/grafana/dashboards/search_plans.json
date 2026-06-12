@@ -256,8 +256,8 @@
       "type": "prometheus",
       "uid": "${DS_PROMETHEUS}"
      },
-     "expr": "sum by (status) (increase(tryberrybot_search_scrapes_total[1h]))",
-     "legendFormat": "{{status}}",
+     "expr": "sum by (status, service) (increase(tryberrybot_search_scrapes_total[1h]))",
+     "legendFormat": "{{service}}: {{status}}",
      "refId": "A"
     }
    ]

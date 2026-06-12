@@ -74,6 +74,10 @@ DISABLE_LEGACY = os.getenv("WB_DISABLE_LEGACY_MIRROR", "false").lower() in ("1",
 SLOT_PREFIX = f"{POOL_PREFIX}pool:"          # + i → HASH
 KEY_HEALTHY = f"{POOL_PREFIX}pool:healthy"
 KEY_OLDEST = f"{POOL_PREFIX}pool:oldest_mined_at"
+# Счётчики майнов (только вверх) — redis-exporter отдаёт их в Prometheus,
+# increase() по ним = сколько раз сходили через прокси (расход трафика).
+KEY_MINED_TOTAL = f"{POOL_PREFIX}pool:mined_total"
+KEY_MINE_FAILED = f"{POOL_PREFIX}pool:mine_failed_total"
 # legacy-зеркало (читает ещё не обновлённый скрейпер + старые алерты):
 KEY_COOKIE = f"{POOL_PREFIX}cookie"
 KEY_UA = f"{POOL_PREFIX}ua"
@@ -328,6 +332,7 @@ def run_cycle(r: "redis.Redis", pw):
                         "cookie": data["cookie"], "ua": data["ua"], "token": data["token"],
                         "status": "ok", "mined_at": now, "exp": exp,
                     })
+                    r.incr(KEY_MINED_TOTAL)
                     h = {"cookie": data["cookie"], "ua": data["ua"], "token": data["token"],
                          "status": "ok", "mined_at": str(now), "exp": str(exp)}
                     log.info("слот %d обновлён: %s…(%d симв.) exp≈%s", i, data["token"][:20],
@@ -337,6 +342,10 @@ def run_cycle(r: "redis.Redis", pw):
                     log.error("слот %d: запись в Redis упала: %s", i, e)
             else:
                 log.warning("слот %d: майнинг не удался — оставляю как есть", i)
+                try:
+                    r.incr(KEY_MINE_FAILED)
+                except Exception as e:  # noqa: BLE001
+                    log.error("счётчик фейлов: запись в Redis упала: %s", e)
         slots.append((i, h))
 
     alive = [(i, h) for (i, h) in slots if slot_alive(h, now)]

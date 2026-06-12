@@ -452,12 +452,21 @@ services:
     # Потолок памяти, чтобы Redis не разрастался бесконтрольно. Политика
     # volatile-lru: вытесняются ТОЛЬКО ключи с TTL (FSM, коды привязки,
     # price-cache) — пулы WB-токенов без TTL не трогаются.
+    # AOF + volume: пулы WB-токенов и FSM переживают пересоздание контейнера.
+    # Без этого каждый recreate redis стирал пулы → полный перемайн через
+    # резидентный прокси (основной источник расхода трафика lteboost).
     command:
       - redis-server
       - --maxmemory
       - 768mb
       - --maxmemory-policy
       - volatile-lru
+      - --appendonly
+      - "yes"
+      - --appendfsync
+      - everysec
+    volumes:
+      - redis_data:/data
     ports:
       - "6379:6379"
     healthcheck:
@@ -564,7 +573,7 @@ services:
       - "9121:9121"
     command:
       - '--redis.addr=redis://redis:6379'
-      - '--check-single-keys=wb:search:token:mined_at,wb:search:token:exp,wb:search:pool:healthy,wb:search:pool:oldest_mined_at,wb:reseller:pool:healthy,wb:reseller:pool:oldest_mined_at'
+      - '--check-single-keys=wb:search:token:mined_at,wb:search:token:exp,wb:search:pool:healthy,wb:search:pool:oldest_mined_at,wb:search:pool:mined_total,wb:search:pool:mine_failed_total,wb:reseller:pool:healthy,wb:reseller:pool:oldest_mined_at,wb:reseller:pool:mined_total,wb:reseller:pool:mine_failed_total'
     depends_on:
       redis:
         condition: service_healthy
@@ -642,6 +651,7 @@ services:
 
 volumes:
   pgdata:
+  redis_data:
   prometheus_data:
   loki_data:
   alertmanager_data:

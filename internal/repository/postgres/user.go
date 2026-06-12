@@ -10,6 +10,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"gitlab.com/KosovAndrey/tryberrybot/internal/domain"
+	"gitlab.com/KosovAndrey/tryberrybot/internal/metrics"
 )
 
 type UserRepo struct {
@@ -368,7 +369,11 @@ func (r *UserRepo) MergeAccounts(ctx context.Context, keptID, absorbedID int64, 
 		kept.trialUsed || absorbed.trialUsed, newRef); err != nil {
 		return err
 	}
-	return tx.Commit(ctx)
+	if err := tx.Commit(ctx); err != nil {
+		return err
+	}
+	metrics.AccountMerges.Inc()
+	return nil
 }
 
 // UnlinkTG — отвязать Telegram (для смены привязки из VK). Бывший TG-юзер при
