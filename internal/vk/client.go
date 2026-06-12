@@ -30,13 +30,62 @@ func NewClient(token string) *Client {
 	}
 }
 
+// Keyboard — клавиатура VK (messages.send, параметр keyboard).
+// Inline=false → постоянная клавиатура под полем ввода: остаётся между
+// сообщениями, обновляется с каждым ответом бота.
+type Keyboard struct {
+	OneTime bool       `json:"one_time"`
+	Inline  bool       `json:"inline,omitempty"`
+	Buttons [][]Button `json:"buttons"`
+}
+
+type Button struct {
+	Action ButtonAction `json:"action"`
+	Color  string       `json:"color,omitempty"`
+}
+
+type ButtonAction struct {
+	Type    string `json:"type"`              // text | open_link
+	Label   string `json:"label,omitempty"`
+	Payload string `json:"payload,omitempty"` // JSON-строка, прилетает в message_new.payload
+	Link    string `json:"link,omitempty"`
+}
+
+// Цвета text-кнопок (open_link цвет не поддерживает).
+const (
+	ColorPrimary   = "primary"
+	ColorSecondary = "secondary"
+)
+
+// TextButton — кнопка, нажатие которой шлёт боту label + payload.
+func TextButton(label, payload, color string) Button {
+	return Button{Action: ButtonAction{Type: "text", Label: label, Payload: payload}, Color: color}
+}
+
+// LinkButton — кнопка-ссылка (открывает URL, боту ничего не шлёт).
+func LinkButton(label, link string) Button {
+	return Button{Action: ButtonAction{Type: "open_link", Label: label, Link: link}}
+}
+
 // SendMessage — текст в ЛС пользователю (peerID = vk user id).
 // random_id защищает от дублей при ретраях.
 func (c *Client) SendMessage(ctx context.Context, peerID int64, text string) error {
+	return c.SendMessageKeyboard(ctx, peerID, text, nil)
+}
+
+// SendMessageKeyboard — текст + клавиатура (nil — не трогать текущую).
+func (c *Client) SendMessageKeyboard(ctx context.Context, peerID int64, text string, kb *Keyboard) error {
 	params := url.Values{
 		"peer_id":   {strconv.FormatInt(peerID, 10)},
 		"message":   {text},
 		"random_id": {strconv.FormatInt(rand.Int63(), 10)}, //nolint:gosec // не криптослучайность, защита от дублей
+	}
+	if kb != nil {
+		raw, err := json.Marshal(kb)
+		if err != nil {
+			return fmt.Errorf("vk keyboard: %w", err)
+		}
+		params.Set("keyboard", string(raw))
 	}
 	return c.call(ctx, "messages.send", params)
 }
