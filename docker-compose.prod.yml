@@ -178,7 +178,7 @@ services:
       RCLONE_CONFIG_S3_REGION: "${S3_REGION:-ru-1}"
     entrypoint: /bin/sh -c "trap exit TERM;
       while :; do
-      rclone sync /backups s3:${S3_BUCKET:-tryberry-backups} --log-level INFO;
+      rclone sync /backups s3:${S3_BUCKET:-tryberry-backups} --copy-links --log-level INFO;
       sleep 6h & wait $${!}; done"
     depends_on:
       - postgres-backup
