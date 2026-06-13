@@ -52,6 +52,14 @@ func (r *PaymentRepo) SetYKID(ctx context.Context, id int64, ykID string) error 
 	return err
 }
 
+// MarkCanceled помечает pending-платёж отменённым (например, провайдер отклонил
+// автосписание сразу). Только из pending — succeeded не трогаем.
+func (r *PaymentRepo) MarkCanceled(ctx context.Context, id int64) error {
+	_, err := r.db.Exec(ctx,
+		`UPDATE payments SET status = 'canceled' WHERE id = $1 AND status = 'pending'`, id)
+	return err
+}
+
 // AppliedPayment — результат успешного перехода платежа в succeeded.
 type AppliedPayment struct {
 	PaymentID             int64

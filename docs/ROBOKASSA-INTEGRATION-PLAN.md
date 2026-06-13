@@ -276,7 +276,23 @@ auth.robokassa.ru доступен через прокси (RU-egress) так ж
      подписки и «Отменить автопродление» в /myplan (`subscription.go`).
      emailFSM получил флаг `Sub`.
    - **TODO**: то же на витрине VK (`internal/vk/plans.go` — сейчас только разовая).
-5. **Шедулер автосписаний** + pre-notice + retry/dunning.
+5. ✅ **Шедулер автосписаний** (`internal/payment/charger.go`, запуск в
+   `setupPayments`, только если провайдер умеет рекуррент): тикер
+   `BILLING_CHARGE_INTERVAL_MINUTES` (дефолт 60). Два прохода:
+   - **pre-notice**: `ListForPreNotice` (next_charge_at ≤ now+`SubPreNoticeLead`,
+     pre_notice_sent_at IS NULL) → `SubscriptionChargeUpcoming` → `MarkPreNoticeSent`.
+   - **charge**: `ClaimDueForCharge` атомарно отбирает due (active|past_due) и
+     переносит next_charge_at на now+`SubChargeRetryInterval` (in-flight +
+     расписание ретрая) → создаёт payments(kind=renewal) → `ChargeRecurring`.
+     Успех подтверждается по ResultURL (Applier продлит план + `MarkRenewed`).
+     Синхронный отказ → `MarkCanceled` платежа + `RecordChargeFailure`
+     (fail_count++, при `SubMaxChargeFails` → expired) + `SubscriptionPaymentFailed`.
+   - Notifier дополнен `SubscriptionChargeUpcoming`/`SubscriptionPaymentFailed`
+     (TG+VK). build/vet/тесты зелёные.
+   - ⚠️ **Известный край**: если списание прошло, но ResultURL не дошёл, через
+     `SubChargeRetryInterval` подписка переотберётся → риск двойного списания.
+     Хардить через `OpStateExt` (запрос состояния операции) перед повторным
+     списанием — TODO (этап 6).
 6. **Обкатка ~2 недели**, метрики (успешные/неуспешные списания, активные
    подписки, чарджбэки). Затем — удаление ЮKassa отдельным коммитом.
 

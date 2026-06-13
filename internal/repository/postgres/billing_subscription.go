@@ -100,6 +100,83 @@ func (r *BillingSubscriptionRepo) MarkRenewed(ctx context.Context, id, lastPayme
 	return err
 }
 
+// scanSubs — общий разбор строк billing_subscriptions.
+func scanSubs(rows pgx.Rows) ([]*domain.BillingSubscription, error) {
+	defer rows.Close()
+	var out []*domain.BillingSubscription
+	for rows.Next() {
+		s := &domain.BillingSubscription{}
+		if err := rows.Scan(
+			&s.ID, &s.UserID, &s.Plan, &s.Status, &s.AmountKopecks, &s.RecurringInvoiceID,
+			&s.NextChargeAt, &s.PreNoticeSentAt, &s.FailCount, &s.LastPaymentID,
+			&s.CreatedAt, &s.UpdatedAt, &s.CanceledAt); err != nil {
+			return nil, err
+		}
+		out = append(out, s)
+	}
+	return out, rows.Err()
+}
+
+const subCols = `id, user_id, plan, status, amount_kopecks, recurring_invoice_id,
+	next_charge_at, pre_notice_sent_at, fail_count, last_payment_id,
+	created_at, updated_at, canceled_at`
+
+// ListForPreNotice — активные подписки, по которым пора предупредить о списании
+// (next_charge_at <= within) и предупреждение ещё не отправляли.
+func (r *BillingSubscriptionRepo) ListForPreNotice(ctx context.Context, within time.Time) ([]*domain.BillingSubscription, error) {
+	rows, err := r.db.Query(ctx,
+		`SELECT `+subCols+` FROM billing_subscriptions
+		 WHERE status = 'active' AND pre_notice_sent_at IS NULL AND next_charge_at <= $1
+		 ORDER BY next_charge_at`, within)
+	if err != nil {
+		return nil, err
+	}
+	return scanSubs(rows)
+}
+
+// MarkPreNoticeSent — отметить, что предупреждение о списании отправлено.
+func (r *BillingSubscriptionRepo) MarkPreNoticeSent(ctx context.Context, id int64, now time.Time) error {
+	_, err := r.db.Exec(ctx,
+		`UPDATE billing_subscriptions SET pre_notice_sent_at = $2, updated_at = NOW() WHERE id = $1`,
+		id, now)
+	return err
+}
+
+// ClaimDueForCharge атомарно отбирает подписки к списанию (active,
+// next_charge_at <= now) и сразу переносит next_charge_at на retryAt — это и
+// «in-flight»-защита от повторного отбора пока ждём подтверждения по ResultURL,
+// и расписание ретрая, если списание не пройдёт. Возвращает отобранные строки.
+func (r *BillingSubscriptionRepo) ClaimDueForCharge(ctx context.Context, now, retryAt time.Time) ([]*domain.BillingSubscription, error) {
+	rows, err := r.db.Query(ctx,
+		`UPDATE billing_subscriptions
+		 SET next_charge_at = $2, updated_at = NOW()
+		 WHERE status IN ('active', 'past_due') AND next_charge_at <= $1
+		 RETURNING `+subCols, now, retryAt)
+	if err != nil {
+		return nil, err
+	}
+	return scanSubs(rows)
+}
+
+// RecordChargeFailure фиксирует неудачное списание: fail_count++ и, если
+// достигнут потолок maxFails, переводит подписку в expired (доступ истечёт по
+// плану). Возвращает expired=true, если подписка остановлена окончательно.
+func (r *BillingSubscriptionRepo) RecordChargeFailure(ctx context.Context, id int64, maxFails int) (bool, error) {
+	var failCount int
+	var status string
+	err := r.db.QueryRow(ctx,
+		`UPDATE billing_subscriptions
+		 SET fail_count = fail_count + 1,
+		     status = CASE WHEN fail_count + 1 >= $2 THEN 'expired' ELSE 'past_due' END,
+		     updated_at = NOW()
+		 WHERE id = $1
+		 RETURNING fail_count, status`, id, maxFails).Scan(&failCount, &status)
+	if err != nil {
+		return false, err
+	}
+	return status == domain.SubStatusExpired, nil
+}
+
 // LogConsent пишет факт явного согласия на подписку (защита от чарджбэка/ЗоЗПП).
 func (r *BillingSubscriptionRepo) LogConsent(ctx context.Context, c domain.SubscriptionConsent) error {
 	const q = `

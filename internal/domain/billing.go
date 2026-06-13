@@ -31,6 +31,15 @@ const SubChargeLeadTime = 1 * 24 * time.Hour
 // past_due в expired (доступ истекает по плану, просим продлить вручную).
 const SubMaxChargeFails = 3
 
+// SubPreNoticeLead — за сколько до автосписания предупреждаем пользователя
+// («скоро спишем X, отменить — тут»). Снижает чарджбэки и недовольство.
+const SubPreNoticeLead = 2 * 24 * time.Hour
+
+// SubChargeRetryInterval — через сколько повторяем неудавшееся списание (dunning)
+// и одновременно «in-flight» окно: после инициации списания подписка не
+// переотбирается до этого срока (ждём подтверждения по ResultURL).
+const SubChargeRetryInterval = 24 * time.Hour
+
 // SubTermsVersion — версия текста условий подписки, под которой логируем
 // согласие. Менять при изменении формулировок условий автопродления.
 const SubTermsVersion = "v1-2026-06"

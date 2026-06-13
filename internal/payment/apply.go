@@ -18,6 +18,10 @@ type Notifier interface {
 	PaymentSucceeded(ctx context.Context, buyer *domain.User, plan string, expiresAt time.Time)
 	// ReferralPaid — рефереру: награда за оплату друга friendName.
 	ReferralPaid(ctx context.Context, referrer *domain.User, friendName string, days int, setPlan bool)
+	// SubscriptionChargeUpcoming — предупреждение о скором автосписании.
+	SubscriptionChargeUpcoming(ctx context.Context, buyer *domain.User, plan string, amountKopecks int64, chargeAt time.Time)
+	// SubscriptionPaymentFailed — автосписание не прошло. willRetry=false → подписка остановлена.
+	SubscriptionPaymentFailed(ctx context.Context, buyer *domain.User, plan string, willRetry bool)
 }
 
 // Applier применяет подтверждённую оплату: продлевает план (идемпотентно),

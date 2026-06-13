@@ -52,6 +52,16 @@ func setupPayments(
 	notifier := &paymentNotifier{tg: tgBot, vk: vkBot, log: log}
 	applier := payment.NewApplier(paymentRepo, promoRepo, referralRepo, userRepo, billingRepo, discounts, notifier, log)
 
+	// Шедулер автосписаний — только если провайдер умеет рекуррент (Робокасса).
+	if provider.SupportsRecurring() {
+		charger := payment.NewCharger(provider, billingRepo, paymentRepo, userRepo, notifier, log)
+		interval := 1 * time.Hour
+		if m, err := strconv.Atoi(getEnv("BILLING_CHARGE_INTERVAL_MINUTES", "60")); err == nil && m > 0 {
+			interval = time.Duration(m) * time.Minute
+		}
+		go charger.Run(ctx, interval)
+	}
+
 	consumer := kafka.NewConsumer(brokers, payment.TopicConfirmed, "payment-workers")
 	go func() {
 		log.Info("payments consumer started")
@@ -155,5 +165,42 @@ func (n *paymentNotifier) ReferralPaid(ctx context.Context, referrer *domain.Use
 		n.vk.Notify(ctx, *referrer.VKID, fmt.Sprintf(
 			"🎉 %s оплатил тариф — тебе +%d %s тарифа за приглашение!\n%s",
 			friend, days, domain.DaysWord(days), tail))
+	}
+}
+
+func (n *paymentNotifier) SubscriptionChargeUpcoming(ctx context.Context, buyer *domain.User, plan string, amountKopecks int64, chargeAt time.Time) {
+	p, _ := domain.PlanByName(plan)
+	sum := domain.KopecksToRubString(amountKopecks)
+	date := chargeAt.Format(payDateLayout)
+	if buyer.TelegramID != 0 {
+		n.tg.NotifyHTML(buyer.TelegramID, fmt.Sprintf(
+			"🔁 <b>Скоро продлим подписку</b>\n\n"+
+				"Тариф <b>%s</b>: %s ₽ спишутся автоматически <b>%s</b>.\n\n"+
+				"Если продлевать не нужно — отмени автопродление в разделе «Мой тариф» (/myplan).",
+			p.Title, sum, date))
+	}
+	if buyer.VKID != nil && n.vk != nil {
+		n.vk.Notify(ctx, *buyer.VKID, fmt.Sprintf(
+			"🔁 Скоро продлим подписку\n\nТариф %s: %s ₽ спишутся автоматически %s.\n\n"+
+				"Если продлевать не нужно — отмени автопродление в разделе «Мой тариф».",
+			p.Title, sum, date))
+	}
+}
+
+func (n *paymentNotifier) SubscriptionPaymentFailed(ctx context.Context, buyer *domain.User, plan string, willRetry bool) {
+	p, _ := domain.PlanByName(plan)
+	tail := "Повторим попытку списания позже — проверь, что на карте достаточно средств."
+	if !willRetry {
+		tail = "Автопродление остановлено. Чтобы продолжить пользоваться тарифом, оплати его заново в разделе «Тарифы»."
+	}
+	if buyer.TelegramID != 0 {
+		n.tg.NotifyHTML(buyer.TelegramID, fmt.Sprintf(
+			"⚠️ <b>Не удалось продлить подписку</b>\n\nТариф <b>%s</b>: автосписание не прошло.\n%s",
+			p.Title, tail))
+	}
+	if buyer.VKID != nil && n.vk != nil {
+		n.vk.Notify(ctx, *buyer.VKID, fmt.Sprintf(
+			"⚠️ Не удалось продлить подписку\n\nТариф %s: автосписание не прошло.\n%s",
+			p.Title, tail))
 	}
 }
