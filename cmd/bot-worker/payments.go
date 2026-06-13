@@ -10,6 +10,7 @@ import (
 	"gitlab.com/KosovAndrey/tryberrybot/internal/domain"
 	"gitlab.com/KosovAndrey/tryberrybot/internal/kafka"
 	"gitlab.com/KosovAndrey/tryberrybot/internal/payment"
+	"gitlab.com/KosovAndrey/tryberrybot/internal/payment/robokassa"
 	"gitlab.com/KosovAndrey/tryberrybot/internal/payment/yookassa"
 	"gitlab.com/KosovAndrey/tryberrybot/internal/repository/postgres"
 	redisrepo "gitlab.com/KosovAndrey/tryberrybot/internal/repository/redis"
@@ -34,21 +35,13 @@ func setupPayments(
 	userRepo *postgres.UserRepo,
 	discounts *redisrepo.DiscountStore,
 ) *kafka.Consumer {
-	shopID := getEnv("YOOKASSA_SHOP_ID", "")
-	secret := getEnv("YOOKASSA_SECRET_KEY", "")
-	if shopID == "" || secret == "" {
-		log.Info("yookassa not configured — payments show stub")
+	provider := setupProvider(log)
+	if provider == nil {
+		log.Info("payment provider not configured — payments show stub")
 		return nil
 	}
-	returnURL := getEnv("YOOKASSA_RETURN_URL", "https://t.me/TryBerryBot")
-	// Ставка НДС в чеке. Самозанятый (НПД) не плательщик НДS → 1 = «без НДС».
-	vatCode := 1
-	if v, err := strconv.Atoi(getEnv("YOOKASSA_VAT_CODE", "1")); err == nil {
-		vatCode = v
-	}
 
-	ykClient := yookassa.NewClient(shopID, secret)
-	svc := payment.NewService(ykClient, paymentRepo, discounts, returnURL, vatCode, log)
+	svc := payment.NewService(provider, paymentRepo, discounts, log)
 	tgBot.SetPayments(svc)
 	if vkBot != nil {
 		vkBot.SetPayments(svc)
@@ -72,8 +65,46 @@ func setupPayments(
 			log.Error("payments consumer stopped", "err", err)
 		}
 	}()
-	log.Info("yookassa payments enabled", "return_url", returnURL)
+	log.Info("payments enabled", "provider", provider.Name())
 	return consumer
+}
+
+// setupProvider выбирает платёжный провайдер по флагу PAYMENT_PROVIDER.
+// Возвращает nil, если выбранный провайдер не сконфигурирован (боты покажут
+// заглушку). По умолчанию — ЮKassa (на период миграции на Робокассу).
+func setupProvider(log *slog.Logger) payment.Provider {
+	switch getEnv("PAYMENT_PROVIDER", domain.ProviderYooKassa) {
+	case domain.ProviderRobokassa:
+		login := getEnv("ROBOKASSA_MERCHANT_LOGIN", "")
+		pw1 := getEnv("ROBOKASSA_PASSWORD1", "")
+		pw2 := getEnv("ROBOKASSA_PASSWORD2", "")
+		if login == "" || pw1 == "" || pw2 == "" {
+			return nil
+		}
+		rk := robokassa.NewClient(robokassa.Config{
+			Login:     login,
+			Password1: pw1,
+			Password2: pw2,
+			IsTest:    getEnv("ROBOKASSA_IS_TEST", "0") == "1",
+			SNO:       getEnv("ROBOKASSA_SNO", "npd"),
+			HashType:  getEnv("ROBOKASSA_HASH_TYPE", ""),
+		})
+		fiscal := getEnv("ROBOKASSA_NPD", "1") == "1"
+		return payment.NewRobokassaProvider(rk, fiscal)
+	default:
+		shopID := getEnv("YOOKASSA_SHOP_ID", "")
+		secret := getEnv("YOOKASSA_SECRET_KEY", "")
+		if shopID == "" || secret == "" {
+			return nil
+		}
+		returnURL := getEnv("YOOKASSA_RETURN_URL", "https://t.me/TryBerryBot")
+		// Ставка НДС в чеке. Самозанятый (НПД) не плательщик НДС → 1 = «без НДС».
+		vatCode := 1
+		if v, err := strconv.Atoi(getEnv("YOOKASSA_VAT_CODE", "1")); err == nil {
+			vatCode = v
+		}
+		return payment.NewYooKassaProvider(yookassa.NewClient(shopID, secret), returnURL, vatCode)
+	}
 }
 
 // paymentNotifier реализует payment.Notifier: уведомляет во все привязанные

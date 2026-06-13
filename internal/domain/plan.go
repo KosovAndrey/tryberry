@@ -25,19 +25,22 @@ type Plan struct {
 	// быструю дорожку (reseller-tasks, отдельный пул токенов). 0 → дефолт-фолбэк.
 	Interval time.Duration
 
-	// PriceRub — цена в рублях, ТОЛЬКО для отображения (оплаты в боте пока нет,
-	// план выдаётся вручную через /grant).
+	// PriceRub — цена разовой оплаты в рублях. 0 → план не покупается.
 	PriceRub int
+
+	// SubPriceRub — цена автопродления (подписки) в рублях, чуть ниже разовой как
+	// nudge к подключению автоплатежа. 0 → подписка для плана недоступна.
+	SubPriceRub int
 }
 
 // Plans — каталог тарифов. ЦИФРЫ МЕНЯЮТСЯ ЗДЕСЬ.
 var Plans = map[string]Plan{
 	"free":           {Name: "free", Title: "Free", MaxProduct: 5, MaxSearch: 0, Interval: 60 * time.Minute, PriceRub: 0},
 	"trial":          {Name: "trial", Title: "Триал (3 дня)", MaxProduct: 100, MaxSearch: 10, Interval: 15 * time.Minute, PriceRub: 0},
-	"lite":           {Name: "lite", Title: "Lite", MaxProduct: 20, MaxSearch: 3, Interval: 30 * time.Minute, PriceRub: 199},
-	"pro":            {Name: "pro", Title: "Pro", MaxProduct: 100, MaxSearch: 10, Interval: 15 * time.Minute, PriceRub: 499},
-	"reseller_start": {Name: "reseller_start", Title: "Reseller Start", MaxProduct: 5, MaxSearch: 1, Interval: time.Minute, PriceRub: 990},
-	"reseller_pro":   {Name: "reseller_pro", Title: "Reseller Pro", MaxProduct: 15, MaxSearch: 3, Interval: time.Minute, PriceRub: 1990},
+	"lite":           {Name: "lite", Title: "Lite", MaxProduct: 20, MaxSearch: 3, Interval: 30 * time.Minute, PriceRub: 199, SubPriceRub: 189},
+	"pro":            {Name: "pro", Title: "Pro", MaxProduct: 100, MaxSearch: 10, Interval: 15 * time.Minute, PriceRub: 499, SubPriceRub: 479},
+	"reseller_start": {Name: "reseller_start", Title: "Reseller Start", MaxProduct: 5, MaxSearch: 1, Interval: time.Minute, PriceRub: 990, SubPriceRub: 940},
+	"reseller_pro":   {Name: "reseller_pro", Title: "Reseller Pro", MaxProduct: 15, MaxSearch: 3, Interval: time.Minute, PriceRub: 1990, SubPriceRub: 1890},
 	"unlimited":      {Name: "unlimited", Title: "Unlimited", MaxProduct: 100000, MaxSearch: 100000, Interval: time.Minute, PriceRub: 0},
 
 	// Legacy-алиасы: чтобы users.plan со старыми именами не откатывался на free

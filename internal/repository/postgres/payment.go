@@ -20,15 +20,25 @@ func NewPaymentRepo(db *pgxpool.Pool) *PaymentRepo {
 	return &PaymentRepo{db: db}
 }
 
-// Create — заводит платёж в статусе pending и возвращает его id. yk_payment_id
-// проставляется позже (SetYKID) после ответа ЮKassa на create.
+// Create — заводит платёж в статусе pending и возвращает его id. Внешний id
+// платежа (yk_payment_id для ЮKassa) проставляется позже через SetYKID; для
+// Робокассы внешний id == возвращённый здесь payments.id (InvId).
+// Пустые provider/kind подставляются дефолтами схемы (yookassa/onetime).
 func (r *PaymentRepo) Create(ctx context.Context, p domain.Payment) (int64, error) {
+	provider := p.Provider
+	if provider == "" {
+		provider = domain.ProviderYooKassa
+	}
+	kind := p.Kind
+	if kind == "" {
+		kind = domain.PayKindOnetime
+	}
 	var id int64
 	err := r.db.QueryRow(ctx,
-		`INSERT INTO payments (user_id, idempotence_key, plan, days, amount_kopecks, promo_code_id)
-		 VALUES ($1, $2, $3, $4, $5, $6)
+		`INSERT INTO payments (user_id, idempotence_key, provider, kind, plan, days, amount_kopecks, promo_code_id, billing_subscription_id)
+		 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
 		 RETURNING id`,
-		p.UserID, p.IdempotenceKey, p.Plan, p.Days, p.AmountKopecks, p.PromoCodeID).Scan(&id)
+		p.UserID, p.IdempotenceKey, provider, kind, p.Plan, p.Days, p.AmountKopecks, p.PromoCodeID, p.BillingSubscriptionID).Scan(&id)
 	if err == nil {
 		metrics.PaymentsCreated.Inc()
 	}
@@ -52,6 +62,21 @@ type AppliedPayment struct {
 	PromoCodeID   *int64
 }
 
+// ConfirmInfo — user_id и сумма платежа по его id (для вебхука: получить ключ
+// партиционирования и сверить сумму). found=false, если платежа нет.
+func (r *PaymentRepo) ConfirmInfo(ctx context.Context, id int64) (userID, amountKopecks int64, found bool, err error) {
+	err = r.db.QueryRow(ctx,
+		`SELECT user_id, amount_kopecks FROM payments WHERE id = $1`, id).
+		Scan(&userID, &amountKopecks)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return 0, 0, false, nil
+	}
+	if err != nil {
+		return 0, 0, false, err
+	}
+	return userID, amountKopecks, true, nil
+}
+
 // MarkSucceeded атомарно и идемпотентно применяет оплату: переводит платёж
 // pending→succeeded (только первый переход проходит — защита от повторных
 // вебхуков и переотправок Kafka) и продлевает план пользователю. Возвращает
@@ -59,7 +84,7 @@ type AppliedPayment struct {
 //
 // Погашение discount-кода и реферальную награду НЕ делает — это best-effort
 // шаги в консьюмере (их сбой не должен откатывать денежный путь).
-func (r *PaymentRepo) MarkSucceeded(ctx context.Context, ykID string, now time.Time) (AppliedPayment, bool, error) {
+func (r *PaymentRepo) MarkSucceeded(ctx context.Context, paymentID int64, now time.Time) (AppliedPayment, bool, error) {
 	var out AppliedPayment
 
 	tx, err := r.db.Begin(ctx)
@@ -72,9 +97,9 @@ func (r *PaymentRepo) MarkSucceeded(ctx context.Context, ykID string, now time.T
 	var days int
 	err = tx.QueryRow(ctx,
 		`UPDATE payments SET status = 'succeeded', paid_at = $2
-		 WHERE yk_payment_id = $1 AND status = 'pending'
+		 WHERE id = $1 AND status = 'pending'
 		 RETURNING user_id, plan, days, amount_kopecks, promo_code_id`,
-		ykID, now).Scan(&out.UserID, &out.Plan, &days, &out.AmountKopecks, &out.PromoCodeID)
+		paymentID, now).Scan(&out.UserID, &out.Plan, &days, &out.AmountKopecks, &out.PromoCodeID)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return out, false, nil // уже применён / отменён / неизвестен
 	}

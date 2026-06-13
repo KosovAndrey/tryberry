@@ -51,7 +51,7 @@ func NewApplier(
 func (a *Applier) Apply(ctx context.Context, ev ConfirmedEvent) error {
 	now := time.Now()
 
-	applied, ok, err := a.payments.MarkSucceeded(ctx, ev.YKPaymentID, now)
+	applied, ok, err := a.payments.MarkSucceeded(ctx, ev.PaymentID, now)
 	if err != nil {
 		return err // временный сбой БД — пусть Kafka переотправит
 	}
@@ -68,7 +68,7 @@ func (a *Applier) Apply(ctx context.Context, ev ConfirmedEvent) error {
 
 	a.log.Info("payment applied",
 		"user_id", buyer.ID, "plan", applied.Plan, "amount_kopecks", applied.AmountKopecks,
-		"expires_at", applied.ExpiresAt, "yk_payment_id", ev.YKPaymentID)
+		"expires_at", applied.ExpiresAt, "payment_id", ev.PaymentID)
 
 	a.notify.PaymentSucceeded(ctx, buyer, applied.Plan, applied.ExpiresAt)
 

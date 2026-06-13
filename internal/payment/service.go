@@ -1,34 +1,31 @@
-// Package payment связывает витрину тарифов (TG/VK) с ЮKassa: создаёт платёж,
-// применяет ожидающую скидку и отдаёт ссылку на оплату. Применение оплаты
-// (продление плана) живёт в консьюмере bot-worker — см. PaymentRepo.MarkSucceeded.
+// Package payment связывает витрину тарифов (TG/VK) с платёжным провайдером
+// (ЮKassa/Робокасса за флагом PAYMENT_PROVIDER): создаёт платёж, применяет
+// ожидающую скидку и отдаёт ссылку на оплату. Применение оплаты (продление
+// плана) живёт в консьюмере bot-worker — см. PaymentRepo.MarkSucceeded.
 package payment
 
 import (
 	"context"
 	"fmt"
 	"log/slog"
-	"strconv"
 
 	"github.com/google/uuid"
 
 	"gitlab.com/KosovAndrey/tryberrybot/internal/domain"
-	"gitlab.com/KosovAndrey/tryberrybot/internal/payment/yookassa"
 	"gitlab.com/KosovAndrey/tryberrybot/internal/repository/postgres"
 	redisrepo "gitlab.com/KosovAndrey/tryberrybot/internal/repository/redis"
 )
 
-// Service создаёт платежи ЮKassa из витрины тарифов.
+// Service создаёт платежи из витрины тарифов через выбранный Provider.
 type Service struct {
-	yk        *yookassa.Client
+	provider  Provider
 	payments  *postgres.PaymentRepo
 	discounts *redisrepo.DiscountStore // nil → скидки не применяем (нет Redis)
-	returnURL string
-	vatCode   int // код ставки НДС в чеке (самозанятый → 1 = «без НДС»)
 	log       *slog.Logger
 }
 
-func NewService(yk *yookassa.Client, payments *postgres.PaymentRepo, discounts *redisrepo.DiscountStore, returnURL string, vatCode int, log *slog.Logger) *Service {
-	return &Service{yk: yk, payments: payments, discounts: discounts, returnURL: returnURL, vatCode: vatCode, log: log}
+func NewService(provider Provider, payments *postgres.PaymentRepo, discounts *redisrepo.DiscountStore, log *slog.Logger) *Service {
+	return &Service{provider: provider, payments: payments, discounts: discounts, log: log}
 }
 
 // Checkout — результат создания платежа для показа юзеру.
@@ -38,10 +35,9 @@ type Checkout struct {
 	DiscountPct     int // 0, если скидки не было
 }
 
-// Start создаёт платёж за тариф plan для пользователя u и возвращает ссылку на
-// оплату. Учитывает ожидающую скидку (если есть). Если email задан — прикладывает
-// фискальный чек 54-ФЗ (ЮKassa отправит чек на этот адрес). Идемпотентность
-// create — через Idempotence-Key; план продлится на вебхуке после оплаты.
+// Start создаёт разовый платёж за тариф plan для пользователя u и возвращает
+// ссылку на оплату. Учитывает ожидающую скидку (если есть). Если email задан —
+// провайдер приложит фискальный чек. План продлится на вебхуке после оплаты.
 func (s *Service) Start(ctx context.Context, u *domain.User, plan, email string) (Checkout, error) {
 	var out Checkout
 
@@ -69,6 +65,8 @@ func (s *Service) Start(ctx context.Context, u *domain.User, plan, email string)
 	paymentID, err := s.payments.Create(ctx, domain.Payment{
 		UserID:         u.ID,
 		IdempotenceKey: idemKey,
+		Provider:       s.provider.Name(),
+		Kind:           domain.PayKindOnetime,
 		Plan:           plan,
 		Days:           domain.PurchaseDays,
 		AmountKopecks:  amount,
@@ -79,43 +77,21 @@ func (s *Service) Start(ctx context.Context, u *domain.User, plan, email string)
 	}
 
 	description := fmt.Sprintf("Подписка TryberryBot — тариф %s, %d дней", p.Title, domain.PurchaseDays)
-	req := yookassa.CreateRequest{
-		Amount:       yookassa.Amount{Value: domain.KopecksToRubString(amount), Currency: "RUB"},
-		Capture:      true,
-		Confirmation: yookassa.Confirmation{Type: "redirect", ReturnURL: s.returnURL},
-		Description:  description,
-		Metadata: map[string]string{
-			"payment_id": strconv.FormatInt(paymentID, 10),
-			"user_id":    strconv.FormatInt(u.ID, 10),
-			"plan":       plan,
-		},
-	}
-	// Чек 54-ФЗ: одна позиция-услуга на всю сумму, ставка НДС из конфига
-	// (самозанятый → 1 = «без НДС»), полная предоплата.
-	if email != "" {
-		req.Receipt = &yookassa.Receipt{
-			Customer: yookassa.ReceiptCustomer{Email: email},
-			Items: []yookassa.ReceiptItem{{
-				Description:    description,
-				Quantity:       "1.00",
-				Amount:         yookassa.Amount{Value: domain.KopecksToRubString(amount), Currency: "RUB"},
-				VATCode:        s.vatCode,
-				PaymentSubject: "service",
-				PaymentMode:    "full_prepayment",
-			}},
-		}
-	}
-	resp, err := s.yk.CreatePayment(ctx, idemKey, req)
+	res, err := s.provider.Checkout(ctx, CheckoutParams{
+		PaymentID:     paymentID,
+		UserID:        u.ID,
+		Plan:          plan,
+		Description:   description,
+		AmountKopecks: amount,
+		Email:         email,
+	})
 	if err != nil {
-		return out, fmt.Errorf("yookassa create: %w", err)
+		return out, fmt.Errorf("provider checkout: %w", err)
 	}
-	if err := s.payments.SetYKID(ctx, paymentID, resp.ID); err != nil {
-		// Платёж в ЮKassa создан — не теряем связь, но и не падаем для юзера.
-		s.log.Error("checkout: set yk_payment_id", "payment_id", paymentID, "yk_id", resp.ID, "err", err)
+	if err := s.payments.SetYKID(ctx, paymentID, res.ExternalID); err != nil {
+		// Платёж у провайдера создан — не теряем связь, но и не падаем для юзера.
+		s.log.Error("checkout: set external payment id", "payment_id", paymentID, "external_id", res.ExternalID, "err", err)
 	}
-	if resp.Confirmation.ConfirmationURL == "" {
-		return out, fmt.Errorf("yookassa: empty confirmation_url for payment %s", resp.ID)
-	}
-	out.ConfirmationURL = resp.Confirmation.ConfirmationURL
+	out.ConfirmationURL = res.URL
 	return out, nil
 }

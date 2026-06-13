@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
+	"math"
 	"net/http"
 	"os"
 	"os/signal"
@@ -25,7 +26,9 @@ import (
 	"gitlab.com/KosovAndrey/tryberrybot/internal/kafka"
 	"gitlab.com/KosovAndrey/tryberrybot/internal/metrics"
 	"gitlab.com/KosovAndrey/tryberrybot/internal/payment"
+	"gitlab.com/KosovAndrey/tryberrybot/internal/payment/robokassa"
 	"gitlab.com/KosovAndrey/tryberrybot/internal/payment/yookassa"
+	"gitlab.com/KosovAndrey/tryberrybot/internal/repository/postgres"
 	"gitlab.com/KosovAndrey/tryberrybot/internal/telegram"
 	"gitlab.com/KosovAndrey/tryberrybot/internal/tracing"
 )
@@ -274,7 +277,13 @@ func run(log *slog.Logger) error {
 
 			userKey := pmt.Metadata["user_id"]
 			userID, _ := strconv.ParseInt(userKey, 10, 64)
-			ev := payment.ConfirmedEvent{YKPaymentID: pmt.ID, UserID: userID}
+			paymentID, _ := strconv.ParseInt(pmt.Metadata["payment_id"], 10, 64)
+			if paymentID == 0 {
+				log.Error("yookassa: empty payment_id in metadata", "yk_id", pmt.ID)
+				w.WriteHeader(http.StatusOK) // не наш платёж / кривые метаданные
+				return
+			}
+			ev := payment.ConfirmedEvent{PaymentID: paymentID, UserID: userID}
 			if err := payProducer.Send(r.Context(), userKey, ev); err != nil {
 				log.Error("yookassa: publish confirmed", "id", pmt.ID, "err", err)
 				w.WriteHeader(http.StatusInternalServerError) // ретрай ЮKassa
@@ -286,6 +295,73 @@ func run(log *slog.Logger) error {
 			otelhttp.NewHandler(ykHandler, "yookassa_webhook"),
 		))
 		log.Info("yookassa webhook endpoint enabled")
+	}
+
+	// ── Вебхук Робокассы (ResultURL) ─────────────────────────────────────────
+	// Монтируется при заданных ROBOKASSA_MERCHANT_LOGIN + PASSWORD2. В отличие от
+	// ЮKassa, ResultURL ПОДПИСАН (Password2) — подпись и есть доверенный источник,
+	// перечитывать статус не нужно. InvId == наш payments.id. На валидную подпись
+	// → публикуем в Kafka topic payments; в ответ отдаём "OK{InvId}".
+	rkLogin := getEnv("ROBOKASSA_MERCHANT_LOGIN", "")
+	rkPw2 := getEnv("ROBOKASSA_PASSWORD2", "")
+	if rkLogin != "" && rkPw2 != "" {
+		rkClient := robokassa.NewClient(robokassa.Config{
+			Login: rkLogin, Password2: rkPw2, HashType: getEnv("ROBOKASSA_HASH_TYPE", ""),
+		})
+		paymentRepo := postgres.NewPaymentRepo(pool)
+		rkProducer := kafka.NewProducer(kafkaBrokers, payment.TopicConfirmed)
+		defer rkProducer.Close()
+
+		rkHandler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			// Робокасса шлёт ResultURL POST'ом (form) или GET'ом — ParseForm покрывает оба.
+			if err := r.ParseForm(); err != nil {
+				w.WriteHeader(http.StatusBadRequest)
+				return
+			}
+			outSum := r.FormValue("OutSum")
+			invIDStr := r.FormValue("InvId")
+			sig := r.FormValue("SignatureValue")
+			if !rkClient.VerifyResult(outSum, invIDStr, sig) {
+				log.Warn("robokassa: bad signature", "remote", r.RemoteAddr, "inv_id", invIDStr)
+				w.WriteHeader(http.StatusUnauthorized)
+				return
+			}
+			paymentID, err := strconv.ParseInt(invIDStr, 10, 64)
+			if err != nil || paymentID <= 0 {
+				w.WriteHeader(http.StatusBadRequest)
+				return
+			}
+
+			userID, amountKopecks, found, err := paymentRepo.ConfirmInfo(r.Context(), paymentID)
+			if err != nil {
+				log.Error("robokassa: confirm info", "inv_id", paymentID, "err", err)
+				w.WriteHeader(http.StatusInternalServerError) // пусть Робокасса повторит
+				return
+			}
+			if !found {
+				log.Warn("robokassa: unknown payment", "inv_id", paymentID, "remote", r.RemoteAddr)
+				w.WriteHeader(http.StatusBadRequest)
+				return
+			}
+			// Доп. защита (подпись уже покрывает OutSum): сумма должна совпасть.
+			if rubToKopecks(outSum) != amountKopecks {
+				log.Warn("robokassa: amount mismatch", "inv_id", paymentID, "out_sum", outSum, "want_kopecks", amountKopecks)
+				w.WriteHeader(http.StatusBadRequest)
+				return
+			}
+
+			ev := payment.ConfirmedEvent{PaymentID: paymentID, UserID: userID}
+			if err := rkProducer.Send(r.Context(), strconv.FormatInt(userID, 10), ev); err != nil {
+				log.Error("robokassa: publish confirmed", "inv_id", paymentID, "err", err)
+				w.WriteHeader(http.StatusInternalServerError) // ретрай Робокассы
+				return
+			}
+			fmt.Fprintf(w, "OK%d", paymentID) // Робокасса требует "OK{InvId}"
+		})
+		mux.Handle("/robokassa/result", metrics.HTTPMiddleware("robokassa_result")(
+			otelhttp.NewHandler(rkHandler, "robokassa_result"),
+		))
+		log.Info("robokassa result endpoint enabled")
 	}
 
 	mux.HandleFunc("/health", healthChecker.Handler())
@@ -422,4 +498,13 @@ func getEnv(key, fallback string) string {
 		return v
 	}
 	return fallback
+}
+
+// rubToKopecks — "189.00" → 18900. -1 при неразборе (не совпадёт ни с одной суммой).
+func rubToKopecks(s string) int64 {
+	f, err := strconv.ParseFloat(strings.TrimSpace(s), 64)
+	if err != nil {
+		return -1
+	}
+	return int64(math.Round(f * 100))
 }
