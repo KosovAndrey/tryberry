@@ -1,6 +1,7 @@
 package telegram
 
 import (
+	"context"
 	"fmt"
 	"strings"
 
@@ -84,6 +85,102 @@ func (b *Bot) sendPlanCard(chatID int64, messageID int, name string) {
 		),
 	)
 	b.showView(chatID, messageID, sb.String(), keyboard)
+}
+
+// handlePlanBuy — старт оплаты тарифа. Если email для чека 54-ФЗ ещё не задан —
+// просим его (один раз), иначе сразу создаём платёж. Без сервиса (payments==nil)
+// — заглушка как раньше.
+func (b *Bot) handlePlanBuy(ctx context.Context, telegramID, chatID int64, messageID int, name string) {
+	if b.payments == nil {
+		b.sendPlanBuyStub(chatID, messageID, name)
+		return
+	}
+	p, ok := domain.PlanByName(name)
+	if !ok || p.PriceRub <= 0 {
+		b.sendPlansMenu(chatID, messageID)
+		return
+	}
+
+	user, err := b.userRepo.GetByTelegramID(ctx, telegramID)
+	if err != nil {
+		b.log.Error("plan buy: load user", "telegram_id", telegramID, "err", err)
+		b.showView(chatID, messageID, "⚠️ Не удалось начать оплату. Попробуй ещё раз позже.",
+			backToPlansKeyboard())
+		return
+	}
+
+	email, err := b.userRepo.GetEmail(ctx, user.ID)
+	if err != nil {
+		b.log.Error("plan buy: get email", "user_id", user.ID, "err", err)
+		b.showView(chatID, messageID, "⚠️ Не удалось начать оплату. Попробуй ещё раз позже.",
+			backToPlansKeyboard())
+		return
+	}
+	if email == "" {
+		// Нет email — просим перед оплатой (с пояснением про чек 54-ФЗ).
+		if err := b.setEmailFSM(ctx, telegramID, emailFSM{Plan: name}); err != nil {
+			b.log.Error("plan buy: set email fsm", "user_id", user.ID, "err", err)
+		}
+		amount := b.previewAmount(ctx, user.ID, int64(p.PriceRub)*100)
+		b.showView(chatID, messageID, emailRequestText(p, amount), backToPlansKeyboard())
+		return
+	}
+
+	b.startCheckout(ctx, user, chatID, messageID, name, email)
+}
+
+// previewAmount — сумма к оплате с учётом ожидающей скидки (для текста запроса
+// email, до создания платежа). Ошибки игнорируем — покажем полную цену.
+func (b *Bot) previewAmount(ctx context.Context, userID int64, full int64) int64 {
+	if b.discounts == nil {
+		return full
+	}
+	if d, ok, err := b.discounts.Get(ctx, userID); err == nil && ok && d.Pct > 0 {
+		return domain.DiscountedKopecks(full, d.Pct)
+	}
+	return full
+}
+
+// startCheckout — создаёт платёж ЮKassa и показывает кнопку перехода на оплату.
+func (b *Bot) startCheckout(ctx context.Context, user *domain.User, chatID int64, messageID int, name, email string) {
+	checkout, err := b.payments.Start(ctx, user, name, email)
+	if err != nil {
+		b.log.Error("plan buy: start checkout", "user_id", user.ID, "plan", name, "err", err)
+		b.showView(chatID, messageID,
+			"⚠️ Не удалось создать платёж. Попробуй ещё раз позже или напиши в поддержку.",
+			backToPlansKeyboard())
+		return
+	}
+	p, _ := domain.PlanByName(name)
+
+	var sb strings.Builder
+	fmt.Fprintf(&sb, "💳 <b>Оплата тарифа %s</b>\n\n", p.Title)
+	if checkout.DiscountPct > 0 {
+		fmt.Fprintf(&sb, "Скидка по промокоду: <b>%d%%</b>\n", checkout.DiscountPct)
+	}
+	fmt.Fprintf(&sb, "К оплате: <b>%s ₽</b> — подписка на %d дней.\n\n",
+		domain.KopecksToRubString(checkout.AmountKopecks), domain.PurchaseDays)
+	sb.WriteString("Нажми «Перейти к оплате» — откроется форма ЮKassa (карта, СБП, SberPay). " +
+		"Тариф подключится автоматически сразу после оплаты.")
+
+	keyboard := tgbotapi.NewInlineKeyboardMarkup(
+		tgbotapi.NewInlineKeyboardRow(
+			tgbotapi.NewInlineKeyboardButtonURL("💳 Перейти к оплате", checkout.ConfirmationURL),
+		),
+		tgbotapi.NewInlineKeyboardRow(
+			tgbotapi.NewInlineKeyboardButtonData("◀️ К тарифам", "menu:plans"),
+			tgbotapi.NewInlineKeyboardButtonData("◀️ В меню", "menu:main"),
+		),
+	)
+	b.showView(chatID, messageID, sb.String(), keyboard)
+}
+
+func backToPlansKeyboard() tgbotapi.InlineKeyboardMarkup {
+	return tgbotapi.NewInlineKeyboardMarkup(
+		tgbotapi.NewInlineKeyboardRow(
+			tgbotapi.NewInlineKeyboardButtonData("◀️ К тарифам", "menu:plans"),
+		),
+	)
 }
 
 // sendPlanBuyStub — экран оплаты-заглушки: ЮKassa ещё на подключении,

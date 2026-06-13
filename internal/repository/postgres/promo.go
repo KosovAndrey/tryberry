@@ -132,6 +132,70 @@ func (r *PromoRepo) RedeemGrant(ctx context.Context, codeID, userID int64, plan 
 	return nil
 }
 
+// RedeemDiscount гасит discount-код при успешной оплате: лимит + «один раз на
+// юзера» + «один раз на идентичность» (как RedeemGrant), но БЕЗ смены плана —
+// план продлевает сам платёж. Вызывается best-effort после применения оплаты,
+// поэтому ErrPromoExhausted/ErrPromoAlreadyRedeemed для денежного пути не
+// фатальны (код уже зафиксирован в платеже на этапе оформления).
+func (r *PromoRepo) RedeemDiscount(ctx context.Context, codeID, userID int64) error {
+	tx, err := r.db.Begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback(ctx) //nolint:errcheck // rollback после commit — no-op
+
+	tag, err := tx.Exec(ctx,
+		`UPDATE promo_codes SET used_count = used_count + 1
+		 WHERE id = $1 AND active AND used_count < max_uses`, codeID)
+	if err != nil {
+		return err
+	}
+	if tag.RowsAffected() == 0 {
+		return domain.ErrPromoExhausted
+	}
+
+	if _, err := tx.Exec(ctx,
+		`INSERT INTO promo_redemptions (code_id, user_id) VALUES ($1, $2)`, codeID, userID); err != nil {
+		var pgErr *pgconn.PgError
+		if errors.As(err, &pgErr) && pgErr.Code == "23505" { // unique_violation
+			return domain.ErrPromoAlreadyRedeemed
+		}
+		return err
+	}
+
+	var tgID, vkID *int64
+	if err := tx.QueryRow(ctx,
+		`SELECT telegram_id, vk_id FROM users WHERE id = $1`, userID).Scan(&tgID, &vkID); err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return domain.ErrNotFound
+		}
+		return err
+	}
+	for _, c := range []struct {
+		platform string
+		id       *int64
+	}{{"tg", tgID}, {"vk", vkID}} {
+		if c.id == nil {
+			continue
+		}
+		if _, err := tx.Exec(ctx,
+			`INSERT INTO promo_claims (code_id, platform, external_id) VALUES ($1, $2, $3)`,
+			codeID, c.platform, *c.id); err != nil {
+			var pgErr *pgconn.PgError
+			if errors.As(err, &pgErr) && pgErr.Code == "23505" {
+				return domain.ErrPromoAlreadyRedeemed
+			}
+			return err
+		}
+	}
+
+	if err := tx.Commit(ctx); err != nil {
+		return err
+	}
+	metrics.PromoRedeems.Inc()
+	return nil
+}
+
 // SetActive — включить/выключить код. Для /promo_off.
 func (r *PromoRepo) SetActive(ctx context.Context, code string, active bool) error {
 	tag, err := r.db.Exec(ctx,

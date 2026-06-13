@@ -13,6 +13,7 @@ import (
 
 	"gitlab.com/KosovAndrey/tryberrybot/internal/domain"
 	"gitlab.com/KosovAndrey/tryberrybot/internal/metrics"
+	"gitlab.com/KosovAndrey/tryberrybot/internal/payment"
 	"gitlab.com/KosovAndrey/tryberrybot/internal/repository/postgres"
 	redisrepo "gitlab.com/KosovAndrey/tryberrybot/internal/repository/redis"
 	"gitlab.com/KosovAndrey/tryberrybot/internal/scraper"
@@ -44,6 +45,7 @@ const (
 	cmdLink     = "link"
 	cmdUnlinkTG = "unlinktg" // отвязать Telegram (k=confirm — подтверждено)
 	cmdNotify   = "notify"   // цикл канала уведомлений tg→vk→both
+	cmdEmail    = "email"    // сменить email для чека 54-ФЗ
 	cmdHelp     = "help"
 	cmdAdd      = "add"
 	cmdList     = "list"
@@ -101,6 +103,16 @@ type Bot struct {
 	linkCodes       *redisrepo.LinkCodeStore
 	rdb             *redis.Client // FSM ввода порога (может быть nil)
 	botURL          string        // ссылка на VK-бота для приглашений ("" — не показывать)
+
+	// Оплата ЮKassa (как в TG): payments == nil → заглушка; discounts хранит
+	// «ожидающую скидку» (nil без redis).
+	payments  *payment.Service
+	discounts *redisrepo.DiscountStore
+}
+
+// SetPayments подключает платёжный сервис ЮKassa (опционально).
+func (b *Bot) SetPayments(svc *payment.Service) {
+	b.payments = svc
 }
 
 func NewBot(
@@ -118,6 +130,10 @@ func NewBot(
 	rdb *redis.Client,
 	botURL string,
 ) *Bot {
+	var discounts *redisrepo.DiscountStore
+	if rdb != nil {
+		discounts = redisrepo.NewDiscountStore(rdb)
+	}
 	return &Bot{
 		client:          client,
 		log:             log,
@@ -132,6 +148,7 @@ func NewBot(
 		linkCodes:       linkCodes,
 		rdb:             rdb,
 		botURL:          botURL,
+		discounts:       discounts,
 	}
 }
 
@@ -215,14 +232,23 @@ func (b *Bot) handleMessage(ctx context.Context, vkID int64, text, payload strin
 			p.Cmd = cmdTrial
 		case "промокод":
 			p.Cmd = cmdPromo
+		case "email", "почта", "емейл":
+			p.Cmd = cmdEmail
 		}
 	}
 
 	if p.Cmd != "" {
-		// Любая кнопка/команда прерывает незавершённый ввод порога.
+		// Любая кнопка/команда прерывает незавершённый ввод порога и email.
 		b.clearSearchFSM(ctx, vkID)
 		b.clearTrackFSM(ctx, vkID)
+		b.clearEmailFSM(ctx, vkID)
 	} else {
+		// Ждём email для чека 54-ФЗ перед оплатой? (сильный модальный режим).
+		if fsm, ok := b.getEmailFSM(ctx, vkID); ok {
+			metrics.VKMessages.WithLabelValues("email_input").Inc()
+			b.handleEmailInput(ctx, vkID, user, text, fsm)
+			return
+		}
 		// «привязать <КОД>» / «link <КОД>» — предъявление кода, выданного в TG.
 		// Код регистронезависим (Redeem приводит к UPPER), так что lower не мешает.
 		// Кнопка «Привязать Telegram» сюда не попадает — у неё payload cmd=link.
@@ -314,12 +340,14 @@ func (b *Bot) handleMessage(ctx context.Context, vkID int64, text, payload strin
 	case cmdPlanCard:
 		b.sendPlanCard(ctx, vkID, user, p.Kind)
 	case cmdBuy:
-		b.sendBuyStub(ctx, vkID, user, p.Kind)
+		b.handlePlanBuy(ctx, vkID, user, p.Kind)
 	case cmdTrial:
 		b.handleTrial(ctx, vkID, user)
 	case cmdPromo:
 		b.send(ctx, vkID, "🎟 Промокод\n\nЕсть код? Отправь его сообщением:\nпромокод КОД\n\n"+
 			"Промокоды дают дни тарифа бесплатно или скидку на оплату.", kb)
+	case cmdEmail:
+		b.promptChangeEmail(ctx, vkID, user)
 	case cmdRef:
 		b.sendRef(ctx, vkID, user)
 	case cmdMerge:
@@ -387,15 +415,36 @@ func (b *Bot) sendProfile(ctx context.Context, vkID int64, u *domain.User) {
 	fmt.Fprintf(&sb, "VK: ✅ привязан\nTelegram: %s\n%s\n", tg, planLine)
 	fmt.Fprintf(&sb, "📦 Товаров: %d из %d · 🔎 Поисков: %d из %d\n", prod, plan.MaxProduct, srch, plan.MaxSearch)
 
+	// Email для чека 54-ФЗ — только когда оплата подключена.
+	emailLabel := "✉️ Указать email"
+	if b.payments != nil {
+		if email, err := b.userRepo.GetEmail(ctx, u.ID); err == nil && email != "" {
+			emailLabel = "✉️ Изменить email"
+			fmt.Fprintf(&sb, "✉️ Email для чека: %s\n", email)
+		} else {
+			sb.WriteString("✉️ Email для чека: ❌ не указан\n")
+		}
+	}
+
 	var kb *Keyboard
 	if u.TelegramID != 0 {
+		// TG привязан → inline-клавиатура управления (как было) + email.
 		fmt.Fprintf(&sb, "🔔 Уведомления: %s\n", domain.NotifyChannelTitle(u.NotifyChannel))
-		kb = &Keyboard{Inline: true, Buttons: [][]Button{
+		rows := [][]Button{
 			{TextButton("🔔 Уведомления: "+domain.NotifyChannelTitle(u.NotifyChannel),
 				buttonPayload(cmdNotify), ColorPrimary)},
 			{TextButton("🔗 Отвязать Telegram", buttonPayload(cmdUnlinkTG), ColorSecondary)},
-		}}
+		}
+		if b.payments != nil {
+			rows = append(rows, []Button{TextButton(emailLabel, buttonPayload(cmdEmail), ColorSecondary)})
+		}
+		kb = &Keyboard{Inline: true, Buttons: rows}
 	} else {
+		// VK-only → постоянное меню (как было). Сменить email можно отдельным
+		// сообщением «email» (или при оплате).
+		if b.payments != nil {
+			sb.WriteString("\nСменить email — отправь сообщение: email")
+		}
 		kb = menuKeyboard(false)
 	}
 	b.send(ctx, vkID, sb.String(), kb)
@@ -519,6 +568,12 @@ func (b *Bot) send(ctx context.Context, peerID int64, text string, kb *Keyboard)
 	if err := b.client.SendMessageKeyboard(ctx, peerID, text, kb); err != nil {
 		b.log.Error("vk: send", "err", err, "peer", peerID)
 	}
+}
+
+// Notify — одиночное сообщение в ЛС VK (для асинхронных уведомлений, напр. об
+// успешной оплате из платёжного консьюмера).
+func (b *Bot) Notify(ctx context.Context, vkID int64, text string) {
+	b.send(ctx, vkID, text, nil)
 }
 
 // cutAnyPrefix — первый подошедший префикс: остаток и ok.

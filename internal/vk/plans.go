@@ -73,6 +73,77 @@ func (b *Bot) sendPlanCard(ctx context.Context, vkID int64, user *domain.User, n
 	b.send(ctx, vkID, sb.String(), kb)
 }
 
+// handlePlanBuy — старт оплаты. Нет email для чека 54-ФЗ → просим (один раз),
+// иначе создаём платёж. Без сервиса (payments == nil) — заглушка.
+func (b *Bot) handlePlanBuy(ctx context.Context, vkID int64, user *domain.User, name string) {
+	if b.payments == nil {
+		b.sendBuyStub(ctx, vkID, user, name)
+		return
+	}
+	p, ok := domain.PlanByName(name)
+	if !ok || p.PriceRub <= 0 {
+		b.sendPlans(ctx, vkID, user)
+		return
+	}
+
+	email, err := b.userRepo.GetEmail(ctx, user.ID)
+	if err != nil {
+		b.log.Error("vk: get email", "user_id", user.ID, "err", err)
+		b.send(ctx, vkID, "⚠️ Не удалось начать оплату. Попробуй ещё раз позже.",
+			menuKeyboard(user.TelegramID != 0))
+		return
+	}
+	if email == "" {
+		if err := b.setEmailFSM(ctx, vkID, emailFSM{Plan: name}); err != nil {
+			b.log.Error("vk: set email fsm", "user_id", user.ID, "err", err)
+		}
+		amount := b.previewAmount(ctx, user.ID, int64(p.PriceRub)*100)
+		b.send(ctx, vkID, emailRequestText(p, amount), menuKeyboard(user.TelegramID != 0))
+		return
+	}
+
+	b.startCheckout(ctx, vkID, user, name, email)
+}
+
+// previewAmount — сумма с учётом ожидающей скидки (для текста запроса email).
+func (b *Bot) previewAmount(ctx context.Context, userID int64, full int64) int64 {
+	if b.discounts == nil {
+		return full
+	}
+	if d, ok, err := b.discounts.Get(ctx, userID); err == nil && ok && d.Pct > 0 {
+		return domain.DiscountedKopecks(full, d.Pct)
+	}
+	return full
+}
+
+// startCheckout — создаёт платёж и шлёт ссылку на оплату. Ссылку дублируем
+// текстом: open_link-кнопки в VK-клиенте открываются не всегда (VK-INTEGRATION-PLAN).
+func (b *Bot) startCheckout(ctx context.Context, vkID int64, user *domain.User, name, email string) {
+	checkout, err := b.payments.Start(ctx, user, name, email)
+	if err != nil {
+		b.log.Error("vk: start checkout", "user_id", user.ID, "plan", name, "err", err)
+		b.send(ctx, vkID, "⚠️ Не удалось создать платёж. Попробуй ещё раз позже.",
+			menuKeyboard(user.TelegramID != 0))
+		return
+	}
+	p, _ := domain.PlanByName(name)
+
+	var sb strings.Builder
+	fmt.Fprintf(&sb, "💳 Оплата тарифа %s\n\n", p.Title)
+	if checkout.DiscountPct > 0 {
+		fmt.Fprintf(&sb, "Скидка по промокоду: %d%%\n", checkout.DiscountPct)
+	}
+	fmt.Fprintf(&sb, "К оплате: %s ₽ — подписка на %d дней.\n\n",
+		domain.KopecksToRubString(checkout.AmountKopecks), domain.PurchaseDays)
+	sb.WriteString("Перейди по ссылке для оплаты (карта, СБП, SberPay) — тариф подключится автоматически:\n")
+	sb.WriteString(checkout.ConfirmationURL)
+
+	kb := &Keyboard{Inline: true, Buttons: [][]Button{
+		{LinkButton("💳 Перейти к оплате", checkout.ConfirmationURL)},
+	}}
+	b.send(ctx, vkID, sb.String(), kb)
+}
+
 func (b *Bot) sendBuyStub(ctx context.Context, vkID int64, user *domain.User, name string) {
 	p, ok := domain.PlanByName(name)
 	if !ok || p.PriceRub <= 0 {

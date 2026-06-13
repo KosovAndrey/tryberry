@@ -12,6 +12,9 @@ const (
 	PromoKindDiscount = "discount" // скидка % к платежу (применяется при оплате)
 )
 
+// PromoDiscountTTL — сколько держим «ожидающую скидку» юзера до оплаты.
+const PromoDiscountTTL = 24 * time.Hour
+
 var (
 	// ErrPromoExhausted — лимит использований кода исчерпан.
 	ErrPromoExhausted = errors.New("promo exhausted")

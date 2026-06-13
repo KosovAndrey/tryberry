@@ -18,6 +18,7 @@ import (
 
 	"gitlab.com/KosovAndrey/tryberrybot/internal/domain"
 	"gitlab.com/KosovAndrey/tryberrybot/internal/metrics"
+	"gitlab.com/KosovAndrey/tryberrybot/internal/payment"
 	"gitlab.com/KosovAndrey/tryberrybot/internal/repository/postgres"
 	redisrepo "gitlab.com/KosovAndrey/tryberrybot/internal/repository/redis"
 	"gitlab.com/KosovAndrey/tryberrybot/internal/scraper"
@@ -42,7 +43,18 @@ type Bot struct {
 	linkCodes *redisrepo.LinkCodeStore // коды привязки VK (nil, если redis недоступен)
 	vkBotURL  string                   // ссылка на VK-бота для кнопки привязки ("" — не показывать)
 
+	// Оплата ЮKassa. payments == nil → платёжный сервис не настроен (env пуст),
+	// витрина показывает заглушку. discounts хранит «ожидающую скидку» (nil без redis).
+	payments  *payment.Service
+	discounts *redisrepo.DiscountStore
+
 	adminIDs map[int64]bool // кто может выдавать тарифы
+}
+
+// SetPayments подключает платёжный сервис ЮKassa (опционально: при пустом
+// конфиге не вызывается, и витрина показывает заглушку оплаты).
+func (b *Bot) SetPayments(svc *payment.Service) {
+	b.payments = svc
 }
 
 func NewBot(
@@ -69,8 +81,10 @@ func NewBot(
 		return nil, fmt.Errorf("init bot api: %w", err)
 	}
 	var linkCodes *redisrepo.LinkCodeStore
+	var discounts *redisrepo.DiscountStore
 	if rdb != nil {
 		linkCodes = redisrepo.NewLinkCodeStore(rdb)
+		discounts = redisrepo.NewDiscountStore(rdb)
 	}
 	return &Bot{
 		api:             api,
@@ -86,6 +100,7 @@ func NewBot(
 		rdb:             rdb,
 		adminIDs:        adminIDs,
 		linkCodes:       linkCodes,
+		discounts:       discounts,
 		vkBotURL:        vkBotURL,
 	}, nil
 }
@@ -144,6 +159,12 @@ func (b *Bot) handleMessage(ctx context.Context, msg *tgbotapi.Message) {
 		return
 	}
 
+	// 1a0. Ждём ли email для чека 54-ФЗ перед оплатой?
+	if fsm, ok := b.getEmailFSM(ctx, msg.From.ID); ok {
+		b.handleEmailInput(ctx, msg.Chat.ID, msg.From.ID, text, user, fsm)
+		return
+	}
+
 	// 1a. Ждём ли число (порог/процент) для ТОВАРНОЙ подписки?
 	if fsm, ok := b.getTrackFSM(ctx, msg.From.ID); ok {
 		b.handleTrackThreshold(ctx, msg.Chat.ID, msg.From.ID, text, fsm)
@@ -180,9 +201,11 @@ func (b *Bot) handleMessage(ctx context.Context, msg *tgbotapi.Message) {
 // ── Commands ──────────────────────────────────────────────────────────────────
 
 func (b *Bot) handleCommand(ctx context.Context, msg *tgbotapi.Message) {
-	// Любая команда прерывает незавершённый ввод порога (поиск- и товарных подписок).
+	// Любая команда прерывает незавершённый ввод порога (поиск- и товарных
+	// подписок) и ввод email перед оплатой.
 	b.clearSearchFSM(ctx, msg.From.ID)
 	b.clearTrackFSM(ctx, msg.From.ID)
+	b.clearEmailFSM(ctx, msg.From.ID)
 
 	user, err := b.userRepo.Upsert(ctx, msg.From.ID, msg.From.UserName)
 	if err != nil {
@@ -721,6 +744,9 @@ func (b *Bot) handleCallback(ctx context.Context, cb *tgbotapi.CallbackQuery) {
 		}
 		b.profileToggleNotify(ctx, chatID, messageID, user)
 
+	case cb.Data == "profile:email":
+		b.promptChangeEmail(ctx, cb.From.ID, chatID, messageID)
+
 	case cb.Data == "menu:plans":
 		b.sendPlansMenu(chatID, messageID)
 
@@ -728,7 +754,7 @@ func (b *Bot) handleCallback(ctx context.Context, cb *tgbotapi.CallbackQuery) {
 		b.sendPlanCard(chatID, messageID, strings.TrimPrefix(cb.Data, "plan:view:"))
 
 	case strings.HasPrefix(cb.Data, "plan:buy:"):
-		b.sendPlanBuyStub(chatID, messageID, strings.TrimPrefix(cb.Data, "plan:buy:"))
+		b.handlePlanBuy(ctx, cb.From.ID, chatID, messageID, strings.TrimPrefix(cb.Data, "plan:buy:"))
 
 	case cb.Data == "menu:promo":
 		b.sendPromoMenu(chatID, messageID)
@@ -817,6 +843,12 @@ func (b *Bot) reply(chatID int64, text string) {
 	m := tgbotapi.NewMessage(chatID, text)
 	m.ParseMode = "HTML"
 	b.send(m)
+}
+
+// NotifyHTML — одиночное HTML-сообщение юзеру (для асинхронных уведомлений,
+// напр. об успешной оплате из платёжного консьюмера).
+func (b *Bot) NotifyHTML(chatID int64, text string) {
+	b.reply(chatID, text)
 }
 
 func (b *Bot) send(c tgbotapi.Chattable) {

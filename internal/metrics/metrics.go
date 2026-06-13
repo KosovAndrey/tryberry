@@ -110,6 +110,33 @@ var (
 			Help:      "Successful TG/VK account merges",
 		},
 	)
+
+	// PaymentsCreated — созданные платежи ЮKassa (нажата «Оплатить»).
+	PaymentsCreated = promauto.NewCounter(
+		prometheus.CounterOpts{
+			Namespace: namespace,
+			Name:      "payments_created_total",
+			Help:      "YooKassa payments created (checkout started)",
+		},
+	)
+
+	// PaymentsSucceeded — успешно оплаченные платежи (применён план).
+	PaymentsSucceeded = promauto.NewCounter(
+		prometheus.CounterOpts{
+			Namespace: namespace,
+			Name:      "payments_succeeded_total",
+			Help:      "YooKassa payments succeeded and applied",
+		},
+	)
+
+	// PaymentRevenueKopecks — суммарная выручка по успешным платежам, копейки.
+	PaymentRevenueKopecks = promauto.NewCounter(
+		prometheus.CounterOpts{
+			Namespace: namespace,
+			Name:      "payment_revenue_kopecks_total",
+			Help:      "Total revenue from succeeded payments, in kopecks",
+		},
+	)
 )
 
 // ── Поиск-подписки ───────────────────────────────────────────────────────────

@@ -24,6 +24,8 @@ import (
 	"gitlab.com/KosovAndrey/tryberrybot/internal/health"
 	"gitlab.com/KosovAndrey/tryberrybot/internal/kafka"
 	"gitlab.com/KosovAndrey/tryberrybot/internal/metrics"
+	"gitlab.com/KosovAndrey/tryberrybot/internal/payment"
+	"gitlab.com/KosovAndrey/tryberrybot/internal/payment/yookassa"
 	"gitlab.com/KosovAndrey/tryberrybot/internal/telegram"
 	"gitlab.com/KosovAndrey/tryberrybot/internal/tracing"
 )
@@ -227,6 +229,63 @@ func run(log *slog.Logger) error {
 			otelhttp.NewHandler(vkHandler, "vk_callback"),
 		))
 		log.Info("vk callback endpoint enabled")
+	}
+
+	// ── Вебхук ЮKassa ────────────────────────────────────────────────────────
+	// Монтируется при заданных YOOKASSA_SHOP_ID + YOOKASSA_SECRET_KEY. ЮKassa
+	// вебхуки НЕ подписывает: тело не доверяем, статус перечитываем по id через
+	// API. На succeeded → публикуем в Kafka topic payments (ключ = user_id),
+	// bot-worker применяет (продление плана + уведомление).
+	ykShopID := getEnv("YOOKASSA_SHOP_ID", "")
+	ykSecret := getEnv("YOOKASSA_SECRET_KEY", "")
+	if ykShopID != "" && ykSecret != "" {
+		ykClient := yookassa.NewClient(ykShopID, ykSecret)
+		payProducer := kafka.NewProducer(kafkaBrokers, payment.TopicConfirmed)
+		defer payProducer.Close()
+
+		ykHandler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if r.Method != http.MethodPost {
+				w.WriteHeader(http.StatusMethodNotAllowed)
+				return
+			}
+			var body struct {
+				Event  string `json:"event"`
+				Object struct {
+					ID string `json:"id"`
+				} `json:"object"`
+			}
+			if err := json.NewDecoder(r.Body).Decode(&body); err != nil || body.Object.ID == "" {
+				// Кривое тело игнорируем (200 — ЮKassa не должна ретраить мусор).
+				w.WriteHeader(http.StatusOK)
+				return
+			}
+
+			// Авторитетный статус — перечтением по id (тело вебхука не подписано).
+			pmt, err := ykClient.GetPayment(r.Context(), body.Object.ID)
+			if err != nil {
+				log.Error("yookassa: refetch payment", "id", body.Object.ID, "err", err)
+				w.WriteHeader(http.StatusInternalServerError) // пусть ЮKassa повторит
+				return
+			}
+			if pmt.Status != yookassa.StatusSucceeded {
+				w.WriteHeader(http.StatusOK) // pending/canceled — не применяем
+				return
+			}
+
+			userKey := pmt.Metadata["user_id"]
+			userID, _ := strconv.ParseInt(userKey, 10, 64)
+			ev := payment.ConfirmedEvent{YKPaymentID: pmt.ID, UserID: userID}
+			if err := payProducer.Send(r.Context(), userKey, ev); err != nil {
+				log.Error("yookassa: publish confirmed", "id", pmt.ID, "err", err)
+				w.WriteHeader(http.StatusInternalServerError) // ретрай ЮKassa
+				return
+			}
+			w.WriteHeader(http.StatusOK)
+		})
+		mux.Handle("/yookassa/webhook", metrics.HTTPMiddleware("yookassa_webhook")(
+			otelhttp.NewHandler(ykHandler, "yookassa_webhook"),
+		))
+		log.Info("yookassa webhook endpoint enabled")
 	}
 
 	mux.HandleFunc("/health", healthChecker.Handler())

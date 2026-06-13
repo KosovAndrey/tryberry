@@ -391,6 +391,28 @@ func (r *UserRepo) SetNotifyChannel(ctx context.Context, userID int64, channel s
 	return err
 }
 
+// GetEmail — email покупателя для чека 54-ФЗ ("" — ещё не задан).
+func (r *UserRepo) GetEmail(ctx context.Context, userID int64) (string, error) {
+	var email *string
+	err := r.db.QueryRow(ctx, `SELECT email FROM users WHERE id = $1`, userID).Scan(&email)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return "", domain.ErrNotFound
+	}
+	if err != nil {
+		return "", err
+	}
+	if email == nil {
+		return "", nil
+	}
+	return *email, nil
+}
+
+// SetEmail — сохранить email покупателя (для будущих оплат не переспрашиваем).
+func (r *UserRepo) SetEmail(ctx context.Context, userID int64, email string) error {
+	_, err := r.db.Exec(ctx, `UPDATE users SET email = $2 WHERE id = $1`, userID, email)
+	return err
+}
+
 // SetPlan — выставить план и срок (expiresAt=nil → бессрочно). Для /grant и /revoke.
 func (r *UserRepo) SetPlan(ctx context.Context, telegramID int64, plan string, expiresAt *time.Time) error {
 	// plan_reminded_at сбрасываем: новый срок → снова можно напомнить об истечении.

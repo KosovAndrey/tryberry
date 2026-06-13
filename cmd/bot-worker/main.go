@@ -95,6 +95,12 @@ func run(log *slog.Logger) error {
 	searchSubRepo := postgres.NewSearchSubscriptionRepo(pool)
 	promoRepo := postgres.NewPromoRepo(pool)
 	referralRepo := postgres.NewReferralRepo(pool)
+	paymentRepo := postgres.NewPaymentRepo(pool)
+
+	var discounts *redisrepo.DiscountStore
+	if redisClient != nil {
+		discounts = redisrepo.NewDiscountStore(redisClient)
+	}
 
 	// Боту токен скрейпа не нужен — он зовёт только разбор URL
 	// (FindByURL/NormalizeSearchURL), не ScrapeSearch. Идентично api.
@@ -120,12 +126,13 @@ func run(log *slog.Logger) error {
 	// ── VK-консьюмер (фаза 1: привязка аккаунтов + ответы в ЛС) ─────────────
 	// Включается только при заданном VK_GROUP_TOKEN. vk.com доступен напрямую,
 	// прокси не нужен.
+	var vkBot *vk.Bot
 	if vkToken := getEnv("VK_GROUP_TOKEN", ""); vkToken != "" {
 		var linkCodes *redisrepo.LinkCodeStore
 		if redisClient != nil {
 			linkCodes = redisrepo.NewLinkCodeStore(redisClient)
 		}
-		vkBot := vk.NewBot(vk.NewClient(vkToken), log, userRepo, subRepo, prodRepo,
+		vkBot = vk.NewBot(vk.NewClient(vkToken), log, userRepo, subRepo, prodRepo,
 			searchQueryRepo, searchSubRepo, promoRepo, referralRepo, registry, linkCodes, redisClient,
 			getEnv("VK_BOT_URL", ""))
 		vkConsumer := kafka.NewConsumer(kafkaBrokers, "vk-updates", "vk-workers")
@@ -145,6 +152,13 @@ func run(log *slog.Logger) error {
 				log.Error("vk-updates consumer stopped", "err", err)
 			}
 		}()
+	}
+
+	// Оплата ЮKassa: подключает платёжный сервис к витринам и запускает
+	// консьюмер применения (no-op без конфигурации — витрина покажет заглушку).
+	if payConsumer := setupPayments(ctx, log, kafkaBrokers, bot, vkBot,
+		paymentRepo, promoRepo, referralRepo, userRepo, discounts); payConsumer != nil {
+		defer payConsumer.Close()
 	}
 
 	consumer := kafka.NewConsumer(kafkaBrokers, "telegram-updates", groupID)

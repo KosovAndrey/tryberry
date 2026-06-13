@@ -42,6 +42,17 @@ func (b *Bot) handleProfile(ctx context.Context, chatID int64, messageID int, us
 		sb.WriteString("VK: ❌ не привязан\n")
 	}
 
+	// Email для чека 54-ФЗ — только когда оплата подключена.
+	var hasEmail bool
+	if b.payments != nil {
+		if email, err := b.userRepo.GetEmail(ctx, user.ID); err == nil && email != "" {
+			hasEmail = true
+			fmt.Fprintf(&sb, "Email для чека: <b>%s</b>\n", htmlEscape(email))
+		} else {
+			sb.WriteString("Email для чека: ❌ не указан\n")
+		}
+	}
+
 	var rows [][]tgbotapi.InlineKeyboardButton
 	if user.VKID == nil {
 		rows = append(rows, tgbotapi.NewInlineKeyboardRow(
@@ -51,6 +62,15 @@ func (b *Bot) handleProfile(ctx context.Context, chatID int64, messageID int, us
 		rows = append(rows, tgbotapi.NewInlineKeyboardRow(
 			tgbotapi.NewInlineKeyboardButtonData("🔔 Уведомления", "profile:notify"),
 			tgbotapi.NewInlineKeyboardButtonData("🔗 Сменить VK", "profile:relinkvk"),
+		))
+	}
+	if b.payments != nil {
+		label := "✉️ Указать email"
+		if hasEmail {
+			label = "✉️ Изменить email"
+		}
+		rows = append(rows, tgbotapi.NewInlineKeyboardRow(
+			tgbotapi.NewInlineKeyboardButtonData(label, "profile:email"),
 		))
 	}
 	rows = append(rows, tgbotapi.NewInlineKeyboardRow(

@@ -39,10 +39,16 @@ func (b *Bot) handlePromoCode(ctx context.Context, vkID int64, user *domain.User
 	case domain.PromoKindGrant:
 		b.applyGrantPromo(ctx, vkID, user, promo, kb)
 	case domain.PromoKindDiscount:
-		// Скидочные коды погашаются только после успешного платежа (ЮKassa).
+		// «Ожидающая скидка» в Redis (как в TG) — применится к ближайшей оплате;
+		// гасится только после успешного платежа.
+		if b.discounts != nil {
+			if err := b.discounts.Put(ctx, user.ID, promo.ID, promo.DiscountPct); err != nil {
+				b.log.Error("vk: store pending discount", "user_id", user.ID, "err", err)
+			}
+		}
 		b.send(ctx, vkID, fmt.Sprintf(
 			"🎟 Код %s даёт скидку %d%% на оплату тарифа.\n\n"+
-				"Оплата в боте скоро появится — код можно будет применить при покупке.",
+				"Скидка применится автоматически при оплате — открой «Тарифы» и выбери тариф.",
 			promo.Code, promo.DiscountPct), kb)
 	default:
 		b.log.Error("vk: promo unknown kind", "kind", promo.Kind, "code", promo.Code)
