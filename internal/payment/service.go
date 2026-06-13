@@ -16,36 +16,75 @@ import (
 	redisrepo "gitlab.com/KosovAndrey/tryberrybot/internal/repository/redis"
 )
 
+// ConsentLogger пишет факт согласия на подписку (реализует BillingSubscriptionRepo).
+type ConsentLogger interface {
+	LogConsent(ctx context.Context, c domain.SubscriptionConsent) error
+}
+
 // Service создаёт платежи из витрины тарифов через выбранный Provider.
 type Service struct {
 	provider  Provider
 	payments  *postgres.PaymentRepo
 	discounts *redisrepo.DiscountStore // nil → скидки не применяем (нет Redis)
+	consents  ConsentLogger            // лог согласия на подписку
 	log       *slog.Logger
 }
 
-func NewService(provider Provider, payments *postgres.PaymentRepo, discounts *redisrepo.DiscountStore, log *slog.Logger) *Service {
-	return &Service{provider: provider, payments: payments, discounts: discounts, log: log}
+func NewService(provider Provider, payments *postgres.PaymentRepo, discounts *redisrepo.DiscountStore, consents ConsentLogger, log *slog.Logger) *Service {
+	return &Service{provider: provider, payments: payments, discounts: discounts, consents: consents, log: log}
 }
+
+// SupportsSubscription — умеет ли текущий провайдер автосписания (для витрины).
+func (s *Service) SupportsSubscription() bool { return s.provider.SupportsRecurring() }
 
 // Checkout — результат создания платежа для показа юзеру.
 type Checkout struct {
 	ConfirmationURL string
-	AmountKopecks   int64
-	DiscountPct     int // 0, если скидки не было
+	AmountKopecks   int64 // сумма первого платежа (со скидкой, если была)
+	DiscountPct     int   // 0, если скидки не было
+	Recurring       bool  // платёж — первый в подписке (дальше автосписания)
+	RenewalKopecks  int64 // сумма автопродления (без промо), если Recurring
 }
 
-// Start создаёт разовый платёж за тариф plan для пользователя u и возвращает
-// ссылку на оплату. Учитывает ожидающую скидку (если есть). Если email задан —
-// провайдер приложит фискальный чек. План продлится на вебхуке после оплаты.
+// Start создаёт разовый платёж за тариф plan и возвращает ссылку на оплату.
 func (s *Service) Start(ctx context.Context, u *domain.User, plan, email string) (Checkout, error) {
-	var out Checkout
-
-	p, ok := domain.PlanByName(plan)
-	if !ok || p.PriceRub <= 0 {
-		return out, fmt.Errorf("plan %q is not purchasable", plan)
+	base := domain.PriceKopecks(plan)
+	if base <= 0 {
+		return Checkout{}, fmt.Errorf("plan %q is not purchasable", plan)
 	}
-	amount := int64(p.PriceRub) * 100
+	return s.checkout(ctx, u, plan, email, domain.PayKindOnetime, base, false, 0)
+}
+
+// StartSubscription создаёт первый платёж подписки (с автопродлением). Перед
+// оплатой фиксирует согласие (платформа platform: tg|vk). Промо применяется
+// только к первому платежу; автопродления идут по подписочной цене.
+func (s *Service) StartSubscription(ctx context.Context, u *domain.User, plan, email, platform string) (Checkout, error) {
+	if !s.provider.SupportsRecurring() {
+		return Checkout{}, fmt.Errorf("provider %s: subscription not supported", s.provider.Name())
+	}
+	sub := domain.SubPriceKopecks(plan)
+	if sub <= 0 {
+		return Checkout{}, fmt.Errorf("plan %q has no subscription price", plan)
+	}
+
+	// Лог согласия на сумму автопродления (то, на что соглашается юзер регулярно).
+	if s.consents != nil {
+		if err := s.consents.LogConsent(ctx, domain.SubscriptionConsent{
+			UserID: u.ID, Plan: plan, AmountKopecks: sub,
+			TermsVersion: domain.SubTermsVersion, Platform: platform,
+		}); err != nil {
+			// Согласие — наша защита от чарджбэка; без записи оплату не начинаем.
+			return Checkout{}, fmt.Errorf("log consent: %w", err)
+		}
+	}
+	return s.checkout(ctx, u, plan, email, domain.PayKindSubInitial, sub, true, sub)
+}
+
+// checkout — общий путь создания платежа: применяет ожидающую скидку к первому
+// платежу, заводит строку payments и берёт у провайдера ссылку на оплату.
+func (s *Service) checkout(ctx context.Context, u *domain.User, plan, email, kind string, baseAmount int64, recurring bool, renewalKopecks int64) (Checkout, error) {
+	out := Checkout{Recurring: recurring, RenewalKopecks: renewalKopecks}
+	amount := baseAmount
 
 	// Ожидающая скидка (best-effort: ошибки Redis не валят оплату).
 	var promoCodeID *int64
@@ -66,7 +105,7 @@ func (s *Service) Start(ctx context.Context, u *domain.User, plan, email string)
 		UserID:         u.ID,
 		IdempotenceKey: idemKey,
 		Provider:       s.provider.Name(),
-		Kind:           domain.PayKindOnetime,
+		Kind:           kind,
 		Plan:           plan,
 		Days:           domain.PurchaseDays,
 		AmountKopecks:  amount,
@@ -76,6 +115,7 @@ func (s *Service) Start(ctx context.Context, u *domain.User, plan, email string)
 		return out, fmt.Errorf("create payment row: %w", err)
 	}
 
+	p, _ := domain.PlanByName(plan)
 	description := fmt.Sprintf("Подписка TryberryBot — тариф %s, %d дней", p.Title, domain.PurchaseDays)
 	res, err := s.provider.Checkout(ctx, CheckoutParams{
 		PaymentID:     paymentID,
@@ -84,6 +124,7 @@ func (s *Service) Start(ctx context.Context, u *domain.User, plan, email string)
 		Description:   description,
 		AmountKopecks: amount,
 		Email:         email,
+		Recurring:     recurring,
 	})
 	if err != nil {
 		return out, fmt.Errorf("provider checkout: %w", err)

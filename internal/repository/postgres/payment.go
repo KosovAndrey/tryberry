@@ -54,12 +54,15 @@ func (r *PaymentRepo) SetYKID(ctx context.Context, id int64, ykID string) error 
 
 // AppliedPayment — результат успешного перехода платежа в succeeded.
 type AppliedPayment struct {
-	UserID        int64
-	Plan          string
-	Days          int
-	AmountKopecks int64
-	ExpiresAt     time.Time
-	PromoCodeID   *int64
+	PaymentID             int64
+	UserID                int64
+	Plan                  string
+	Kind                  string // onetime | subscription_initial | subscription_renewal
+	Days                  int
+	AmountKopecks         int64
+	ExpiresAt             time.Time
+	PromoCodeID           *int64
+	BillingSubscriptionID *int64 // для рекуррентных платежей
 }
 
 // ConfirmInfo — user_id и сумма платежа по его id (для вебхука: получить ключ
@@ -95,11 +98,12 @@ func (r *PaymentRepo) MarkSucceeded(ctx context.Context, paymentID int64, now ti
 
 	// Переход статуса под условием — применяет план только первый.
 	var days int
+	out.PaymentID = paymentID
 	err = tx.QueryRow(ctx,
 		`UPDATE payments SET status = 'succeeded', paid_at = $2
 		 WHERE id = $1 AND status = 'pending'
-		 RETURNING user_id, plan, days, amount_kopecks, promo_code_id`,
-		paymentID, now).Scan(&out.UserID, &out.Plan, &days, &out.AmountKopecks, &out.PromoCodeID)
+		 RETURNING user_id, plan, kind, days, amount_kopecks, promo_code_id, billing_subscription_id`,
+		paymentID, now).Scan(&out.UserID, &out.Plan, &out.Kind, &days, &out.AmountKopecks, &out.PromoCodeID, &out.BillingSubscriptionID)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return out, false, nil // уже применён / отменён / неизвестен
 	}

@@ -43,18 +43,25 @@ type Bot struct {
 	linkCodes *redisrepo.LinkCodeStore // коды привязки VK (nil, если redis недоступен)
 	vkBotURL  string                   // ссылка на VK-бота для кнопки привязки ("" — не показывать)
 
-	// Оплата ЮKassa. payments == nil → платёжный сервис не настроен (env пуст),
+	// Оплата. payments == nil → платёжный сервис не настроен (env пуст),
 	// витрина показывает заглушку. discounts хранит «ожидающую скидку» (nil без redis).
+	// billing — рекуррентные подписки (статус/отмена); nil без оплаты.
 	payments  *payment.Service
 	discounts *redisrepo.DiscountStore
+	billing   *postgres.BillingSubscriptionRepo
 
 	adminIDs map[int64]bool // кто может выдавать тарифы
 }
 
-// SetPayments подключает платёжный сервис ЮKassa (опционально: при пустом
-// конфиге не вызывается, и витрина показывает заглушку оплаты).
+// SetPayments подключает платёжный сервис (опционально: при пустом конфиге не
+// вызывается, и витрина показывает заглушку оплаты).
 func (b *Bot) SetPayments(svc *payment.Service) {
 	b.payments = svc
+}
+
+// SetBilling подключает репозиторий подписок (для экрана «Моя подписка» и отмены).
+func (b *Bot) SetBilling(repo *postgres.BillingSubscriptionRepo) {
+	b.billing = repo
 }
 
 func NewBot(
@@ -366,7 +373,7 @@ func (b *Bot) sendHelpMenu(chatID int64, messageID int, edit bool) {
 		"<code>/list</code> — мои подписки\n" +
 		"<code>/track_search &lt;ссылка&gt;</code> — отслеживать поиск\n" +
 		"<code>/list_search</code> — мои поиск-подписки\n" +
-		"<code>/plans</code> — тарифы и подписка\n"+
+		"<code>/plans</code> — тарифы и подписка\n" +
 		"<code>/promo КОД</code> — активировать промокод\n" +
 		"<code>/ref</code> — пригласить друга\n" +
 		"<code>/myplan</code> — мой тариф и лимиты\n" +
@@ -755,6 +762,18 @@ func (b *Bot) handleCallback(ctx context.Context, cb *tgbotapi.CallbackQuery) {
 
 	case strings.HasPrefix(cb.Data, "plan:buy:"):
 		b.handlePlanBuy(ctx, cb.From.ID, chatID, messageID, strings.TrimPrefix(cb.Data, "plan:buy:"))
+
+	case strings.HasPrefix(cb.Data, "plan:subok:"):
+		b.handleSubBuy(ctx, cb.From.ID, chatID, messageID, strings.TrimPrefix(cb.Data, "plan:subok:"))
+
+	case strings.HasPrefix(cb.Data, "plan:sub:"):
+		b.sendSubConsent(chatID, messageID, strings.TrimPrefix(cb.Data, "plan:sub:"))
+
+	case cb.Data == "sub:cancel":
+		b.handleSubCancelConfirm(ctx, cb.From.ID, chatID, messageID)
+
+	case cb.Data == "sub:cancelok":
+		b.handleSubCancel(ctx, cb.From.ID, chatID, messageID)
 
 	case cb.Data == "menu:promo":
 		b.sendPromoMenu(chatID, messageID)

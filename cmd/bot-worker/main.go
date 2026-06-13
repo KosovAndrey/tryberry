@@ -96,6 +96,7 @@ func run(log *slog.Logger) error {
 	promoRepo := postgres.NewPromoRepo(pool)
 	referralRepo := postgres.NewReferralRepo(pool)
 	paymentRepo := postgres.NewPaymentRepo(pool)
+	billingRepo := postgres.NewBillingSubscriptionRepo(pool)
 
 	var discounts *redisrepo.DiscountStore
 	if redisClient != nil {
@@ -157,7 +158,7 @@ func run(log *slog.Logger) error {
 	// Оплата ЮKassa: подключает платёжный сервис к витринам и запускает
 	// консьюмер применения (no-op без конфигурации — витрина покажет заглушку).
 	if payConsumer := setupPayments(ctx, log, kafkaBrokers, bot, vkBot,
-		paymentRepo, promoRepo, referralRepo, userRepo, discounts); payConsumer != nil {
+		paymentRepo, promoRepo, referralRepo, userRepo, billingRepo, discounts); payConsumer != nil {
 		defer payConsumer.Close()
 	}
 

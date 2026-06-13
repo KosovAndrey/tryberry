@@ -261,8 +261,21 @@ auth.robokassa.ru доступен через прокси (RU-egress) так ж
    вместо `YKPaymentID`, `MarkSucceeded` ищет по `id`; YK-хендлер публикует
    `payment_id` из metadata. Вебхук Робокассы в `cmd/api` отдаёт `OK{InvId}`.
    build/vet/тесты зелёные. Чек НПД проверить на живой оплате (см. этап 6).
-4. **Подписка — первый платёж**: экран согласия + лог, `Recurring=true`,
-   создание `billing_subscriptions`, раздел «Моя подписка» + отмена.
+4. 🟡 **Подписка — первый платёж** (бэкенд + Telegram готовы; VK — TODO):
+   - Репозиторий `BillingSubscriptionRepo` (`billing_subscription.go`): `Activate`
+     (upsert по partial-unique active), `GetActiveByUserID`, `Cancel` (доступ до
+     конца периода), `MarkRenewed`, `LogConsent`.
+   - `Service.StartSubscription` (лог согласия → первый платёж `Recurring=true`,
+     промо только на первый платёж); `Provider.SupportsRecurring()` (yk=false,
+     rk=true); `MarkSucceeded` отдаёт `kind`/`billing_subscription_id`.
+   - `Applier.applySubscription`: на `subscription_initial` заводит
+     `billing_subscriptions` (next_charge_at = expires − lead), на
+     `subscription_renewal` — `MarkRenewed`.
+   - Telegram-витрина: карточка тарифа с выбором «🔁 Подписка / 💳 Разово», экран
+     согласия (`sendSubConsent`), `handleSubBuy`/`startSubCheckout`, статус
+     подписки и «Отменить автопродление» в /myplan (`subscription.go`).
+     emailFSM получил флаг `Sub`.
+   - **TODO**: то же на витрине VK (`internal/vk/plans.go` — сейчас только разовая).
 5. **Шедулер автосписаний** + pre-notice + retry/dunning.
 6. **Обкатка ~2 недели**, метрики (успешные/неуспешные списания, активные
    подписки, чарджбэки). Затем — удаление ЮKassa отдельным коммитом.

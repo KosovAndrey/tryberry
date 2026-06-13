@@ -31,6 +31,8 @@ func NewYooKassaProvider(yk *yookassa.Client, returnURL string, vatCode int) Pro
 
 func (p *ykProvider) Name() string { return domain.ProviderYooKassa }
 
+func (p *ykProvider) SupportsRecurring() bool { return false }
+
 func (p *ykProvider) Checkout(ctx context.Context, c CheckoutParams) (CheckoutResult, error) {
 	var out CheckoutResult
 

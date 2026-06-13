@@ -31,6 +31,10 @@ const SubChargeLeadTime = 1 * 24 * time.Hour
 // past_due в expired (доступ истекает по плану, просим продлить вручную).
 const SubMaxChargeFails = 3
 
+// SubTermsVersion — версия текста условий подписки, под которой логируем
+// согласие. Менять при изменении формулировок условий автопродления.
+const SubTermsVersion = "v1-2026-06"
+
 // BillingSubscription — рекуррентная подписка пользователя (строка таблицы
 // billing_subscriptions). Не путать с domain.Subscription — та про товарные
 // подписки на снижение цены.

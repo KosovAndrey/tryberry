@@ -33,6 +33,7 @@ func setupPayments(
 	promoRepo *postgres.PromoRepo,
 	referralRepo *postgres.ReferralRepo,
 	userRepo *postgres.UserRepo,
+	billingRepo *postgres.BillingSubscriptionRepo,
 	discounts *redisrepo.DiscountStore,
 ) *kafka.Consumer {
 	provider := setupProvider(log)
@@ -41,14 +42,15 @@ func setupPayments(
 		return nil
 	}
 
-	svc := payment.NewService(provider, paymentRepo, discounts, log)
+	svc := payment.NewService(provider, paymentRepo, discounts, billingRepo, log)
 	tgBot.SetPayments(svc)
+	tgBot.SetBilling(billingRepo)
 	if vkBot != nil {
 		vkBot.SetPayments(svc)
 	}
 
 	notifier := &paymentNotifier{tg: tgBot, vk: vkBot, log: log}
-	applier := payment.NewApplier(paymentRepo, promoRepo, referralRepo, userRepo, discounts, notifier, log)
+	applier := payment.NewApplier(paymentRepo, promoRepo, referralRepo, userRepo, billingRepo, discounts, notifier, log)
 
 	consumer := kafka.NewConsumer(brokers, payment.TopicConfirmed, "payment-workers")
 	go func() {

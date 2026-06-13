@@ -10,6 +10,10 @@ type Provider interface {
 	// Name — имя провайдера (domain.ProviderYooKassa / ProviderRobokassa).
 	Name() string
 
+	// SupportsRecurring — умеет ли провайдер автосписания (подписку). Если нет,
+	// витрина не предлагает подписку, только разовую оплату.
+	SupportsRecurring() bool
+
 	// Checkout — ссылка на оплату для уже созданной строки payments.
 	Checkout(ctx context.Context, p CheckoutParams) (CheckoutResult, error)
 

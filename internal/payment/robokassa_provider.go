@@ -24,6 +24,8 @@ func NewRobokassaProvider(rk *robokassa.Client, fiscal bool) Provider {
 
 func (p *rkProvider) Name() string { return domain.ProviderRobokassa }
 
+func (p *rkProvider) SupportsRecurring() bool { return true }
+
 func (p *rkProvider) Checkout(ctx context.Context, c CheckoutParams) (CheckoutResult, error) {
 	url, err := p.rk.BuildPaymentURL(robokassa.PaymentParams{
 		InvID:       c.PaymentID,

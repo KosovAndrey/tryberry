@@ -88,7 +88,13 @@ func (b *Bot) handleMyPlan(ctx context.Context, chatID int64, messageID int, use
 		fmt.Fprintf(&sb, "\n⏳ Действует до <b>%s</b>\n", user.PlanExpiresAt.Format(dateLayout))
 	}
 
+	subLine, cancelBtn := b.subscriptionLine(ctx, user.ID)
+	sb.WriteString(subLine)
+
 	var rows [][]tgbotapi.InlineKeyboardButton
+	if cancelBtn != nil {
+		rows = append(rows, cancelBtn)
+	}
 	if plan.MaxSearch == 0 && !user.TrialUsed {
 		sb.WriteString("\n🎁 Тебе доступен бесплатный триал поиска — кнопка ниже.")
 		rows = append(rows, tgbotapi.NewInlineKeyboardRow(
