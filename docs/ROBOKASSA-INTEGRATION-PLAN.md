@@ -275,7 +275,10 @@ auth.robokassa.ru доступен через прокси (RU-egress) так ж
      согласия (`sendSubConsent`), `handleSubBuy`/`startSubCheckout`, статус
      подписки и «Отменить автопродление» в /myplan (`subscription.go`).
      emailFSM получил флаг `Sub`.
-   - **TODO**: то же на витрине VK (`internal/vk/plans.go` — сейчас только разовая).
+   - ✅ Витрина VK (`internal/vk/subscription.go`): карточка с выбором
+     «Подписка/Разово», экран согласия, оформление, статус подписки и кнопка
+     «Отменить автопродление» в профиле; emailFSM получил флаг `Sub`. Тексты
+     запроса email — провайдеро-нейтральные.
 5. ✅ **Шедулер автосписаний** (`internal/payment/charger.go`, запуск в
    `setupPayments`, только если провайдер умеет рекуррент): тикер
    `BILLING_CHARGE_INTERVAL_MINUTES` (дефолт 60). Два прохода:

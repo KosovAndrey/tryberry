@@ -63,14 +63,28 @@ func (b *Bot) sendPlanCard(ctx context.Context, vkID int64, user *domain.User, n
 	fmt.Fprintf(&sb, "🔎 До %d поиск-подписок (слежу за всей поисковой выдачей)\n", p.MaxSearch)
 	fmt.Fprintf(&sb, "⏱ Проверка цен %s\n", domain.IntervalPhrase(p.Interval))
 	sb.WriteString("🔔 Уведомления о снижении цены в Telegram и VK\n\n")
-	sb.WriteString("Подписка действует 30 дней с момента оплаты.")
+	sb.WriteString("Доступ действует 30 дней с момента оплаты.")
 
-	kb := &Keyboard{Inline: true, Buttons: [][]Button{
-		{TextButton(fmt.Sprintf("💳 Оплатить %d ₽", p.PriceRub),
-			fmt.Sprintf(`{"cmd":%q,"k":%q}`, cmdBuy, p.Name), ColorPrimary)},
-		{TextButton("◀️ К тарифам", buttonPayload(cmdPlans), ColorSecondary)},
-	}}
-	b.send(ctx, vkID, sb.String(), kb)
+	var rows [][]Button
+	if b.subSupported() && p.SubPriceRub > 0 {
+		fmt.Fprintf(&sb, "\n\n🔁 С автопродлением выгоднее: %d ₽ вместо %d ₽.", p.SubPriceRub, p.PriceRub)
+		rows = append(rows,
+			[]Button{TextButton(fmt.Sprintf("🔁 Подписка %d ₽/мес", p.SubPriceRub),
+				fmt.Sprintf(`{"cmd":%q,"k":%q}`, cmdSub, p.Name), ColorPrimary)},
+			[]Button{TextButton(fmt.Sprintf("💳 Разовая оплата %d ₽", p.PriceRub),
+				fmt.Sprintf(`{"cmd":%q,"k":%q}`, cmdBuy, p.Name), ColorSecondary)},
+		)
+	} else {
+		rows = append(rows, []Button{TextButton(fmt.Sprintf("💳 Оплатить %d ₽", p.PriceRub),
+			fmt.Sprintf(`{"cmd":%q,"k":%q}`, cmdBuy, p.Name), ColorPrimary)})
+	}
+	rows = append(rows, []Button{TextButton("◀️ К тарифам", buttonPayload(cmdPlans), ColorSecondary)})
+	b.send(ctx, vkID, sb.String(), &Keyboard{Inline: true, Buttons: rows})
+}
+
+// subSupported — провайдер умеет автосписания (показывать ли подписку).
+func (b *Bot) subSupported() bool {
+	return b.payments != nil && b.payments.SupportsSubscription()
 }
 
 // handlePlanBuy — старт оплаты. Нет email для чека 54-ФЗ → просим (один раз),

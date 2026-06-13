@@ -47,6 +47,7 @@ func setupPayments(
 	tgBot.SetBilling(billingRepo)
 	if vkBot != nil {
 		vkBot.SetPayments(svc)
+		vkBot.SetBilling(billingRepo)
 	}
 
 	notifier := &paymentNotifier{tg: tgBot, vk: vkBot, log: log}
