@@ -416,26 +416,18 @@ func parseOzonWidgets(body []byte) (*Result, error) {
 		return nil, fmt.Errorf("ozon: empty widgetStates")
 	}
 
-	var res Result
-	for name, raw := range env.WidgetStates {
-		switch {
-		case strings.HasPrefix(name, "webPrice") && res.Price == 0:
-			res.Price = parseOzonPrice(raw)
-		case strings.HasPrefix(name, "webProductHeading") && res.Name == "":
-			res.Name = parseOzonTitle(raw)
-		case strings.HasPrefix(name, "webGallery") && res.ImageURL == "":
-			res.ImageURL = parseOzonImage(raw)
-		}
+	res := &Result{
+		Price:    extractOzonPrice(env.WidgetStates),
+		Name:     extractOzonName(env.WidgetStates),
+		ImageURL: extractOzonImage(env.WidgetStates),
 	}
 
 	if res.Price == 0 {
-		// Диагностика: имена всех виджетов + сырой JSON «ценоподобного» виджета —
-		// чтобы точно подогнать парсер под реальную структуру mobile composer-api.
+		// Диагностика на случай неудачи: имена виджетов + сырой JSON виджета с ₽.
 		keys := make([]string, 0, len(env.WidgetStates))
 		var priceRaw, priceKey string
 		for k, v := range env.WidgetStates {
 			keys = append(keys, k)
-			// виджет с ценой ищем по символу ₽ в значении — надёжнее имени.
 			if priceRaw == "" && strings.Contains(v, "₽") {
 				priceRaw, priceKey = v, k
 			}
@@ -447,51 +439,139 @@ func parseOzonWidgets(body []byte) (*Result, error) {
 	if res.Name == "" {
 		res.Name = "Товар Ozon"
 	}
-	return &res, nil
+	return res, nil
 }
 
-func parseOzonPrice(raw string) float64 {
-	var w struct {
-		Price         string `json:"price"`
-		CardPrice     string `json:"cardPrice"`
-		OriginalPrice string `json:"originalPrice"`
+// candidateWidgets возвращает значения виджетов в порядке приоритета: сперва с
+// именем, начинающимся на namePrefix, затем чьё имя содержит nameSub, затем (если
+// withRuble) любые со знаком ₽ в значении. Имена нестабильны между web/mobile,
+// поэтому полагаемся не на точное имя, а на содержимое.
+func candidateWidgets(ws map[string]string, namePrefix, nameSub string, withRuble bool) []string {
+	var prio, mid, low []string
+	for k, v := range ws {
+		lk := strings.ToLower(k)
+		switch {
+		case namePrefix != "" && strings.HasPrefix(k, namePrefix):
+			prio = append(prio, k)
+		case nameSub != "" && strings.Contains(lk, nameSub):
+			mid = append(mid, k)
+		case withRuble && strings.Contains(v, "₽"):
+			low = append(low, k)
+		}
 	}
-	if err := json.Unmarshal([]byte(raw), &w); err != nil {
-		return 0
+	sort.Strings(prio)
+	sort.Strings(mid)
+	sort.Strings(low)
+	out := make([]string, 0, len(prio)+len(mid)+len(low))
+	for _, list := range [][]string{prio, mid, low} {
+		for _, k := range list {
+			out = append(out, ws[k])
+		}
 	}
-	for _, s := range []string{w.Price, w.CardPrice, w.OriginalPrice} {
-		if v := parseRubles(s); v > 0 {
-			return v
+	return out
+}
+
+// extractOzonPrice ищет цену рекурсивно по полям price/cardPrice/originalPrice в
+// ценовом виджете (имя webPrice* / содержит "price" / со знаком ₽). Берём «price»
+// (текущая цена), фолбэк cardPrice (цена с Ozon Картой), затем originalPrice.
+func extractOzonPrice(ws map[string]string) float64 {
+	for _, raw := range candidateWidgets(ws, "webPrice", "price", true) {
+		var data any
+		if json.Unmarshal([]byte(raw), &data) != nil {
+			continue
+		}
+		found := map[string]string{}
+		findStringFields(data, map[string]bool{
+			"price": true, "cardprice": true, "originalprice": true,
+		}, found)
+		for _, f := range []string{"price", "cardprice", "originalprice"} {
+			if v := parseRubles(found[f]); v > 0 {
+				return v
+			}
 		}
 	}
 	return 0
 }
 
-func parseOzonTitle(raw string) string {
-	var w struct {
-		Title string `json:"title"`
+func extractOzonName(ws map[string]string) string {
+	for _, raw := range candidateWidgets(ws, "webProductHeading", "heading", false) {
+		var data any
+		if json.Unmarshal([]byte(raw), &data) != nil {
+			continue
+		}
+		// title может быть строкой ИЛИ объектом {text:...}; пробуем оба ключа.
+		if s := findFirstString(data, "title"); s != "" {
+			return strings.TrimSpace(s)
+		}
+		if s := findFirstString(data, "text"); s != "" {
+			return strings.TrimSpace(s)
+		}
 	}
-	if err := json.Unmarshal([]byte(raw), &w); err != nil {
-		return ""
-	}
-	return strings.TrimSpace(w.Title)
+	return ""
 }
 
-func parseOzonImage(raw string) string {
-	var w struct {
-		CoverImage string `json:"coverImage"`
-		Images     []struct {
-			Src string `json:"src"`
-		} `json:"images"`
+func extractOzonImage(ws map[string]string) string {
+	for _, raw := range candidateWidgets(ws, "webGallery", "gallery", false) {
+		var data any
+		if json.Unmarshal([]byte(raw), &data) != nil {
+			continue
+		}
+		// имена в lowercase: findFirstString сравнивает с уже lowercase-ключом JSON.
+		for _, key := range []string{"coverimage", "src", "image", "link", "url"} {
+			if s := findFirstString(data, key); strings.HasPrefix(s, "http") {
+				return s
+			}
+		}
 	}
-	if err := json.Unmarshal([]byte(raw), &w); err != nil {
-		return ""
+	return ""
+}
+
+// findStringFields рекурсивно собирает первое строковое значение для каждого из
+// искомых имён полей (lowercase), если строка содержит цифру (цена/число).
+func findStringFields(v any, names map[string]bool, out map[string]string) {
+	switch t := v.(type) {
+	case map[string]any:
+		for k, val := range t {
+			lk := strings.ToLower(k)
+			if names[lk] {
+				if s, ok := val.(string); ok {
+					if _, done := out[lk]; !done && strings.ContainsAny(s, "0123456789") {
+						out[lk] = s
+					}
+				}
+			}
+			findStringFields(val, names, out)
+		}
+	case []any:
+		for _, e := range t {
+			findStringFields(e, names, out)
+		}
 	}
-	if w.CoverImage != "" {
-		return w.CoverImage
-	}
-	if len(w.Images) > 0 {
-		return w.Images[0].Src
+}
+
+// findFirstString рекурсивно возвращает первое непустое строковое значение для
+// поля name (lowercase).
+func findFirstString(v any, name string) string {
+	switch t := v.(type) {
+	case map[string]any:
+		for k, val := range t {
+			if strings.ToLower(k) == name {
+				if s, ok := val.(string); ok && s != "" {
+					return s
+				}
+			}
+		}
+		for _, val := range t {
+			if s := findFirstString(val, name); s != "" {
+				return s
+			}
+		}
+	case []any:
+		for _, e := range t {
+			if s := findFirstString(e, name); s != "" {
+				return s
+			}
+		}
 	}
 	return ""
 }
