@@ -10,6 +10,7 @@ import (
 	"log/slog"
 	"net/url"
 	"regexp"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -426,7 +427,19 @@ func parseOzonWidgets(body []byte) (*Result, error) {
 	}
 
 	if res.Price == 0 {
-		return nil, fmt.Errorf("%w: price not found in widgetStates", ErrProductNotFound)
+		// Диагностика: имена всех виджетов + сырой JSON «ценоподобного» виджета —
+		// чтобы точно подогнать парсер под реальную структуру mobile composer-api.
+		keys := make([]string, 0, len(env.WidgetStates))
+		var priceRaw string
+		for k, v := range env.WidgetStates {
+			keys = append(keys, k)
+			if priceRaw == "" && strings.Contains(strings.ToLower(k), "price") {
+				priceRaw = v
+			}
+		}
+		sort.Strings(keys)
+		return nil, fmt.Errorf("%w: price not found; widgets=%v; priceRaw=%s",
+			ErrProductNotFound, keys, snippet([]byte(priceRaw), 500))
 	}
 	if res.Name == "" {
 		res.Name = "Товар Ozon"
