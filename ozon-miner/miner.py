@@ -131,13 +131,23 @@ def _on_block(page) -> bool:
 
 
 def _egress_ip(context) -> str:
-    """IP выхода прокси — кладём в слот, чтобы скрейпер знал, к какому IP привязан ETC."""
-    try:
-        resp = context.request.get("https://api.ipify.org?format=json", timeout=15000)
-        if resp.ok:
-            return (resp.json() or {}).get("ip", "")
-    except Exception:
-        pass
+    """IP выхода прокси — кладём в слот, чтобы скрейпер знал, к какому IP привязан ETC.
+    Несколько источников с ретраями: через мобильный прокси одиночный сервис
+    нередко таймаутит, а пустой IP ломает диагностику ротации на стороне Go."""
+    for url, key in (
+        ("https://api.ipify.org?format=json", "ip"),
+        ("https://ipinfo.io/json", "ip"),
+        ("https://api.myip.com", "ip"),
+    ):
+        for _ in range(2):
+            try:
+                resp = context.request.get(url, timeout=15000)
+                if resp.ok:
+                    ip = (resp.json() or {}).get(key, "")
+                    if ip:
+                        return ip
+            except Exception:
+                pass
     return ""
 
 
