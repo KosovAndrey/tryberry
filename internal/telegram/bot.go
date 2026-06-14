@@ -502,6 +502,11 @@ func (b *Bot) handleUntrack(ctx context.Context, msg *tgbotapi.Message) {
 
 // ── doTrack — основная логика добавления товара ───────────────────────────────
 
+// ozonComingSoonMsg — заглушка для ссылок Ozon, пока маркетплейс не запущен
+// (антибот FAB требует аккаунт-сессию + RU-мобильный прокси, см. docs/OZON-STATUS.md).
+const ozonComingSoonMsg = "🔵 <b>Ozon скоро будет</b> — отслеживание этого маркетплейса ещё в разработке.\n\n" +
+	"Пока отслеживаю <b>Wildberries</b> 🟣 — пришли ссылку на товар оттуда."
+
 func (b *Bot) doTrack(ctx context.Context, chatID int64, rawURL string, user *domain.User) {
 	tracer := otel.Tracer("bot")
 	ctx, span := tracer.Start(ctx, "bot.handleTrack",
@@ -541,7 +546,14 @@ func (b *Bot) doTrack(ctx context.Context, chatID int64, rawURL string, user *do
 		b.log.Error("scrape on track", "url", rawURL, "marketplace", s.Marketplace(), "err", err)
 
 		msg := "❌ Не удалось получить данные о товаре. Попробуй позже."
-		if errors.Is(err, scraper.ErrNotImplemented) {
+		switch {
+		case s.Marketplace() == scraper.MarketplaceOzon &&
+			(errors.Is(err, scraper.ErrNotImplemented) || errors.Is(err, scraper.ErrMarketplaceBlocked)):
+			// Заглушка: Ozon ещё в разработке (антибот/прокси). Не пугаем «ошибкой» —
+			// показываем понятное «скоро будет». Когда Ozon заработает стабильно,
+			// сюда дойдёт обычный успешный путь, и заглушка не сработает.
+			msg = ozonComingSoonMsg
+		case errors.Is(err, scraper.ErrNotImplemented):
 			msg = fmt.Sprintf("⚠️ Маркетплейс <b>%s</b> пока не поддерживается. Сейчас доступен только Wildberries.", s.Marketplace())
 		}
 
