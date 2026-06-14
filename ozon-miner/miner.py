@@ -181,26 +181,48 @@ def _dump_diagnostics(page, state, tag: str):
 
 
 def _validate_session(page, slot_label: str):
-    """Проверка пути A: дёргаем entrypoint-api **изнутри живой страницы** (fetch в
-    JS-контексте уже прошедшей FAB вкладки ozon.ru) — это НЕ «голый» запрос, а
-    same-origin как у настоящего сайта, поэтому FAB его должен пропустить.
-    Логируем status + есть ли widgetStates. Не валит майн."""
+    """Проверка рабочего пути: РЕАЛЬНАЯ навигация на карточку товара и перехват
+    ответа storefront-API, который делает сама страница. FAB пропускает переход
+    (настоящий браузер), и XHR страницы отдаёт 200 с widgetStates — это метод
+    живых парсеров. Логируем статус перехваченного API + виден ли заголовок/цена
+    в DOM. Не валит майн."""
     if not VALIDATE_PRODUCT:
         return
-    js = """async (id) => {
-      try {
-        const r = await fetch(`/api/entrypoint-api.bx/page/json/v2?url=/product/${id}/`,
-                              {headers: {accept: 'application/json'}, credentials: 'include'});
-        const t = await r.text();
-        return {status: r.status, has: t.includes('widgetStates'), len: t.length};
-      } catch (e) { return {status: -1, has: false, len: 0, err: String(e)}; }
-    }"""
+    cap = {"status": None, "has": False}
+
+    def on_resp(resp):
+        try:
+            u = resp.url
+            if ("entrypoint-api.bx" in u or "composer-api.bx" in u) and "page/json" in u:
+                cap["status"] = resp.status
+                if resp.status == 200 and "widgetStates" in (resp.text() or ""):
+                    cap["has"] = True
+        except Exception:
+            pass
+
+    page.on("response", on_resp)
     try:
-        res = page.evaluate(js, VALIDATE_PRODUCT)
-        log.info("валидация %s (in-page fetch): status=%s widgetStates=%s len=%s",
-                 slot_label, res.get("status"), res.get("has"), res.get("len"))
+        page.goto(f"https://www.ozon.ru/product/{VALIDATE_PRODUCT}/",
+                  wait_until="domcontentloaded", timeout=60000)
+        for _ in range(8):
+            _human_nudge(page)
+            page.wait_for_timeout(1500)
+            if cap["has"]:
+                break
+        title = ""
+        try:
+            title = (page.title() or "")[:60]
+        except Exception:
+            pass
+        log.info("валидация %s (page nav): api_status=%s widgetStates=%s title=%r",
+                 slot_label, cap["status"], cap["has"], title)
     except Exception as e:  # noqa: BLE001
-        log.info("валидация %s: page.evaluate упал: %s", slot_label, e)
+        log.info("валидация %s: навигация упала: %s", slot_label, e)
+    finally:
+        try:
+            page.remove_listener("response", on_resp)
+        except Exception:
+            pass
 
 
 def mine_once(pw) -> dict | None:
