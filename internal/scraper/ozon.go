@@ -346,7 +346,8 @@ func bytesHasFAB(b []byte) bool {
 	return strings.Contains(string(b), "incidentId") || strings.Contains(string(b), "fab_")
 }
 
-var fabIncidentRe = regexp.MustCompile(`fab_[a-z]+_[0-9A-Za-z]+`)
+// Ловит и подтипы (fab_chlg_/fab_cp_/fab_nmk_), и общий формат (fab_<timestamp>_).
+var fabIncidentRe = regexp.MustCompile(`fab_[A-Za-z0-9]+_[A-Za-z0-9]+`)
 
 const ozonDefaultUA = "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 " +
 	"(KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
