@@ -282,7 +282,9 @@ func (s *OzonScraper) buildRequest(ctx context.Context, id, cookie, ua string) (
 	}
 
 	// mobile: путь /products/ (множественное!) + layout-параметры приложения.
-	inner := "/products/" + id + "/?layout_container=pdppage2copy&layout_page_index=2"
+	// page_index=1 — ВЕРХ карточки (цена/заголовок/галерея); index=2 это вторичный
+	// контент (характеристики/описание/рекомендации, цены там нет).
+	inner := "/products/" + id + "/?layout_container=pdppage2copy&layout_page_index=1"
 	api := "https://api.ozon.ru/composer-api.bx/page/json/v2?url=" + url.QueryEscape(inner)
 	req, err := fhttp.NewRequestWithContext(ctx, fhttp.MethodGet, api, nil)
 	if err != nil {
@@ -430,16 +432,17 @@ func parseOzonWidgets(body []byte) (*Result, error) {
 		// Диагностика: имена всех виджетов + сырой JSON «ценоподобного» виджета —
 		// чтобы точно подогнать парсер под реальную структуру mobile composer-api.
 		keys := make([]string, 0, len(env.WidgetStates))
-		var priceRaw string
+		var priceRaw, priceKey string
 		for k, v := range env.WidgetStates {
 			keys = append(keys, k)
-			if strings.HasPrefix(k, "priceCell") {
-				priceRaw = v
+			// виджет с ценой ищем по символу ₽ в значении — надёжнее имени.
+			if priceRaw == "" && strings.Contains(v, "₽") {
+				priceRaw, priceKey = v, k
 			}
 		}
 		sort.Strings(keys)
-		return nil, fmt.Errorf("%w: price not found; widgets=%v; priceCellRaw=%s",
-			ErrProductNotFound, keys, snippet([]byte(priceRaw), 4000))
+		return nil, fmt.Errorf("%w: price not found; widgets=%v; priceKey=%s; priceRaw=%s",
+			ErrProductNotFound, keys, priceKey, snippet([]byte(priceRaw), 2500))
 	}
 	if res.Name == "" {
 		res.Name = "Товар Ozon"
