@@ -113,6 +113,7 @@ func run(log *slog.Logger) error {
 		scraper.NewOzonScraper(scraper.OzonOptions{
 			RedisClient: redisClient,
 			ProxyURL:    getEnv("OZON_PROXY_URL", ""),
+			Mode:        getEnv("OZON_API_MODE", "mobile"),
 			Logger:      log,
 		}),
 		scraper.NewYandexMarketScraper(2),

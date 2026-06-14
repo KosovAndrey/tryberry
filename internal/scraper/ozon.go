@@ -2,10 +2,13 @@ package scraper
 
 import (
 	"context"
+	"crypto/rand"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"io"
 	"log/slog"
+	"net/url"
 	"regexp"
 	"strconv"
 	"strings"
@@ -16,6 +19,21 @@ import (
 	"github.com/bogdanfinn/tls-client/profiles"
 	"github.com/redis/go-redis/v9"
 	"golang.org/x/time/rate"
+)
+
+// Режимы запроса к Ozon. mobile = api.ozon.ru/composer-api.bx + okhttp-TLS +
+// заголовки приложения (рецепт, дававший живой 200); web = www.ozon.ru/
+// entrypoint-api.bx + Chrome-TLS (на нём FAB отдавал fab_cp_ даже с валидным ETC).
+const (
+	ozonModeMobile = "mobile"
+	ozonModeWeb    = "web"
+
+	// Заголовки мобильного приложения (из снятого живого 200-запроса).
+	ozonAppUA   = "ozonapp_android/19.20.0+2684"
+	ozonAppName = "ozonapp_android"
+	ozonAppVer  = "19.20.0(2684)"
+	// x-o3-fp — статическая константа приложения (не device-fp), см. research.
+	ozonStaticFP = "1.01ae145142fa31f9"
 )
 
 // OzonScraper получает цену/название/картинку товара Ozon через storefront-API
@@ -35,6 +53,7 @@ type OzonScraper struct {
 	limiter    *rate.Limiter
 	log        *slog.Logger
 	slotKey    string // ozon:etc:pool:0
+	mode       string // ozonModeMobile | ozonModeWeb
 	configured bool
 }
 
@@ -47,6 +66,7 @@ type OzonOptions struct {
 	ProxyURL    string  // http://user:pass@host:port мобильного прокси
 	PoolPrefix  string  // префикс ключей Redis; пусто → "ozon:etc:"
 	RPS         float64 // лимит запросов к Ozon (один IP → держим низким), 0 → 1
+	Mode        string  // "mobile" (по умолчанию) | "web"
 	Logger      *slog.Logger
 }
 
@@ -63,37 +83,45 @@ func NewOzonScraper(opts OzonOptions) *OzonScraper {
 	if rps <= 0 {
 		rps = 1
 	}
+	mode := opts.Mode
+	if mode != ozonModeWeb {
+		mode = ozonModeMobile
+	}
 
 	s := &OzonScraper{
 		rc:      opts.RedisClient,
 		limiter: rate.NewLimiter(rate.Limit(rps), 1),
 		log:     log,
 		slotKey: prefix + "pool:0",
+		mode:    mode,
 	}
 
 	// Рабочий режим — только если есть Redis (источник ETC). Прокси формально
 	// опционален (без него почти наверняка прилетит fab_nmk_), но клиент строим.
 	if opts.RedisClient != nil {
-		client, err := newOzonTLSClient(opts.ProxyURL)
+		client, err := newOzonTLSClient(opts.ProxyURL, mode)
 		if err != nil {
 			log.Error("ozon: tls-client init failed, scraper disabled", "err", err)
 		} else {
 			s.client = client
 			s.configured = true
+			log.Info("ozon scraper configured", "mode", mode, "proxy", opts.ProxyURL != "")
 		}
 	}
 	return s
 }
 
-func newOzonTLSClient(proxyURL string) (tls_client.HttpClient, error) {
+func newOzonTLSClient(proxyURL, mode string) (tls_client.HttpClient, error) {
+	// TLS-профиль обязан совпадать с клиентом, под которого заточен эндпоинт:
+	// mobile → okhttp (как приложение); web → Chrome (как Chromium майнера).
+	profile := profiles.Okhttp4Android13
+	if mode == ozonModeWeb {
+		profile = profiles.Chrome_146
+	}
 	jar := tls_client.NewCookieJar()
 	options := []tls_client.HttpClientOption{
 		tls_client.WithTimeoutSeconds(20),
-		// Профиль под Chromium, которым ozon-miner добывает ETC: TLS-отпечаток
-		// запроса должен совпадать с тем, что прошёл FAB при минте cookie.
-		// Chromium Patchright = Chrome 148; берём ближайший доступный профиль
-		// (свежие Chrome на уровне TLS-ClientHello практически идентичны).
-		tls_client.WithClientProfile(profiles.Chrome_146),
+		tls_client.WithClientProfile(profile),
 		tls_client.WithCookieJar(jar),
 	}
 	if proxyURL != "" {
@@ -140,31 +168,9 @@ func (s *OzonScraper) Scrape(ctx context.Context, url string) (*Result, error) {
 		ua = ozonDefaultUA
 	}
 
-	api := "https://www.ozon.ru/api/entrypoint-api.bx/page/json/v2?url=/product/" + id + "/"
-	req, err := fhttp.NewRequestWithContext(ctx, fhttp.MethodGet, api, nil)
+	req, err := s.buildRequest(ctx, id, cookie, ua)
 	if err != nil {
 		return nil, err
-	}
-	// Полный набор браузерных заголовков fetch-запроса (как шлёт Chrome к своему
-	// же storefront-API) — чтобы FAB не зацепился за «не-браузерный» набор.
-	req.Header = fhttp.Header{
-		"accept":             {"application/json"},
-		"accept-language":    {"ru,en;q=0.9"},
-		"sec-ch-ua":          {`"Chromium";v="148", "Google Chrome";v="148", "Not.A/Brand";v="24"`},
-		"sec-ch-ua-mobile":   {"?0"},
-		"sec-ch-ua-platform": {`"Linux"`},
-		"sec-fetch-dest":     {"empty"},
-		"sec-fetch-mode":     {"cors"},
-		"sec-fetch-site":     {"same-origin"},
-		"x-requested-with":   {"XMLHttpRequest"},
-		"user-agent":         {ua},
-		"referer":            {"https://www.ozon.ru/product/" + id + "/"},
-		"cookie":             {cookie},
-		fhttp.HeaderOrderKey: {
-			"accept", "accept-language", "sec-ch-ua", "sec-ch-ua-mobile",
-			"sec-ch-ua-platform", "sec-fetch-dest", "sec-fetch-mode",
-			"sec-fetch-site", "x-requested-with", "user-agent", "referer", "cookie",
-		},
 	}
 
 	resp, err := s.client.Do(req)
@@ -178,16 +184,17 @@ func (s *OzonScraper) Scrape(ctx context.Context, url string) (*Result, error) {
 	// FAB-блок / протухший ETC: помечаем слот битым, чтобы майнер перевыдал.
 	// Диагностика: сверяем IP минта ETC с текущим egress — расхождение значит,
 	// что прокси отротировал IP (ETC привязан к IP) → лечится sticky-режимом
-	// прокси, а не кодом. Совпадение → дело в TLS/заголовках/сессии.
+	// прокси, а не кодом. Совпадение → дело в TLS/заголовках/сессии (incident +
+	// тело подскажут: fab_chlg_ = токен не признан, иное = признан, но запрос режут).
 	if resp.StatusCode == 403 || bytesHasFAB(body) {
 		incident := fabIncidentRe.FindString(string(body))
 		curIP := s.currentEgressIP(ctx)
 		s.markBad(ctx)
 		s.log.Warn("ozon: FAB block / stale ETC",
-			"status", resp.StatusCode, "id", id,
+			"status", resp.StatusCode, "id", id, "mode", s.mode,
 			"minted_ip", mintedIP, "current_ip", curIP,
 			"ip_rotated", mintedIP != "" && curIP != "" && mintedIP != curIP,
-			"incident", incident)
+			"incident", incident, "body", snippet(body, 300))
 		return nil, ErrMarketplaceBlocked
 	}
 	if resp.StatusCode == 404 {
@@ -202,6 +209,89 @@ func (s *OzonScraper) Scrape(ctx context.Context, url string) (*Result, error) {
 		return nil, err
 	}
 	return res, nil
+}
+
+// buildRequest собирает запрос к storefront-API по режиму:
+//
+//	mobile → api.ozon.ru/composer-api.bx + заголовки приложения (okhttp-TLS)
+//	web    → www.ozon.ru/entrypoint-api.bx + браузерные заголовки (Chrome-TLS)
+//
+// В обоих ответ — один формат widgetStates. ua — UA из слота (Chrome), для
+// mobile он не используется (там UA приложения).
+func (s *OzonScraper) buildRequest(ctx context.Context, id, cookie, ua string) (*fhttp.Request, error) {
+	if s.mode == ozonModeWeb {
+		api := "https://www.ozon.ru/api/entrypoint-api.bx/page/json/v2?url=/product/" + id + "/"
+		req, err := fhttp.NewRequestWithContext(ctx, fhttp.MethodGet, api, nil)
+		if err != nil {
+			return nil, err
+		}
+		req.Header = fhttp.Header{
+			"accept":             {"application/json"},
+			"accept-language":    {"ru,en;q=0.9"},
+			"sec-ch-ua":          {`"Chromium";v="148", "Google Chrome";v="148", "Not.A/Brand";v="24"`},
+			"sec-ch-ua-mobile":   {"?0"},
+			"sec-ch-ua-platform": {`"Linux"`},
+			"sec-fetch-dest":     {"empty"},
+			"sec-fetch-mode":     {"cors"},
+			"sec-fetch-site":     {"same-origin"},
+			"x-requested-with":   {"XMLHttpRequest"},
+			"user-agent":         {ua},
+			"referer":            {"https://www.ozon.ru/product/" + id + "/"},
+			"cookie":             {cookie},
+			fhttp.HeaderOrderKey: {
+				"accept", "accept-language", "sec-ch-ua", "sec-ch-ua-mobile",
+				"sec-ch-ua-platform", "sec-fetch-dest", "sec-fetch-mode",
+				"sec-fetch-site", "x-requested-with", "user-agent", "referer", "cookie",
+			},
+		}
+		return req, nil
+	}
+
+	// mobile: путь /products/ (множественное!) + layout-параметры приложения.
+	inner := "/products/" + id + "/?layout_container=pdppage2copy&layout_page_index=2"
+	api := "https://api.ozon.ru/composer-api.bx/page/json/v2?url=" + url.QueryEscape(inner)
+	req, err := fhttp.NewRequestWithContext(ctx, fhttp.MethodGet, api, nil)
+	if err != nil {
+		return nil, err
+	}
+	req.Header = fhttp.Header{
+		"accept":            {"application/json; charset=utf-8"},
+		"user-agent":        {ozonAppUA},
+		"x-o3-app-name":     {ozonAppName},
+		"x-o3-app-version":  {ozonAppVer},
+		"x-o3-device-type":  {"mobile"},
+		"x-o3-fp":           {ozonStaticFP},
+		"x-o3-language":     {"ru"},
+		"x-o3-sample-trace": {"false"},
+		"mobile-gaid":       {randGAID()},
+		"mobile-lat":        {"0"},
+		"cookie":            {cookie},
+		fhttp.HeaderOrderKey: {
+			"accept", "user-agent", "x-o3-app-name", "x-o3-app-version",
+			"x-o3-device-type", "x-o3-fp", "x-o3-language", "x-o3-sample-trace",
+			"mobile-gaid", "mobile-lat", "cookie",
+		},
+	}
+	return req, nil
+}
+
+// randGAID — случайный Google Advertising ID (uuid-подобный) для заголовка
+// MOBILE-GAID. Значение нефиксированное и приложением не проверяется на сервере.
+func randGAID() string {
+	var b [16]byte
+	if _, err := rand.Read(b[:]); err != nil {
+		return "00000000-0000-0000-0000-000000000000"
+	}
+	h := hex.EncodeToString(b[:])
+	return h[0:8] + "-" + h[8:12] + "-" + h[12:16] + "-" + h[16:20] + "-" + h[20:32]
+}
+
+func snippet(b []byte, n int) string {
+	s := strings.TrimSpace(string(b))
+	if len(s) > n {
+		return s[:n]
+	}
+	return s
 }
 
 // token читает свежий ETC-слот, выданный майнером (+ IP, на котором он добыт).

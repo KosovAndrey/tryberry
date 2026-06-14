@@ -127,6 +127,7 @@ func run(log *slog.Logger) error {
 			RedisClient: redisClient,
 			ProxyURL:    getEnv("OZON_PROXY_URL", ""),
 			RPS:         rpsOzon,
+			Mode:        getEnv("OZON_API_MODE", "mobile"),
 			Logger:      log,
 		}),
 		scraper.NewYandexMarketScraper(rpsYandex),

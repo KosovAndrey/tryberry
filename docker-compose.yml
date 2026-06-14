@@ -185,6 +185,7 @@ services:
       # что у scraper/ozon-miner (tls-client ходит через него напрямую, мимо
       # HTTPS_PROXY). ETC берётся из Redis (ozon:etc:pool:0).
       OZON_PROXY_URL: "${OZON_PROXY_URL:-}"
+      OZON_API_MODE: "${OZON_API_MODE:-mobile}"
     depends_on:
       postgres:
         condition: service_healthy
@@ -220,6 +221,8 @@ services:
       # Мобильный РФ-прокси Ozon (тот же, что у ozon-miner): ETC привязан к IP,
       # майнер и скрейпер обязаны ходить через один выход. Секрет — в .env.
       OZON_PROXY_URL: "${OZON_PROXY_URL:-}"
+      # Эндпоинт Ozon: mobile (composer-api.bx + okhttp) | web (entrypoint-api.bx).
+      OZON_API_MODE: "${OZON_API_MODE:-mobile}"
       SCRAPER_HEALTH_PORT: "8090"
       OTLP_ENDPOINT: "jaeger:4317"
     depends_on:
