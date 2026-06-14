@@ -116,6 +116,7 @@ func run(log *slog.Logger) error {
 			Mode:         getEnv("OZON_API_MODE", "mobile"),
 			AccessToken:  getEnv("OZON_ACCESS_TOKEN", ""),
 			RefreshToken: getEnv("OZON_REFRESH_TOKEN", ""),
+			Cookie:       getEnv("OZON_COOKIE", ""),
 			Logger:       log,
 		}),
 		scraper.NewYandexMarketScraper(2),

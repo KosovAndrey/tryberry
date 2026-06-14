@@ -77,6 +77,10 @@ type OzonOptions struct {
 	// без ETC-майнера и Redis. Доверенная сессия проходит FAB. Секреты — из .env.
 	AccessToken  string
 	RefreshToken string
+	// Cookie — готовая cookie-строка целиком (снятая из запроса приложения через
+	// HTTP Toolkit): самый надёжный вариант, несёт все куки аккаунт-сессии
+	// (access/refresh-token, __Secure-user-id, abt_data). Приоритетнее токенов.
+	Cookie string
 }
 
 func NewOzonScraper(opts OzonOptions) *OzonScraper {
@@ -105,19 +109,23 @@ func NewOzonScraper(opts OzonOptions) *OzonScraper {
 		mode:    mode,
 	}
 
-	// Путь B: аккаунт-токены заданы → ходим под залогиненной сессией (mobile/okhttp),
-	// ETC/Redis не нужны. Иначе — путь через ETC-майнер (нужен Redis).
-	if opts.AccessToken != "" {
+	// Путь B: готовая cookie-строка или аккаунт-токены заданы → ходим под
+	// залогиненной сессией (mobile/okhttp), ETC/Redis не нужны. Иначе — ETC-майнер.
+	if opts.Cookie != "" {
+		s.accountCookie = opts.Cookie // полная cookie-строка из приложения
+	} else if opts.AccessToken != "" {
 		s.accountCookie = "__Secure-access-token=" + opts.AccessToken
 		if opts.RefreshToken != "" {
 			s.accountCookie += "; __Secure-refresh-token=" + opts.RefreshToken
 		}
+	}
+	if s.accountCookie != "" {
 		s.mode = ozonModeMobile // аккаунт-API живёт на composer-api.bx (okhttp)
 		mode = ozonModeMobile
 	}
 
 	// Клиент нужен и для account-режима, и для ETC-режима.
-	if opts.AccessToken != "" || opts.RedisClient != nil {
+	if s.accountCookie != "" || opts.RedisClient != nil {
 		client, err := newOzonTLSClient(opts.ProxyURL, mode)
 		if err != nil {
 			log.Error("ozon: tls-client init failed, scraper disabled", "err", err)
@@ -128,7 +136,9 @@ func NewOzonScraper(opts OzonOptions) *OzonScraper {
 			if s.accountCookie != "" {
 				auth = "account-token"
 			}
-			log.Info("ozon scraper configured", "mode", mode, "auth", auth, "proxy", opts.ProxyURL != "")
+			// длину cookie логируем (НЕ значение) — подтвердить, что .env подхватился.
+			log.Info("ozon scraper configured", "mode", mode, "auth", auth,
+				"cookie_len", len(s.accountCookie), "proxy", opts.ProxyURL != "")
 		}
 	}
 	return s

@@ -190,6 +190,8 @@ services:
       # сессией без ETC-майнера. Секреты — в .env, в логи не пишутся.
       OZON_ACCESS_TOKEN: "${OZON_ACCESS_TOKEN:-}"
       OZON_REFRESH_TOKEN: "${OZON_REFRESH_TOKEN:-}"
+      # Готовая cookie-строка из приложения (HTTP Toolkit) — приоритетнее токенов.
+      OZON_COOKIE: "${OZON_COOKIE:-}"
     depends_on:
       postgres:
         condition: service_healthy
@@ -230,6 +232,8 @@ services:
       # Путь B (аккаунт-токены) — секреты из .env, в логи не пишутся.
       OZON_ACCESS_TOKEN: "${OZON_ACCESS_TOKEN:-}"
       OZON_REFRESH_TOKEN: "${OZON_REFRESH_TOKEN:-}"
+      # Готовая cookie-строка из приложения (HTTP Toolkit) — приоритетнее токенов.
+      OZON_COOKIE: "${OZON_COOKIE:-}"
       SCRAPER_HEALTH_PORT: "8090"
       OTLP_ENDPOINT: "jaeger:4317"
     depends_on:
