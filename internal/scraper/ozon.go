@@ -55,6 +55,9 @@ type OzonScraper struct {
 	slotKey    string // ozon:etc:pool:0
 	mode       string // ozonModeMobile | ozonModeWeb
 	configured bool
+
+	// account-режим (путь B): cookie из аккаунт-токенов вместо ETC из Redis.
+	accountCookie string // "" → используем ETC-слот из Redis
 }
 
 // OzonOptions — конфигурация рабочего скрейпера. Нулевое значение даёт
@@ -68,6 +71,12 @@ type OzonOptions struct {
 	RPS         float64 // лимит запросов к Ozon (один IP → держим низким), 0 → 1
 	Mode        string  // "mobile" (по умолчанию) | "web"
 	Logger      *slog.Logger
+
+	// Путь B (аккаунт-токены): если задан AccessToken — скрейпер ходит под
+	// залогиненным аккаунтом (cookie __Secure-access-token/__Secure-refresh-token),
+	// без ETC-майнера и Redis. Доверенная сессия проходит FAB. Секреты — из .env.
+	AccessToken  string
+	RefreshToken string
 }
 
 func NewOzonScraper(opts OzonOptions) *OzonScraper {
@@ -96,16 +105,30 @@ func NewOzonScraper(opts OzonOptions) *OzonScraper {
 		mode:    mode,
 	}
 
-	// Рабочий режим — только если есть Redis (источник ETC). Прокси формально
-	// опционален (без него почти наверняка прилетит fab_nmk_), но клиент строим.
-	if opts.RedisClient != nil {
+	// Путь B: аккаунт-токены заданы → ходим под залогиненной сессией (mobile/okhttp),
+	// ETC/Redis не нужны. Иначе — путь через ETC-майнер (нужен Redis).
+	if opts.AccessToken != "" {
+		s.accountCookie = "__Secure-access-token=" + opts.AccessToken
+		if opts.RefreshToken != "" {
+			s.accountCookie += "; __Secure-refresh-token=" + opts.RefreshToken
+		}
+		s.mode = ozonModeMobile // аккаунт-API живёт на composer-api.bx (okhttp)
+		mode = ozonModeMobile
+	}
+
+	// Клиент нужен и для account-режима, и для ETC-режима.
+	if opts.AccessToken != "" || opts.RedisClient != nil {
 		client, err := newOzonTLSClient(opts.ProxyURL, mode)
 		if err != nil {
 			log.Error("ozon: tls-client init failed, scraper disabled", "err", err)
 		} else {
 			s.client = client
 			s.configured = true
-			log.Info("ozon scraper configured", "mode", mode, "proxy", opts.ProxyURL != "")
+			auth := "etc-miner"
+			if s.accountCookie != "" {
+				auth = "account-token"
+			}
+			log.Info("ozon scraper configured", "mode", mode, "auth", auth, "proxy", opts.ProxyURL != "")
 		}
 	}
 	return s
@@ -294,8 +317,12 @@ func snippet(b []byte, n int) string {
 	return s
 }
 
-// token читает свежий ETC-слот, выданный майнером (+ IP, на котором он добыт).
+// token отдаёт cookie+UA для запроса. Путь B (account): cookie из аккаунт-токенов.
+// Путь ETC: свежий слот майнера (+ IP, на котором он добыт).
 func (s *OzonScraper) token(ctx context.Context) (cookie, ua, mintedIP string, err error) {
+	if s.accountCookie != "" {
+		return s.accountCookie, ozonAppUA, "", nil
+	}
 	if s.rc == nil {
 		return "", "", "", fmt.Errorf("redis unavailable")
 	}
@@ -330,8 +357,9 @@ func (s *OzonScraper) currentEgressIP(ctx context.Context) string {
 }
 
 // markBad помечает слот битым — майнер перевыдаст ETC на следующем цикле.
+// В account-режиме слота нет — ничего не делаем.
 func (s *OzonScraper) markBad(ctx context.Context) {
-	if s.rc == nil {
+	if s.accountCookie != "" || s.rc == nil {
 		return
 	}
 	if err := s.rc.HSet(ctx, s.slotKey,

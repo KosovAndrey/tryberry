@@ -111,10 +111,12 @@ func run(log *slog.Logger) error {
 		// Бот при /track скрейпит сразу (показать товар) → Ozon нужен рабочим:
 		// тот же ETC из Redis и тот же мобильный прокси, что у scraper/ozon-miner.
 		scraper.NewOzonScraper(scraper.OzonOptions{
-			RedisClient: redisClient,
-			ProxyURL:    getEnv("OZON_PROXY_URL", ""),
-			Mode:        getEnv("OZON_API_MODE", "mobile"),
-			Logger:      log,
+			RedisClient:  redisClient,
+			ProxyURL:     getEnv("OZON_PROXY_URL", ""),
+			Mode:         getEnv("OZON_API_MODE", "mobile"),
+			AccessToken:  getEnv("OZON_ACCESS_TOKEN", ""),
+			RefreshToken: getEnv("OZON_REFRESH_TOKEN", ""),
+			Logger:       log,
 		}),
 		scraper.NewYandexMarketScraper(2),
 	)

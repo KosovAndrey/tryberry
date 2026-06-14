@@ -186,6 +186,10 @@ services:
       # HTTPS_PROXY). ETC берётся из Redis (ozon:etc:pool:0).
       OZON_PROXY_URL: "${OZON_PROXY_URL:-}"
       OZON_API_MODE: "${OZON_API_MODE:-mobile}"
+      # Путь B (аккаунт-токены): если заданы — Ozon ходит под залогиненной
+      # сессией без ETC-майнера. Секреты — в .env, в логи не пишутся.
+      OZON_ACCESS_TOKEN: "${OZON_ACCESS_TOKEN:-}"
+      OZON_REFRESH_TOKEN: "${OZON_REFRESH_TOKEN:-}"
     depends_on:
       postgres:
         condition: service_healthy
@@ -223,6 +227,9 @@ services:
       OZON_PROXY_URL: "${OZON_PROXY_URL:-}"
       # Эндпоинт Ozon: mobile (composer-api.bx + okhttp) | web (entrypoint-api.bx).
       OZON_API_MODE: "${OZON_API_MODE:-mobile}"
+      # Путь B (аккаунт-токены) — секреты из .env, в логи не пишутся.
+      OZON_ACCESS_TOKEN: "${OZON_ACCESS_TOKEN:-}"
+      OZON_REFRESH_TOKEN: "${OZON_REFRESH_TOKEN:-}"
       SCRAPER_HEALTH_PORT: "8090"
       OTLP_ENDPOINT: "jaeger:4317"
     depends_on:

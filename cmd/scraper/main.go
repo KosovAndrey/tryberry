@@ -124,11 +124,13 @@ func run(log *slog.Logger) error {
 	registry := scraper.NewRegistry(
 		scraper.NewWildberriesScraper(rpsWB),
 		scraper.NewOzonScraper(scraper.OzonOptions{
-			RedisClient: redisClient,
-			ProxyURL:    getEnv("OZON_PROXY_URL", ""),
-			RPS:         rpsOzon,
-			Mode:        getEnv("OZON_API_MODE", "mobile"),
-			Logger:      log,
+			RedisClient:  redisClient,
+			ProxyURL:     getEnv("OZON_PROXY_URL", ""),
+			RPS:          rpsOzon,
+			Mode:         getEnv("OZON_API_MODE", "mobile"),
+			AccessToken:  getEnv("OZON_ACCESS_TOKEN", ""),
+			RefreshToken: getEnv("OZON_REFRESH_TOKEN", ""),
+			Logger:       log,
 		}),
 		scraper.NewYandexMarketScraper(rpsYandex),
 	)
