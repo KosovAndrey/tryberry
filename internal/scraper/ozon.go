@@ -132,9 +132,12 @@ func (s *OzonScraper) Scrape(ctx context.Context, url string) (*Result, error) {
 		return nil, err
 	}
 
-	cookie, ua, err := s.token(ctx)
+	cookie, ua, mintedIP, err := s.token(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("%w: no ozon ETC token (miner not ready?)", ErrMarketplaceBlocked)
+	}
+	if ua == "" {
+		ua = ozonDefaultUA
 	}
 
 	api := "https://www.ozon.ru/api/entrypoint-api.bx/page/json/v2?url=/product/" + id + "/"
@@ -142,17 +145,26 @@ func (s *OzonScraper) Scrape(ctx context.Context, url string) (*Result, error) {
 	if err != nil {
 		return nil, err
 	}
-	if ua == "" {
-		ua = ozonDefaultUA
-	}
+	// Полный набор браузерных заголовков fetch-запроса (как шлёт Chrome к своему
+	// же storefront-API) — чтобы FAB не зацепился за «не-браузерный» набор.
 	req.Header = fhttp.Header{
 		"accept":             {"application/json"},
 		"accept-language":    {"ru,en;q=0.9"},
+		"sec-ch-ua":          {`"Chromium";v="148", "Google Chrome";v="148", "Not.A/Brand";v="24"`},
+		"sec-ch-ua-mobile":   {"?0"},
+		"sec-ch-ua-platform": {`"Linux"`},
+		"sec-fetch-dest":     {"empty"},
+		"sec-fetch-mode":     {"cors"},
+		"sec-fetch-site":     {"same-origin"},
+		"x-requested-with":   {"XMLHttpRequest"},
 		"user-agent":         {ua},
-		"cookie":             {cookie},
-		"x-o3-app-name":      {"ozon"},
 		"referer":            {"https://www.ozon.ru/product/" + id + "/"},
-		fhttp.HeaderOrderKey: {"accept", "accept-language", "user-agent", "cookie", "x-o3-app-name", "referer"},
+		"cookie":             {cookie},
+		fhttp.HeaderOrderKey: {
+			"accept", "accept-language", "sec-ch-ua", "sec-ch-ua-mobile",
+			"sec-ch-ua-platform", "sec-fetch-dest", "sec-fetch-mode",
+			"sec-fetch-site", "x-requested-with", "user-agent", "referer", "cookie",
+		},
 	}
 
 	resp, err := s.client.Do(req)
@@ -164,9 +176,18 @@ func (s *OzonScraper) Scrape(ctx context.Context, url string) (*Result, error) {
 	body, _ := io.ReadAll(io.LimitReader(resp.Body, 4<<20))
 
 	// FAB-блок / протухший ETC: помечаем слот битым, чтобы майнер перевыдал.
+	// Диагностика: сверяем IP минта ETC с текущим egress — расхождение значит,
+	// что прокси отротировал IP (ETC привязан к IP) → лечится sticky-режимом
+	// прокси, а не кодом. Совпадение → дело в TLS/заголовках/сессии.
 	if resp.StatusCode == 403 || bytesHasFAB(body) {
+		incident := fabIncidentRe.FindString(string(body))
+		curIP := s.currentEgressIP(ctx)
 		s.markBad(ctx)
-		s.log.Warn("ozon: FAB block / stale ETC", "status", resp.StatusCode, "id", id)
+		s.log.Warn("ozon: FAB block / stale ETC",
+			"status", resp.StatusCode, "id", id,
+			"minted_ip", mintedIP, "current_ip", curIP,
+			"ip_rotated", mintedIP != "" && curIP != "" && mintedIP != curIP,
+			"incident", incident)
 		return nil, ErrMarketplaceBlocked
 	}
 	if resp.StatusCode == 404 {
@@ -183,19 +204,39 @@ func (s *OzonScraper) Scrape(ctx context.Context, url string) (*Result, error) {
 	return res, nil
 }
 
-// token читает свежий ETC-слот, выданный майнером.
-func (s *OzonScraper) token(ctx context.Context) (cookie, ua string, err error) {
+// token читает свежий ETC-слот, выданный майнером (+ IP, на котором он добыт).
+func (s *OzonScraper) token(ctx context.Context) (cookie, ua, mintedIP string, err error) {
 	if s.rc == nil {
-		return "", "", fmt.Errorf("redis unavailable")
+		return "", "", "", fmt.Errorf("redis unavailable")
 	}
 	h, err := s.rc.HGetAll(ctx, s.slotKey).Result()
 	if err != nil {
-		return "", "", err
+		return "", "", "", err
 	}
 	if h["status"] != "ok" || h["cookie"] == "" {
-		return "", "", fmt.Errorf("no healthy ozon ETC")
+		return "", "", "", fmt.Errorf("no healthy ozon ETC")
 	}
-	return h["cookie"], h["ua"], nil
+	return h["cookie"], h["ua"], h["ip"], nil
+}
+
+// currentEgressIP узнаёт текущий exit-IP прокси (через тот же tls-client) —
+// только для диагностики ротации на FAB-блоке.
+func (s *OzonScraper) currentEgressIP(ctx context.Context) string {
+	req, err := fhttp.NewRequestWithContext(ctx, fhttp.MethodGet, "https://api.ipify.org?format=json", nil)
+	if err != nil {
+		return ""
+	}
+	resp, err := s.client.Do(req)
+	if err != nil {
+		return ""
+	}
+	defer resp.Body.Close()
+	b, _ := io.ReadAll(io.LimitReader(resp.Body, 256))
+	var r struct {
+		IP string `json:"ip"`
+	}
+	_ = json.Unmarshal(b, &r)
+	return r.IP
 }
 
 // markBad помечает слот битым — майнер перевыдаст ETC на следующем цикле.
@@ -214,6 +255,8 @@ func (s *OzonScraper) markBad(ctx context.Context) {
 func bytesHasFAB(b []byte) bool {
 	return strings.Contains(string(b), "incidentId") || strings.Contains(string(b), "fab_")
 }
+
+var fabIncidentRe = regexp.MustCompile(`fab_[a-z]+_[0-9A-Za-z]+`)
 
 const ozonDefaultUA = "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 " +
 	"(KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
