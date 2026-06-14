@@ -181,6 +181,10 @@ services:
       YOOKASSA_RETURN_URL: "${YOOKASSA_RETURN_URL:-https://t.me/TryBerryBot}"
       # Ставка НДС в чеке 54-ФЗ. Самозанятый (НПД) → 1 = «без НДС».
       YOOKASSA_VAT_CODE: "${YOOKASSA_VAT_CODE:-1}"
+      # Ozon: бот при /track скрейпит сразу → нужен тот же мобильный прокси,
+      # что у scraper/ozon-miner (tls-client ходит через него напрямую, мимо
+      # HTTPS_PROXY). ETC берётся из Redis (ozon:etc:pool:0).
+      OZON_PROXY_URL: "${OZON_PROXY_URL:-}"
     depends_on:
       postgres:
         condition: service_healthy

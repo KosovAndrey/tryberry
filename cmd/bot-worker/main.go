@@ -108,8 +108,13 @@ func run(log *slog.Logger) error {
 	wbSearch := scraper.NewWildberriesSearchScraper(scraper.NewWildberriesScraper(5), nil, nil, 5, 0)
 	registry := scraper.NewRegistry(
 		wbSearch,
-		// Боту нужен только Matches (разбор URL), не Scrape → опции пустые.
-		scraper.NewOzonScraper(scraper.OzonOptions{}),
+		// Бот при /track скрейпит сразу (показать товар) → Ozon нужен рабочим:
+		// тот же ETC из Redis и тот же мобильный прокси, что у scraper/ozon-miner.
+		scraper.NewOzonScraper(scraper.OzonOptions{
+			RedisClient: redisClient,
+			ProxyURL:    getEnv("OZON_PROXY_URL", ""),
+			Logger:      log,
+		}),
 		scraper.NewYandexMarketScraper(2),
 	)
 

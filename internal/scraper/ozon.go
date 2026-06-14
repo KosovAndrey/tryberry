@@ -91,7 +91,9 @@ func newOzonTLSClient(proxyURL string) (tls_client.HttpClient, error) {
 		tls_client.WithTimeoutSeconds(20),
 		// Профиль под Chromium, которым ozon-miner добывает ETC: TLS-отпечаток
 		// запроса должен совпадать с тем, что прошёл FAB при минте cookie.
-		tls_client.WithClientProfile(profiles.Chrome_124),
+		// Chromium Patchright = Chrome 148; берём ближайший доступный профиль
+		// (свежие Chrome на уровне TLS-ClientHello практически идентичны).
+		tls_client.WithClientProfile(profiles.Chrome_146),
 		tls_client.WithCookieJar(jar),
 	}
 	if proxyURL != "" {
