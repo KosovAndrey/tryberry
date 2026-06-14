@@ -433,13 +433,13 @@ func parseOzonWidgets(body []byte) (*Result, error) {
 		var priceRaw string
 		for k, v := range env.WidgetStates {
 			keys = append(keys, k)
-			if priceRaw == "" && strings.Contains(strings.ToLower(k), "price") {
+			if strings.HasPrefix(k, "priceCell") {
 				priceRaw = v
 			}
 		}
 		sort.Strings(keys)
-		return nil, fmt.Errorf("%w: price not found; widgets=%v; priceRaw=%s",
-			ErrProductNotFound, keys, snippet([]byte(priceRaw), 500))
+		return nil, fmt.Errorf("%w: price not found; widgets=%v; priceCellRaw=%s",
+			ErrProductNotFound, keys, snippet([]byte(priceRaw), 4000))
 	}
 	if res.Name == "" {
 		res.Name = "Товар Ozon"
