@@ -180,20 +180,27 @@ def _dump_diagnostics(page, state, tag: str):
         log.warning("диагностика упала: %s", e)
 
 
-def _validate_session(context, slot_label: str):
-    """Best-effort: дёрнуть entrypoint-api с cookie браузера и убедиться, что
-    приходит JSON с widgetStates (= ETC рабочий для скрейпа). Не валит майн."""
+def _validate_session(page, slot_label: str):
+    """Проверка пути A: дёргаем entrypoint-api **изнутри живой страницы** (fetch в
+    JS-контексте уже прошедшей FAB вкладки ozon.ru) — это НЕ «голый» запрос, а
+    same-origin как у настоящего сайта, поэтому FAB его должен пропустить.
+    Логируем status + есть ли widgetStates. Не валит майн."""
     if not VALIDATE_PRODUCT:
         return
-    api = ("https://www.ozon.ru/api/entrypoint-api.bx/page/json/v2?url="
-           f"/product/{VALIDATE_PRODUCT}/")
+    js = """async (id) => {
+      try {
+        const r = await fetch(`/api/entrypoint-api.bx/page/json/v2?url=/product/${id}/`,
+                              {headers: {accept: 'application/json'}, credentials: 'include'});
+        const t = await r.text();
+        return {status: r.status, has: t.includes('widgetStates'), len: t.length};
+      } catch (e) { return {status: -1, has: false, len: 0, err: String(e)}; }
+    }"""
     try:
-        resp = context.request.get(api, timeout=20000)
-        ok = resp.ok and "widgetStates" in (resp.text() or "")
-        log.info("валидация %s: entrypoint-api status=%s widgetStates=%s",
-                 slot_label, resp.status, ok)
+        res = page.evaluate(js, VALIDATE_PRODUCT)
+        log.info("валидация %s (in-page fetch): status=%s widgetStates=%s len=%s",
+                 slot_label, res.get("status"), res.get("has"), res.get("len"))
     except Exception as e:  # noqa: BLE001
-        log.info("валидация %s: запрос не удался: %s", slot_label, e)
+        log.info("валидация %s: page.evaluate упал: %s", slot_label, e)
 
 
 def mine_once(pw) -> dict | None:
@@ -260,7 +267,7 @@ def mine_once(pw) -> dict | None:
         cookie_header = "; ".join(f'{c["name"]}={c["value"]}' for c in ozon_cookies)
         ua = page.evaluate("() => navigator.userAgent")
         ip = _egress_ip(context)
-        _validate_session(context, "mine")
+        _validate_session(page, "mine")
         return {"cookie": cookie_header, "ua": ua, "etc": etc, "ip": ip}
     finally:
         try:
