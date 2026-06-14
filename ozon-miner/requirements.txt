@@ -1,0 +1,5 @@
+# Patchright — стелс-форк Playwright (только Chromium). Браузер ставится в
+# Dockerfile командой `patchright install chromium`. Тот же стек, что и у
+# WB token-miner: headful Chromium в Xvfb решает FAB-челлендж Ozon в браузере.
+patchright
+redis>=5,<7

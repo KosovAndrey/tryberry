@@ -108,7 +108,8 @@ func run(log *slog.Logger) error {
 	wbSearch := scraper.NewWildberriesSearchScraper(scraper.NewWildberriesScraper(5), nil, nil, 5, 0)
 	registry := scraper.NewRegistry(
 		wbSearch,
-		scraper.NewOzonScraper(),
+		// Боту нужен только Matches (разбор URL), не Scrape → опции пустые.
+		scraper.NewOzonScraper(scraper.OzonOptions{}),
 		scraper.NewYandexMarketScraper(2),
 	)
 

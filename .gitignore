@@ -45,3 +45,9 @@ _claude_reference/
 .env.save*
 *.bak
 tryberrybot-HANDOFF.md
+
+# Ozon FAB probe (временный тест-бинарь и его исходник в корне), graphify
+/main.go
+oztest-linux
+oztest*
+graphify-out/
