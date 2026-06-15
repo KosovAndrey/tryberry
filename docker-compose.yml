@@ -181,6 +181,16 @@ services:
       YOOKASSA_RETURN_URL: "${YOOKASSA_RETURN_URL:-https://t.me/TryBerryBot}"
       # Ставка НДС в чеке 54-ФЗ. Самозанятый (НПД) → 1 = «без НДС».
       YOOKASSA_VAT_CODE: "${YOOKASSA_VAT_CODE:-1}"
+      # Ozon: бот при /track скрейпит сразу → нужен тот же мобильный РФ-прокси,
+      # что у scraper (tls-client ходит через него напрямую, мимо HTTPS_PROXY).
+      OZON_PROXY_URL: "${OZON_PROXY_URL:-}"
+      OZON_API_MODE: "${OZON_API_MODE:-mobile}"
+      # Путь B (аккаунт-токены): Ozon ходит под залогиненной аккаунт-сессией.
+      # Секреты — в .env, в логи не пишутся (только cookie_len).
+      OZON_ACCESS_TOKEN: "${OZON_ACCESS_TOKEN:-}"
+      OZON_REFRESH_TOKEN: "${OZON_REFRESH_TOKEN:-}"
+      # Готовая cookie-строка из приложения (HTTP Toolkit) — приоритетнее токенов.
+      OZON_COOKIE: "${OZON_COOKIE:-}"
     depends_on:
       postgres:
         condition: service_healthy
@@ -212,6 +222,17 @@ services:
       KAFKA_GROUP_ID: "price-tracker"
       TELEGRAM_BOT_TOKEN: "${TELEGRAM_BOT_TOKEN}"
       SCRAPER_RATE_LIMIT_RPS: "5"
+      SCRAPER_RATE_LIMIT_RPS_OZON: "1"
+      # Мобильный РФ-прокси Ozon (путь B: аккаунт-сессия проходит FAB через
+      # доверенный IP). Sticky/ротация 0. Секрет — в .env.
+      OZON_PROXY_URL: "${OZON_PROXY_URL:-}"
+      # Эндпоинт Ozon: mobile (composer-api.bx + okhttp) | web (entrypoint-api.bx).
+      OZON_API_MODE: "${OZON_API_MODE:-mobile}"
+      # Путь B (аккаунт-токены) — секреты из .env, в логи не пишутся.
+      OZON_ACCESS_TOKEN: "${OZON_ACCESS_TOKEN:-}"
+      OZON_REFRESH_TOKEN: "${OZON_REFRESH_TOKEN:-}"
+      # Готовая cookie-строка из приложения (HTTP Toolkit) — приоритетнее токенов.
+      OZON_COOKIE: "${OZON_COOKIE:-}"
       SCRAPER_HEALTH_PORT: "8090"
       OTLP_ENDPOINT: "jaeger:4317"
     depends_on:
@@ -351,7 +372,12 @@ services:
         MINE_RETRY_MINUTES: "10"
         MINE_MAX_RELOADS: "2"
         MINE_TIMEOUT_SECONDS: "150"
-        WB_TOKEN_PROXY_URL: "http://lte2c8614d8-country-ru:wBD7AR4ndi1Q@resext-ru.lteboost.com:8989"
+        # Прокси для майнинга WB-токенов — секрет, из .env (раньше был захардкожен
+        # резидентский lteboost, истёк). Сейчас гоняем через мобильный РФ-прокси.
+        WB_TOKEN_PROXY_URL: "${WB_TOKEN_PROXY_URL:-}"
+        # Общий лок майнинга: обычный и reseller-майнер делят один мобильный IP —
+        # один ключ не даёт им майнить одновременно (всплеск минтов палит WB).
+        MINE_GLOBAL_LOCK: "wb:mine:lock"
         HEADLESS: "false"
         LOG_LEVEL: "INFO"
       shm_size: "1gb"
@@ -384,6 +410,8 @@ services:
         MINE_MAX_RELOADS: "2"
         MINE_TIMEOUT_SECONDS: "150"
         WB_TOKEN_PROXY_URL: "${RESELLER_TOKEN_PROXY_URL:-}"
+        # Тот же лок, что у обычного майнера → не майнят одновременно с общего IP.
+        MINE_GLOBAL_LOCK: "wb:mine:lock"
         HEADLESS: "false"
         LOG_LEVEL: "INFO"
       shm_size: "1gb"
@@ -405,6 +433,7 @@ services:
         DATABASE_URL: "postgres://user:password@postgres:5432/tryberrybot?sslmode=disable"
         KAFKA_BROKERS: "kafka:29092"
         SCRAPE_INTERVAL_MINUTES: "15"
+        OZON_MIN_INTERVAL_MINUTES: "${OZON_MIN_INTERVAL_MINUTES:-20}"
         SCHEDULER_TICK_SECONDS: "20"
         SCHEDULER_HEALTH_PORT: "8092"
         OTLP_ENDPOINT: "jaeger:4317"

@@ -20,19 +20,23 @@ func ValidEmail(s string) (string, bool) {
 // PurchaseDays — срок подписки за одну оплату (витрина обещает «30 дней»).
 const PurchaseDays = 30
 
-// Payment — платёж ЮKassa (строка таблицы payments).
+// Payment — платёж (строка таблицы payments). Provider — шлюз, kind — разовый
+// платёж / первый платёж подписки / автосписание.
 type Payment struct {
-	ID             int64
-	UserID         int64
-	YKPaymentID    string
-	IdempotenceKey string
-	Plan           string
-	Days           int
-	AmountKopecks  int64
-	PromoCodeID    *int64 // discount-код, если применён
-	Status         string // pending | succeeded | canceled
-	CreatedAt      time.Time
-	PaidAt         *time.Time
+	ID                    int64
+	UserID                int64
+	YKPaymentID           string
+	IdempotenceKey        string
+	Provider              string // yookassa | robokassa
+	Kind                  string // onetime | subscription_initial | subscription_renewal
+	Plan                  string
+	Days                  int
+	AmountKopecks         int64
+	PromoCodeID           *int64 // discount-код, если применён
+	BillingSubscriptionID *int64 // подписка, если платёж рекуррентный
+	Status                string // pending | succeeded | canceled
+	CreatedAt             time.Time
+	PaidAt                *time.Time
 }
 
 // ApplyPurchase — новый срок действия плана после оплаты days дней тарифа plan.

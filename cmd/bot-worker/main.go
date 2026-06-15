@@ -96,6 +96,7 @@ func run(log *slog.Logger) error {
 	promoRepo := postgres.NewPromoRepo(pool)
 	referralRepo := postgres.NewReferralRepo(pool)
 	paymentRepo := postgres.NewPaymentRepo(pool)
+	billingRepo := postgres.NewBillingSubscriptionRepo(pool)
 
 	var discounts *redisrepo.DiscountStore
 	if redisClient != nil {
@@ -107,7 +108,16 @@ func run(log *slog.Logger) error {
 	wbSearch := scraper.NewWildberriesSearchScraper(scraper.NewWildberriesScraper(5), nil, nil, 5, 0)
 	registry := scraper.NewRegistry(
 		wbSearch,
-		scraper.NewOzonScraper(),
+		// Бот при /track скрейпит сразу (показать товар) → Ozon нужен рабочим:
+		// аккаунт-cookie (OZON_COOKIE) + тот же мобильный прокси, что у scraper.
+		scraper.NewOzonScraper(scraper.OzonOptions{
+			ProxyURL:     getEnv("OZON_PROXY_URL", ""),
+			Mode:         getEnv("OZON_API_MODE", "mobile"),
+			AccessToken:  getEnv("OZON_ACCESS_TOKEN", ""),
+			RefreshToken: getEnv("OZON_REFRESH_TOKEN", ""),
+			Cookie:       getEnv("OZON_COOKIE", ""),
+			Logger:       log,
+		}),
 		scraper.NewYandexMarketScraper(2),
 	)
 
@@ -157,7 +167,7 @@ func run(log *slog.Logger) error {
 	// Оплата ЮKassa: подключает платёжный сервис к витринам и запускает
 	// консьюмер применения (no-op без конфигурации — витрина покажет заглушку).
 	if payConsumer := setupPayments(ctx, log, kafkaBrokers, bot, vkBot,
-		paymentRepo, promoRepo, referralRepo, userRepo, discounts); payConsumer != nil {
+		paymentRepo, promoRepo, referralRepo, userRepo, billingRepo, discounts); payConsumer != nil {
 		defer payConsumer.Close()
 	}
 

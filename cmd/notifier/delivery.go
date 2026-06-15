@@ -55,8 +55,9 @@ func (d *deliverer) targets(ctx context.Context, userID, telegramID int64) (send
 	return tg, vkPeer
 }
 
-// deliver — общий хвост: TG и/или VK, успех при любой доставке.
-func (d *deliverer) deliver(ctx context.Context, userID, telegramID int64, sendTG func(context.Context) error, vkText string) error {
+// deliver — общий хвост: TG и/или VK, успех при любой доставке. vkImageURL — фото
+// для VK-сообщения (пусто → без картинки).
+func (d *deliverer) deliver(ctx context.Context, userID, telegramID int64, sendTG func(context.Context) error, vkText, vkImageURL string) error {
 	tg, vkPeer := d.targets(ctx, userID, telegramID)
 
 	if !tg && vkPeer == 0 {
@@ -77,7 +78,12 @@ func (d *deliverer) deliver(ctx context.Context, userID, telegramID int64, sendT
 		metrics.NotificationsDelivered.WithLabelValues("tg", statusLabel(tgErr)).Inc()
 	}
 	if vkPeer != 0 {
-		if vkErr = d.vk.SendMessage(ctx, vkPeer, vkText); vkErr == nil {
+		if vkImageURL != "" {
+			vkErr = d.vk.SendMessagePhoto(ctx, vkPeer, vkText, vkImageURL)
+		} else {
+			vkErr = d.vk.SendMessage(ctx, vkPeer, vkText)
+		}
+		if vkErr == nil {
 			delivered = true
 		}
 		metrics.NotificationsDelivered.WithLabelValues("vk", statusLabel(vkErr)).Inc()
@@ -108,13 +114,13 @@ func statusLabel(err error) string {
 func (d *deliverer) SendPriceAlert(ctx context.Context, a telegram.PriceAlert) error {
 	return d.deliver(ctx, a.UserID, a.ChatID,
 		func(ctx context.Context) error { return d.tg.SendPriceAlert(ctx, a) },
-		vkPriceText(a))
+		vkPriceText(a), a.ImageURL)
 }
 
 func (d *deliverer) SendSearchAlert(ctx context.Context, a telegram.SearchAlert) error {
 	return d.deliver(ctx, a.UserID, a.ChatID,
 		func(ctx context.Context) error { return d.tg.SendSearchAlert(ctx, a) },
-		vkSearchText(a))
+		vkSearchText(a), "")
 }
 
 // ── Сервисные уведомления реконсайлера (по users.id) ──────────────────────────
@@ -131,7 +137,7 @@ func (d *deliverer) SendPlanPausedNotice(ctx context.Context, userID int64) erro
 		"⏳ Тариф закончился\n\n"+
 			"Часть твоих подписок приостановлена (вышли за лимит бесплатного тарифа). "+
 			"Я сохраню их настройки ещё 7 дней — оформи подписку за это время, и я верну их "+
-			"и продолжу следить за ценами. Потом они удалятся.\n\nТарифы — кнопка «💳 Тарифы» внизу.")
+			"и продолжу следить за ценами. Потом они удалятся.\n\nТарифы — кнопка «💳 Тарифы» внизу.", "")
 }
 
 func (d *deliverer) SendPlanExpiringReminder(ctx context.Context, userID int64) error {
@@ -145,7 +151,7 @@ func (d *deliverer) SendPlanExpiringReminder(ctx context.Context, userID int64) 
 		},
 		"⏳ Тариф скоро закончится\n\n"+
 			"Завтра истекает срок твоего тарифа. Продли, чтобы не потерять подписки и лимиты — "+
-			"иначе часть из них будет приостановлена.\n\nТарифы — кнопка «💳 Тарифы» внизу.")
+			"иначе часть из них будет приостановлена.\n\nТарифы — кнопка «💳 Тарифы» внизу.", "")
 }
 
 func (d *deliverer) SendReferralRewardNotice(ctx context.Context, userID int64, friendName string, days int, granted bool) error {
@@ -167,7 +173,7 @@ func (d *deliverer) SendReferralRewardNotice(ctx context.Context, userID int64, 
 			}
 			return d.tg.SendReferralRewardNotice(ctx, u.TelegramID, friendName, days, granted)
 		},
-		vkText)
+		vkText, "")
 }
 
 // ── Plain-text рендер для VK (HTML там не работает) ──────────────────────────

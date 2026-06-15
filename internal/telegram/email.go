@@ -13,6 +13,7 @@ import (
 
 type emailFSM struct {
 	Plan string `json:"plan"`
+	Sub  bool   `json:"sub,omitempty"` // true → после email оформляем подписку
 }
 
 func emailFSMKey(tgID int64) string { return fmt.Sprintf("email_fsm:%d", tgID) }
@@ -55,8 +56,8 @@ func emailRequestText(p domain.Plan, amountKopecks int64) string {
 	return fmt.Sprintf(
 		"💳 <b>Тариф %s</b> — к оплате %s ₽\n\n"+
 			"Перед оплатой пришли свой <b>email</b> одним сообщением.\n\n"+
-			"Зачем: по закону <b>54-ФЗ</b> на каждый платёж нужен кассовый чек. "+
-			"ЮKassa сформирует чек и отправит его тебе на этот адрес. "+
+			"Зачем: на каждый платёж нужен чек. "+
+			"Платёжный сервис сформирует чек и отправит его тебе на этот адрес. "+
 			"Сохраню email, чтобы больше не спрашивать.\n\n"+
 			"<i>Отправить email сообщением, или /plans — отменить.</i>",
 		p.Title, domain.KopecksToRubString(amountKopecks))
@@ -96,6 +97,10 @@ func (b *Bot) handleEmailInput(ctx context.Context, chatID, tgID int64, text str
 
 	if fsm.Plan == "" {
 		b.reply(chatID, fmt.Sprintf("✅ Email обновлён: <b>%s</b>", htmlEscape(email)))
+		return
+	}
+	if fsm.Sub {
+		b.startSubCheckout(ctx, user, chatID, 0, fsm.Plan, email)
 		return
 	}
 	b.startCheckout(ctx, user, chatID, 0, fsm.Plan, email)

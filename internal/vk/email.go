@@ -13,6 +13,7 @@ import (
 
 type emailFSM struct {
 	Plan string `json:"plan"`
+	Sub  bool   `json:"sub,omitempty"` // true → после email оформляем подписку
 }
 
 func emailFSMKey(vkID int64) string { return fmt.Sprintf("vk_email_fsm:%d", vkID) }
@@ -54,8 +55,8 @@ func emailRequestText(p domain.Plan, amountKopecks int64) string {
 	return fmt.Sprintf(
 		"💳 Тариф %s — к оплате %s ₽\n\n"+
 			"Перед оплатой отправь свой email одним сообщением.\n\n"+
-			"Зачем: по закону 54-ФЗ на каждый платёж нужен кассовый чек. "+
-			"ЮKassa сформирует чек и отправит его тебе на этот адрес. "+
+			"Зачем: на каждый платёж нужен чек. "+
+			"Платёжный сервис сформирует чек и отправит его тебе на этот адрес. "+
 			"Сохраню email, чтобы больше не спрашивать.\n\n"+
 			"Отправь email сообщением, или нажми «Тарифы» — отменить.",
 		p.Title, domain.KopecksToRubString(amountKopecks))
@@ -71,7 +72,7 @@ func (b *Bot) promptChangeEmail(ctx context.Context, vkID int64, user *domain.Us
 	}
 	b.send(ctx, vkID,
 		"✉️ Email для чека\n\n"+
-			"Отправь новый email одним сообщением — на него ЮKassa отправляет кассовый чек (54-ФЗ).",
+			"Отправь новый email одним сообщением — на него платёжный сервис отправляет кассовый чек.",
 		menuKeyboard(user.TelegramID != 0))
 }
 
@@ -94,6 +95,10 @@ func (b *Bot) handleEmailInput(ctx context.Context, vkID int64, user *domain.Use
 
 	if fsm.Plan == "" {
 		b.send(ctx, vkID, fmt.Sprintf("✅ Email обновлён: %s", email), kb)
+		return
+	}
+	if fsm.Sub {
+		b.startSubCheckout(ctx, vkID, user, fsm.Plan, email)
 		return
 	}
 	b.startCheckout(ctx, vkID, user, fsm.Plan, email)

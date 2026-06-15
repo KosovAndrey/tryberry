@@ -1,55 +1,90 @@
-// Package payment связывает витрину тарифов (TG/VK) с ЮKassa: создаёт платёж,
-// применяет ожидающую скидку и отдаёт ссылку на оплату. Применение оплаты
-// (продление плана) живёт в консьюмере bot-worker — см. PaymentRepo.MarkSucceeded.
+// Package payment связывает витрину тарифов (TG/VK) с платёжным провайдером
+// (ЮKassa/Робокасса за флагом PAYMENT_PROVIDER): создаёт платёж, применяет
+// ожидающую скидку и отдаёт ссылку на оплату. Применение оплаты (продление
+// плана) живёт в консьюмере bot-worker — см. PaymentRepo.MarkSucceeded.
 package payment
 
 import (
 	"context"
 	"fmt"
 	"log/slog"
-	"strconv"
 
 	"github.com/google/uuid"
 
 	"gitlab.com/KosovAndrey/tryberrybot/internal/domain"
-	"gitlab.com/KosovAndrey/tryberrybot/internal/payment/yookassa"
 	"gitlab.com/KosovAndrey/tryberrybot/internal/repository/postgres"
 	redisrepo "gitlab.com/KosovAndrey/tryberrybot/internal/repository/redis"
 )
 
-// Service создаёт платежи ЮKassa из витрины тарифов.
+// ConsentLogger пишет факт согласия на подписку (реализует BillingSubscriptionRepo).
+type ConsentLogger interface {
+	LogConsent(ctx context.Context, c domain.SubscriptionConsent) error
+}
+
+// Service создаёт платежи из витрины тарифов через выбранный Provider.
 type Service struct {
-	yk        *yookassa.Client
+	provider  Provider
 	payments  *postgres.PaymentRepo
 	discounts *redisrepo.DiscountStore // nil → скидки не применяем (нет Redis)
-	returnURL string
-	vatCode   int // код ставки НДС в чеке (самозанятый → 1 = «без НДС»)
+	consents  ConsentLogger            // лог согласия на подписку
 	log       *slog.Logger
 }
 
-func NewService(yk *yookassa.Client, payments *postgres.PaymentRepo, discounts *redisrepo.DiscountStore, returnURL string, vatCode int, log *slog.Logger) *Service {
-	return &Service{yk: yk, payments: payments, discounts: discounts, returnURL: returnURL, vatCode: vatCode, log: log}
+func NewService(provider Provider, payments *postgres.PaymentRepo, discounts *redisrepo.DiscountStore, consents ConsentLogger, log *slog.Logger) *Service {
+	return &Service{provider: provider, payments: payments, discounts: discounts, consents: consents, log: log}
 }
+
+// SupportsSubscription — умеет ли текущий провайдер автосписания (для витрины).
+func (s *Service) SupportsSubscription() bool { return s.provider.SupportsRecurring() }
 
 // Checkout — результат создания платежа для показа юзеру.
 type Checkout struct {
 	ConfirmationURL string
-	AmountKopecks   int64
-	DiscountPct     int // 0, если скидки не было
+	AmountKopecks   int64 // сумма первого платежа (со скидкой, если была)
+	DiscountPct     int   // 0, если скидки не было
+	Recurring       bool  // платёж — первый в подписке (дальше автосписания)
+	RenewalKopecks  int64 // сумма автопродления (без промо), если Recurring
 }
 
-// Start создаёт платёж за тариф plan для пользователя u и возвращает ссылку на
-// оплату. Учитывает ожидающую скидку (если есть). Если email задан — прикладывает
-// фискальный чек 54-ФЗ (ЮKassa отправит чек на этот адрес). Идемпотентность
-// create — через Idempotence-Key; план продлится на вебхуке после оплаты.
+// Start создаёт разовый платёж за тариф plan и возвращает ссылку на оплату.
 func (s *Service) Start(ctx context.Context, u *domain.User, plan, email string) (Checkout, error) {
-	var out Checkout
-
-	p, ok := domain.PlanByName(plan)
-	if !ok || p.PriceRub <= 0 {
-		return out, fmt.Errorf("plan %q is not purchasable", plan)
+	base := domain.PriceKopecks(plan)
+	if base <= 0 {
+		return Checkout{}, fmt.Errorf("plan %q is not purchasable", plan)
 	}
-	amount := int64(p.PriceRub) * 100
+	return s.checkout(ctx, u, plan, email, domain.PayKindOnetime, base, false, 0)
+}
+
+// StartSubscription создаёт первый платёж подписки (с автопродлением). Перед
+// оплатой фиксирует согласие (платформа platform: tg|vk). Промо применяется
+// только к первому платежу; автопродления идут по подписочной цене.
+func (s *Service) StartSubscription(ctx context.Context, u *domain.User, plan, email, platform string) (Checkout, error) {
+	if !s.provider.SupportsRecurring() {
+		return Checkout{}, fmt.Errorf("provider %s: subscription not supported", s.provider.Name())
+	}
+	sub := domain.SubPriceKopecks(plan)
+	if sub <= 0 {
+		return Checkout{}, fmt.Errorf("plan %q has no subscription price", plan)
+	}
+
+	// Лог согласия на сумму автопродления (то, на что соглашается юзер регулярно).
+	if s.consents != nil {
+		if err := s.consents.LogConsent(ctx, domain.SubscriptionConsent{
+			UserID: u.ID, Plan: plan, AmountKopecks: sub,
+			TermsVersion: domain.SubTermsVersion, Platform: platform,
+		}); err != nil {
+			// Согласие — наша защита от чарджбэка; без записи оплату не начинаем.
+			return Checkout{}, fmt.Errorf("log consent: %w", err)
+		}
+	}
+	return s.checkout(ctx, u, plan, email, domain.PayKindSubInitial, sub, true, sub)
+}
+
+// checkout — общий путь создания платежа: применяет ожидающую скидку к первому
+// платежу, заводит строку payments и берёт у провайдера ссылку на оплату.
+func (s *Service) checkout(ctx context.Context, u *domain.User, plan, email, kind string, baseAmount int64, recurring bool, renewalKopecks int64) (Checkout, error) {
+	out := Checkout{Recurring: recurring, RenewalKopecks: renewalKopecks}
+	amount := baseAmount
 
 	// Ожидающая скидка (best-effort: ошибки Redis не валят оплату).
 	var promoCodeID *int64
@@ -69,6 +104,8 @@ func (s *Service) Start(ctx context.Context, u *domain.User, plan, email string)
 	paymentID, err := s.payments.Create(ctx, domain.Payment{
 		UserID:         u.ID,
 		IdempotenceKey: idemKey,
+		Provider:       s.provider.Name(),
+		Kind:           kind,
 		Plan:           plan,
 		Days:           domain.PurchaseDays,
 		AmountKopecks:  amount,
@@ -78,44 +115,24 @@ func (s *Service) Start(ctx context.Context, u *domain.User, plan, email string)
 		return out, fmt.Errorf("create payment row: %w", err)
 	}
 
+	p, _ := domain.PlanByName(plan)
 	description := fmt.Sprintf("Подписка TryberryBot — тариф %s, %d дней", p.Title, domain.PurchaseDays)
-	req := yookassa.CreateRequest{
-		Amount:       yookassa.Amount{Value: domain.KopecksToRubString(amount), Currency: "RUB"},
-		Capture:      true,
-		Confirmation: yookassa.Confirmation{Type: "redirect", ReturnURL: s.returnURL},
-		Description:  description,
-		Metadata: map[string]string{
-			"payment_id": strconv.FormatInt(paymentID, 10),
-			"user_id":    strconv.FormatInt(u.ID, 10),
-			"plan":       plan,
-		},
-	}
-	// Чек 54-ФЗ: одна позиция-услуга на всю сумму, ставка НДС из конфига
-	// (самозанятый → 1 = «без НДС»), полная предоплата.
-	if email != "" {
-		req.Receipt = &yookassa.Receipt{
-			Customer: yookassa.ReceiptCustomer{Email: email},
-			Items: []yookassa.ReceiptItem{{
-				Description:    description,
-				Quantity:       "1.00",
-				Amount:         yookassa.Amount{Value: domain.KopecksToRubString(amount), Currency: "RUB"},
-				VATCode:        s.vatCode,
-				PaymentSubject: "service",
-				PaymentMode:    "full_prepayment",
-			}},
-		}
-	}
-	resp, err := s.yk.CreatePayment(ctx, idemKey, req)
+	res, err := s.provider.Checkout(ctx, CheckoutParams{
+		PaymentID:     paymentID,
+		UserID:        u.ID,
+		Plan:          plan,
+		Description:   description,
+		AmountKopecks: amount,
+		Email:         email,
+		Recurring:     recurring,
+	})
 	if err != nil {
-		return out, fmt.Errorf("yookassa create: %w", err)
+		return out, fmt.Errorf("provider checkout: %w", err)
 	}
-	if err := s.payments.SetYKID(ctx, paymentID, resp.ID); err != nil {
-		// Платёж в ЮKassa создан — не теряем связь, но и не падаем для юзера.
-		s.log.Error("checkout: set yk_payment_id", "payment_id", paymentID, "yk_id", resp.ID, "err", err)
+	if err := s.payments.SetYKID(ctx, paymentID, res.ExternalID); err != nil {
+		// Платёж у провайдера создан — не теряем связь, но и не падаем для юзера.
+		s.log.Error("checkout: set external payment id", "payment_id", paymentID, "external_id", res.ExternalID, "err", err)
 	}
-	if resp.Confirmation.ConfirmationURL == "" {
-		return out, fmt.Errorf("yookassa: empty confirmation_url for payment %s", resp.ID)
-	}
-	out.ConfirmationURL = resp.Confirmation.ConfirmationURL
+	out.ConfirmationURL = res.URL
 	return out, nil
 }

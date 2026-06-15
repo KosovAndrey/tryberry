@@ -52,6 +52,12 @@ MINE_TIMEOUT_SECONDS = float(os.getenv("MINE_TIMEOUT_SECONDS", "150"))
 MINE_MAX_RELOADS = int(os.getenv("MINE_MAX_RELOADS", "2"))
 MINE_ONCE = os.getenv("MINE_ONCE", "false").lower() in ("1", "true", "yes")
 
+# Общий лок майнинга (один ключ Redis на оба WB-майнера): не даём обычному и
+# reseller-майнеру майнить одновременно с одного IP — всплеск токен-минтов палит WB.
+# Пусто → лок выключен (старое поведение). TTL — страховка, если процесс умрёт с локом.
+MINE_GLOBAL_LOCK = os.getenv("MINE_GLOBAL_LOCK", "").strip()
+MINE_LOCK_TTL_MIN = float(os.getenv("MINE_LOCK_TTL_MINUTES", "30"))
+
 HEADLESS = os.getenv("HEADLESS", "false").lower() in ("1", "true", "yes")
 BLOCK_RESOURCES = os.getenv("MINER_BLOCK_RESOURCES", "true").lower() in ("1", "true", "yes")
 DEBUG_DUMP = os.getenv("MINER_DEBUG_DUMP", "false").lower() in ("1", "true", "yes")
@@ -310,9 +316,33 @@ def slot_alive(h: dict, now: int) -> bool:
     return not (exp and exp < now)
 
 
+def _acquire_mine_lock(r) -> bool:
+    """Берём общий лок майнинга (SET NX EX). True — взяли (или лок выключен/Redis-сбой:
+    не блокируем майнинг). False — лок держит другой майнер → цикл пропускаем."""
+    if not MINE_GLOBAL_LOCK:
+        return True
+    try:
+        return bool(r.set(MINE_GLOBAL_LOCK, POOL_PREFIX or "default",
+                          nx=True, ex=int(MINE_LOCK_TTL_MIN * 60)))
+    except Exception as e:  # noqa: BLE001
+        log.error("лок майнинга: ошибка получения, майню без лока: %s", e)
+        return True
+
+
+def _release_mine_lock(r):
+    if not MINE_GLOBAL_LOCK:
+        return
+    try:
+        r.delete(MINE_GLOBAL_LOCK)
+    except Exception as e:  # noqa: BLE001
+        log.error("лок майнинга: ошибка снятия: %s", e)
+
+
 def run_cycle(r: "redis.Redis", pw):
     now = int(time.time())
-    slots = []
+    # 1) читаем все слоты, решаем какие нуждаются в майнинге
+    state_by_i: dict = {}
+    needy: list = []
     for i in range(POOL_SIZE):
         if _stop["flag"]:
             break
@@ -321,8 +351,25 @@ def run_cycle(r: "redis.Redis", pw):
         except Exception as e:  # noqa: BLE001
             log.error("слот %d: чтение Redis упало: %s", i, e)
             h = {}
+        state_by_i[i] = h
         need, reason = slot_needs_mine(h, now)
         if need:
+            needy.append((i, reason))
+
+    # 2) общий лок: не майним одновременно со вторым WB-майнером (делим один IP)
+    lock = False
+    if needy:
+        lock = _acquire_mine_lock(r)
+        if not lock:
+            log.info("нужно майнить %d слот(ов), но лок держит другой WB-майнер — "
+                     "пропускаю цикл (домайню в следующем)", len(needy))
+            needy = []
+
+    # 3) майним нуждающиеся слоты под локом
+    try:
+        for i, reason in needy:
+            if _stop["flag"]:
+                break
             log.info("слот %d: майню (%s)", i, reason)
             data = mine_once(pw)
             if data:
@@ -333,8 +380,8 @@ def run_cycle(r: "redis.Redis", pw):
                         "status": "ok", "mined_at": now, "exp": exp,
                     })
                     r.incr(KEY_MINED_TOTAL)
-                    h = {"cookie": data["cookie"], "ua": data["ua"], "token": data["token"],
-                         "status": "ok", "mined_at": str(now), "exp": str(exp)}
+                    state_by_i[i] = {"cookie": data["cookie"], "ua": data["ua"], "token": data["token"],
+                                     "status": "ok", "mined_at": str(now), "exp": str(exp)}
                     log.info("слот %d обновлён: %s…(%d симв.) exp≈%s", i, data["token"][:20],
                              len(data["token"]),
                              time.strftime("%Y-%m-%d %H:%M", time.localtime(exp)) if exp else "?")
@@ -346,8 +393,11 @@ def run_cycle(r: "redis.Redis", pw):
                     r.incr(KEY_MINE_FAILED)
                 except Exception as e:  # noqa: BLE001
                     log.error("счётчик фейлов: запись в Redis упала: %s", e)
-        slots.append((i, h))
+    finally:
+        if lock:
+            _release_mine_lock(r)
 
+    slots = sorted(state_by_i.items())
     alive = [(i, h) for (i, h) in slots if slot_alive(h, now)]
     healthy = len(alive)
     try:

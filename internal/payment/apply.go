@@ -18,16 +18,22 @@ type Notifier interface {
 	PaymentSucceeded(ctx context.Context, buyer *domain.User, plan string, expiresAt time.Time)
 	// ReferralPaid — рефереру: награда за оплату друга friendName.
 	ReferralPaid(ctx context.Context, referrer *domain.User, friendName string, days int, setPlan bool)
+	// SubscriptionChargeUpcoming — предупреждение о скором автосписании.
+	SubscriptionChargeUpcoming(ctx context.Context, buyer *domain.User, plan string, amountKopecks int64, chargeAt time.Time)
+	// SubscriptionPaymentFailed — автосписание не прошло. willRetry=false → подписка остановлена.
+	SubscriptionPaymentFailed(ctx context.Context, buyer *domain.User, plan string, willRetry bool)
 }
 
 // Applier применяет подтверждённую оплату: продлевает план (идемпотентно),
-// гасит discount-код, начисляет реферальную награду paid и уведомляет.
+// заводит/продлевает подписку, гасит discount-код, начисляет реферальную
+// награду paid и уведомляет.
 type Applier struct {
 	payments  *postgres.PaymentRepo
 	promos    *postgres.PromoRepo
 	referrals *postgres.ReferralRepo
 	users     *postgres.UserRepo
-	discounts *redisrepo.DiscountStore // может быть nil
+	billing   *postgres.BillingSubscriptionRepo // рекуррентные подписки
+	discounts *redisrepo.DiscountStore          // может быть nil
 	notify    Notifier
 	log       *slog.Logger
 }
@@ -37,12 +43,13 @@ func NewApplier(
 	promos *postgres.PromoRepo,
 	referrals *postgres.ReferralRepo,
 	users *postgres.UserRepo,
+	billing *postgres.BillingSubscriptionRepo,
 	discounts *redisrepo.DiscountStore,
 	notify Notifier,
 	log *slog.Logger,
 ) *Applier {
 	return &Applier{payments: payments, promos: promos, referrals: referrals,
-		users: users, discounts: discounts, notify: notify, log: log}
+		users: users, billing: billing, discounts: discounts, notify: notify, log: log}
 }
 
 // Apply обрабатывает одно событие подтверждённой оплаты. Возврат ошибки →
@@ -51,7 +58,7 @@ func NewApplier(
 func (a *Applier) Apply(ctx context.Context, ev ConfirmedEvent) error {
 	now := time.Now()
 
-	applied, ok, err := a.payments.MarkSucceeded(ctx, ev.YKPaymentID, now)
+	applied, ok, err := a.payments.MarkSucceeded(ctx, ev.PaymentID, now)
 	if err != nil {
 		return err // временный сбой БД — пусть Kafka переотправит
 	}
@@ -68,9 +75,11 @@ func (a *Applier) Apply(ctx context.Context, ev ConfirmedEvent) error {
 
 	a.log.Info("payment applied",
 		"user_id", buyer.ID, "plan", applied.Plan, "amount_kopecks", applied.AmountKopecks,
-		"expires_at", applied.ExpiresAt, "yk_payment_id", ev.YKPaymentID)
+		"expires_at", applied.ExpiresAt, "payment_id", ev.PaymentID)
 
 	a.notify.PaymentSucceeded(ctx, buyer, applied.Plan, applied.ExpiresAt)
+
+	a.applySubscription(ctx, applied)
 
 	// Скидка зафиксирована в платеже — снимаем «ожидающую» и гасим код.
 	if a.discounts != nil {
@@ -87,6 +96,45 @@ func (a *Applier) Apply(ctx context.Context, ev ConfirmedEvent) error {
 
 	a.rewardReferrer(ctx, buyer, now)
 	return nil
+}
+
+// applySubscription заводит подписку при первом платеже и продлевает её при
+// автосписании. next_charge_at ставим за SubChargeLeadTime до истечения плана,
+// чтобы новый период начинался без разрыва. Best-effort: план уже продлён,
+// сбой подписки не откатывает оплату (на следующем тике reconcile поправит).
+func (a *Applier) applySubscription(ctx context.Context, p postgres.AppliedPayment) {
+	if a.billing == nil {
+		return
+	}
+	switch p.Kind {
+	case domain.PayKindSubInitial:
+		nextCharge := p.ExpiresAt.Add(-domain.SubChargeLeadTime)
+		id, err := a.billing.Activate(ctx, domain.BillingSubscription{
+			UserID:             p.UserID,
+			Plan:               p.Plan,
+			AmountKopecks:      domain.SubPriceKopecks(p.Plan),
+			RecurringInvoiceID: p.PaymentID, // InvId первого платежа = ключ рекуррента
+			NextChargeAt:       nextCharge,
+			LastPaymentID:      &p.PaymentID,
+		})
+		if err != nil {
+			a.log.Error("apply: activate subscription", "user_id", p.UserID, "payment_id", p.PaymentID, "err", err)
+			return
+		}
+		a.log.Info("subscription activated", "user_id", p.UserID, "sub_id", id, "next_charge_at", nextCharge)
+
+	case domain.PayKindSubRenewal:
+		if p.BillingSubscriptionID == nil {
+			a.log.Error("apply: renewal without subscription id", "payment_id", p.PaymentID)
+			return
+		}
+		nextCharge := p.ExpiresAt.Add(-domain.SubChargeLeadTime)
+		if err := a.billing.MarkRenewed(ctx, *p.BillingSubscriptionID, p.PaymentID, nextCharge); err != nil {
+			a.log.Error("apply: mark renewed", "sub_id", *p.BillingSubscriptionID, "payment_id", p.PaymentID, "err", err)
+			return
+		}
+		a.log.Info("subscription renewed", "sub_id", *p.BillingSubscriptionID, "next_charge_at", nextCharge)
+	}
 }
 
 // rewardReferrer начисляет рефереру покупателя награду за событие paid

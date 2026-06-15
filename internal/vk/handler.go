@@ -41,27 +41,31 @@ type messageNew struct {
 // Команды кнопок (payload). Роутим по ним, а не по label — текст кнопки можно
 // менять, не ломая обработку.
 const (
-	cmdProfile  = "profile"
-	cmdLink     = "link"
-	cmdUnlinkTG = "unlinktg" // отвязать Telegram (k=confirm — подтверждено)
-	cmdNotify   = "notify"   // цикл канала уведомлений tg→vk→both
-	cmdEmail    = "email"    // сменить email для чека 54-ФЗ
-	cmdHelp     = "help"
-	cmdAdd      = "add"
-	cmdList     = "list"
-	cmdUntrack  = "untrack"
-	cmdPTrack   = "ptrack"   // тип триггера товарной подписки (k=any|below|disc)
-	cmdSearch   = "search"   // как добавить поиск-подписку
-	cmdLSearch  = "lsearch"  // список поиск-подписок
-	cmdSTrack   = "strack"   // выбор типа триггера поиск-подписки (k=any|below|disc)
-	cmdSUntrack = "suntrack" // отписка от поиска
-	cmdPlans    = "plans"    // витрина тарифов
-	cmdPlanCard = "plan"     // карточка тарифа (k=имя плана)
-	cmdBuy      = "buy"      // заглушка оплаты (k=имя плана)
-	cmdTrial    = "trial"
-	cmdPromo    = "promo" // как активировать промокод
-	cmdRef      = "ref"   // пригласить друга (код + статистика)
-	cmdMerge    = "merge" // слияние аккаунтов (k = opt:<i>|confirm:<i>|back|cancel)
+	cmdProfile     = "profile"
+	cmdLink        = "link"
+	cmdUnlinkTG    = "unlinktg" // отвязать Telegram (k=confirm — подтверждено)
+	cmdNotify      = "notify"   // цикл канала уведомлений tg→vk→both
+	cmdEmail       = "email"    // сменить email для чека 54-ФЗ
+	cmdHelp        = "help"
+	cmdAdd         = "add"
+	cmdList        = "list"
+	cmdUntrack     = "untrack"
+	cmdPTrack      = "ptrack"      // тип триггера товарной подписки (k=any|below|disc)
+	cmdSearch      = "search"      // как добавить поиск-подписку
+	cmdLSearch     = "lsearch"     // список поиск-подписок
+	cmdSTrack      = "strack"      // выбор типа триггера поиск-подписки (k=any|below|disc)
+	cmdSUntrack    = "suntrack"    // отписка от поиска
+	cmdPlans       = "plans"       // витрина тарифов
+	cmdPlanCard    = "plan"        // карточка тарифа (k=имя плана)
+	cmdBuy         = "buy"         // разовая оплата (k=имя плана)
+	cmdSub         = "sub"         // экран согласия на подписку (k=имя плана)
+	cmdSubOk       = "subok"       // подтверждённое оформление подписки (k=имя плана)
+	cmdSubCancel   = "subcancel"   // экран подтверждения отмены автопродления
+	cmdSubCancelOk = "subcancelok" // отмена автопродления подтверждена
+	cmdTrial       = "trial"
+	cmdPromo       = "promo" // как активировать промокод
+	cmdRef         = "ref"   // пригласить друга (код + статистика)
+	cmdMerge       = "merge" // слияние аккаунтов (k = opt:<i>|confirm:<i>|back|cancel)
 )
 
 // payloadData — payload наших кнопок: {"cmd":"...","id":N,"k":"..."}.
@@ -104,15 +108,21 @@ type Bot struct {
 	rdb             *redis.Client // FSM ввода порога (может быть nil)
 	botURL          string        // ссылка на VK-бота для приглашений ("" — не показывать)
 
-	// Оплата ЮKassa (как в TG): payments == nil → заглушка; discounts хранит
-	// «ожидающую скидку» (nil без redis).
+	// Оплата (как в TG): payments == nil → заглушка; discounts хранит
+	// «ожидающую скидку» (nil без redis); billing — рекуррентные подписки.
 	payments  *payment.Service
 	discounts *redisrepo.DiscountStore
+	billing   *postgres.BillingSubscriptionRepo
 }
 
-// SetPayments подключает платёжный сервис ЮKassa (опционально).
+// SetPayments подключает платёжный сервис (опционально).
 func (b *Bot) SetPayments(svc *payment.Service) {
 	b.payments = svc
+}
+
+// SetBilling подключает репозиторий подписок (статус/отмена).
+func (b *Bot) SetBilling(repo *postgres.BillingSubscriptionRepo) {
+	b.billing = repo
 }
 
 func NewBot(
@@ -341,6 +351,14 @@ func (b *Bot) handleMessage(ctx context.Context, vkID int64, text, payload strin
 		b.sendPlanCard(ctx, vkID, user, p.Kind)
 	case cmdBuy:
 		b.handlePlanBuy(ctx, vkID, user, p.Kind)
+	case cmdSub:
+		b.sendSubConsent(ctx, vkID, user, p.Kind)
+	case cmdSubOk:
+		b.handleSubBuy(ctx, vkID, user, p.Kind)
+	case cmdSubCancel:
+		b.handleSubCancelConfirm(ctx, vkID, user)
+	case cmdSubCancelOk:
+		b.handleSubCancel(ctx, vkID, user)
 	case cmdTrial:
 		b.handleTrial(ctx, vkID, user)
 	case cmdPromo:
@@ -426,6 +444,9 @@ func (b *Bot) sendProfile(ctx context.Context, vkID int64, u *domain.User) {
 		}
 	}
 
+	subLine, hasSub := b.subscriptionLine(ctx, u.ID)
+	sb.WriteString(subLine)
+
 	var kb *Keyboard
 	if u.TelegramID != 0 {
 		// TG привязан → inline-клавиатура управления (как было) + email.
@@ -438,7 +459,19 @@ func (b *Bot) sendProfile(ctx context.Context, vkID int64, u *domain.User) {
 		if b.payments != nil {
 			rows = append(rows, []Button{TextButton(emailLabel, buttonPayload(cmdEmail), ColorSecondary)})
 		}
+		if hasSub {
+			rows = append(rows, []Button{TextButton("🚫 Отменить автопродление", buttonPayload(cmdSubCancel), ColorSecondary)})
+		}
 		kb = &Keyboard{Inline: true, Buttons: rows}
+	} else if hasSub {
+		// VK-only с активной подпиской → inline с кнопкой отмены (приоритет над меню).
+		if b.payments != nil {
+			sb.WriteString("\nСменить email — отправь сообщение: email")
+		}
+		kb = &Keyboard{Inline: true, Buttons: [][]Button{
+			{TextButton("🚫 Отменить автопродление", buttonPayload(cmdSubCancel), ColorSecondary)},
+			{TextButton("◀️ Меню", buttonPayload(""), ColorSecondary)},
+		}}
 	} else {
 		// VK-only → постоянное меню (как было). Сменить email можно отдельным
 		// сообщением «email» (или при оплате).

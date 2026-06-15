@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	"gitlab.com/KosovAndrey/tryberrybot/internal/metrics"
@@ -63,6 +64,15 @@ func (r *Registry) Scrape(ctx context.Context, url string) (*Result, Marketplace
 		status = "not_found"
 	case errors.Is(err, ErrMarketplaceBlocked):
 		status = "blocked"
+	case errors.Is(err, ErrAuthExpired):
+		// аккаунт-сессия протухла — отдельный статус для громкого алерта.
+		status = "auth"
+	case errors.Is(err, ErrNotImplemented):
+		status = "disabled"
+	case isProxyError(err):
+		// прокси отверг/недоступен (407/502 и т.п.) — НЕ антибот: отдельный статус,
+		// чтобы алерт отличал «истёк/сломался прокси» от блокировки маркетплейсом.
+		status = "proxy"
 	default:
 		status = "error"
 	}
@@ -80,6 +90,18 @@ func (r *Registry) Scrape(ctx context.Context, url string) (*Result, Marketplace
 	)
 
 	return result, s.Marketplace(), nil
+}
+
+// isProxyError распознаёт ошибки уровня прокси (истёк/недоступен), а не маркетплейса:
+// например "Proxy responded with non 200 code: 407 Proxy Authentication Required".
+func isProxyError(err error) bool {
+	if err == nil {
+		return false
+	}
+	s := strings.ToLower(err.Error())
+	return strings.Contains(s, "proxy responded") ||
+		strings.Contains(s, "proxy authentication") ||
+		strings.Contains(s, "407")
 }
 
 // SupportedMarketplaces — список всех зарегистрированных маркетплейсов

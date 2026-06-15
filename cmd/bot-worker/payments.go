@@ -10,6 +10,7 @@ import (
 	"gitlab.com/KosovAndrey/tryberrybot/internal/domain"
 	"gitlab.com/KosovAndrey/tryberrybot/internal/kafka"
 	"gitlab.com/KosovAndrey/tryberrybot/internal/payment"
+	"gitlab.com/KosovAndrey/tryberrybot/internal/payment/robokassa"
 	"gitlab.com/KosovAndrey/tryberrybot/internal/payment/yookassa"
 	"gitlab.com/KosovAndrey/tryberrybot/internal/repository/postgres"
 	redisrepo "gitlab.com/KosovAndrey/tryberrybot/internal/repository/redis"
@@ -32,30 +33,35 @@ func setupPayments(
 	promoRepo *postgres.PromoRepo,
 	referralRepo *postgres.ReferralRepo,
 	userRepo *postgres.UserRepo,
+	billingRepo *postgres.BillingSubscriptionRepo,
 	discounts *redisrepo.DiscountStore,
 ) *kafka.Consumer {
-	shopID := getEnv("YOOKASSA_SHOP_ID", "")
-	secret := getEnv("YOOKASSA_SECRET_KEY", "")
-	if shopID == "" || secret == "" {
-		log.Info("yookassa not configured — payments show stub")
+	provider := setupProvider(log)
+	if provider == nil {
+		log.Info("payment provider not configured — payments show stub")
 		return nil
 	}
-	returnURL := getEnv("YOOKASSA_RETURN_URL", "https://t.me/TryBerryBot")
-	// Ставка НДС в чеке. Самозанятый (НПД) не плательщик НДS → 1 = «без НДС».
-	vatCode := 1
-	if v, err := strconv.Atoi(getEnv("YOOKASSA_VAT_CODE", "1")); err == nil {
-		vatCode = v
-	}
 
-	ykClient := yookassa.NewClient(shopID, secret)
-	svc := payment.NewService(ykClient, paymentRepo, discounts, returnURL, vatCode, log)
+	svc := payment.NewService(provider, paymentRepo, discounts, billingRepo, log)
 	tgBot.SetPayments(svc)
+	tgBot.SetBilling(billingRepo)
 	if vkBot != nil {
 		vkBot.SetPayments(svc)
+		vkBot.SetBilling(billingRepo)
 	}
 
 	notifier := &paymentNotifier{tg: tgBot, vk: vkBot, log: log}
-	applier := payment.NewApplier(paymentRepo, promoRepo, referralRepo, userRepo, discounts, notifier, log)
+	applier := payment.NewApplier(paymentRepo, promoRepo, referralRepo, userRepo, billingRepo, discounts, notifier, log)
+
+	// Шедулер автосписаний — только если провайдер умеет рекуррент (Робокасса).
+	if provider.SupportsRecurring() {
+		charger := payment.NewCharger(provider, billingRepo, paymentRepo, userRepo, notifier, log)
+		interval := 1 * time.Hour
+		if m, err := strconv.Atoi(getEnv("BILLING_CHARGE_INTERVAL_MINUTES", "60")); err == nil && m > 0 {
+			interval = time.Duration(m) * time.Minute
+		}
+		go charger.Run(ctx, interval)
+	}
 
 	consumer := kafka.NewConsumer(brokers, payment.TopicConfirmed, "payment-workers")
 	go func() {
@@ -72,8 +78,46 @@ func setupPayments(
 			log.Error("payments consumer stopped", "err", err)
 		}
 	}()
-	log.Info("yookassa payments enabled", "return_url", returnURL)
+	log.Info("payments enabled", "provider", provider.Name())
 	return consumer
+}
+
+// setupProvider выбирает платёжный провайдер по флагу PAYMENT_PROVIDER.
+// Возвращает nil, если выбранный провайдер не сконфигурирован (боты покажут
+// заглушку). По умолчанию — ЮKassa (на период миграции на Робокассу).
+func setupProvider(log *slog.Logger) payment.Provider {
+	switch getEnv("PAYMENT_PROVIDER", domain.ProviderYooKassa) {
+	case domain.ProviderRobokassa:
+		login := getEnv("ROBOKASSA_MERCHANT_LOGIN", "")
+		pw1 := getEnv("ROBOKASSA_PASSWORD1", "")
+		pw2 := getEnv("ROBOKASSA_PASSWORD2", "")
+		if login == "" || pw1 == "" || pw2 == "" {
+			return nil
+		}
+		rk := robokassa.NewClient(robokassa.Config{
+			Login:     login,
+			Password1: pw1,
+			Password2: pw2,
+			IsTest:    getEnv("ROBOKASSA_IS_TEST", "0") == "1",
+			SNO:       getEnv("ROBOKASSA_SNO", "npd"),
+			HashType:  getEnv("ROBOKASSA_HASH_TYPE", ""),
+		})
+		fiscal := getEnv("ROBOKASSA_NPD", "1") == "1"
+		return payment.NewRobokassaProvider(rk, fiscal)
+	default:
+		shopID := getEnv("YOOKASSA_SHOP_ID", "")
+		secret := getEnv("YOOKASSA_SECRET_KEY", "")
+		if shopID == "" || secret == "" {
+			return nil
+		}
+		returnURL := getEnv("YOOKASSA_RETURN_URL", "https://t.me/TryBerryBot")
+		// Ставка НДС в чеке. Самозанятый (НПД) не плательщик НДС → 1 = «без НДС».
+		vatCode := 1
+		if v, err := strconv.Atoi(getEnv("YOOKASSA_VAT_CODE", "1")); err == nil {
+			vatCode = v
+		}
+		return payment.NewYooKassaProvider(yookassa.NewClient(shopID, secret), returnURL, vatCode)
+	}
 }
 
 // paymentNotifier реализует payment.Notifier: уведомляет во все привязанные
@@ -122,5 +166,42 @@ func (n *paymentNotifier) ReferralPaid(ctx context.Context, referrer *domain.Use
 		n.vk.Notify(ctx, *referrer.VKID, fmt.Sprintf(
 			"🎉 %s оплатил тариф — тебе +%d %s тарифа за приглашение!\n%s",
 			friend, days, domain.DaysWord(days), tail))
+	}
+}
+
+func (n *paymentNotifier) SubscriptionChargeUpcoming(ctx context.Context, buyer *domain.User, plan string, amountKopecks int64, chargeAt time.Time) {
+	p, _ := domain.PlanByName(plan)
+	sum := domain.KopecksToRubString(amountKopecks)
+	date := chargeAt.Format(payDateLayout)
+	if buyer.TelegramID != 0 {
+		n.tg.NotifyHTML(buyer.TelegramID, fmt.Sprintf(
+			"🔁 <b>Скоро продлим подписку</b>\n\n"+
+				"Тариф <b>%s</b>: %s ₽ спишутся автоматически <b>%s</b>.\n\n"+
+				"Если продлевать не нужно — отмени автопродление в разделе «Мой тариф» (/myplan).",
+			p.Title, sum, date))
+	}
+	if buyer.VKID != nil && n.vk != nil {
+		n.vk.Notify(ctx, *buyer.VKID, fmt.Sprintf(
+			"🔁 Скоро продлим подписку\n\nТариф %s: %s ₽ спишутся автоматически %s.\n\n"+
+				"Если продлевать не нужно — отмени автопродление в разделе «Мой тариф».",
+			p.Title, sum, date))
+	}
+}
+
+func (n *paymentNotifier) SubscriptionPaymentFailed(ctx context.Context, buyer *domain.User, plan string, willRetry bool) {
+	p, _ := domain.PlanByName(plan)
+	tail := "Повторим попытку списания позже — проверь, что на карте достаточно средств."
+	if !willRetry {
+		tail = "Автопродление остановлено. Чтобы продолжить пользоваться тарифом, оплати его заново в разделе «Тарифы»."
+	}
+	if buyer.TelegramID != 0 {
+		n.tg.NotifyHTML(buyer.TelegramID, fmt.Sprintf(
+			"⚠️ <b>Не удалось продлить подписку</b>\n\nТариф <b>%s</b>: автосписание не прошло.\n%s",
+			p.Title, tail))
+	}
+	if buyer.VKID != nil && n.vk != nil {
+		n.vk.Notify(ctx, *buyer.VKID, fmt.Sprintf(
+			"⚠️ Не удалось продлить подписку\n\nТариф %s: автосписание не прошло.\n%s",
+			p.Title, tail))
 	}
 }

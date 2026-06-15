@@ -80,6 +80,40 @@ groups:
           summary: "Маркетплейс {{ $labels.marketplace }} блокирует запросы"
           description: "5+ блокировок за 5 минут. Возможно нужен новый IP/VPN/User-Agent."
 
+      # Прокси отвергает/недоступен (407/502) — это НЕ антибот, а истёкший/сломанный прокси
+      - alert: ScrapeProxyFailing
+        expr: |
+          increase(tryberrybot_scrape_requests_total{status="proxy"}[5m]) > 3
+        for: 1m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Прокси скрейпинга {{ $labels.marketplace }} не отвечает (407/502)"
+          description: "3+ ошибок уровня прокси за 5 минут. Вероятно истёк/сломался прокси — обновить OZON_PROXY_URL в .env и пересоздать scraper+bot-worker (--force-recreate)."
+
+      # Аккаунт-сессия скрейпера протухла (401 / страница логина вместо карточки).
+      # Громкий критикал: иначе протухание токена растворится в "not_found"/"error".
+      - alert: ScrapeAuthExpired
+        expr: |
+          increase(tryberrybot_scrape_requests_total{status="auth"}[10m]) > 0
+        for: 0m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Сессия скрейпера {{ $labels.marketplace }} протухла (нужен свежий токен)"
+          description: "Ozon вернул 401/страницу логина — access-token истёк. Снять свежий OZON_COOKIE (HTTP Toolkit) и recreate scraper+bot-worker, либо включить авто-рефреш."
+
+      # Скрейпер маркетплейса выключен (не сконфигурён — нет cookie/токена/прокси)
+      - alert: ScrapeMarketplaceDisabled
+        expr: |
+          increase(tryberrybot_scrape_requests_total{status="disabled"}[10m]) > 3
+        for: 2m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Скрейпер {{ $labels.marketplace }} отключён (не сконфигурён)"
+          description: "Скрейпер возвращает ErrNotImplemented — проверь OZON_COOKIE/OZON_PROXY_URL в .env (возможна опечатка → невалидный URL → scraper disabled)."
+
       # Высокая латентность скрейпинга
       - alert: HighScrapeLatency
         expr: tryberrybot:scrape_duration_p95:5m > 10

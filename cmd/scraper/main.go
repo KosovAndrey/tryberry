@@ -52,6 +52,7 @@ func run(log *slog.Logger) error {
 	otlpEndpoint := getEnv("OTLP_ENDPOINT", "jaeger:4317")
 	rpsStrWB := getEnv("SCRAPER_RATE_LIMIT_RPS_WB", "5")
 	rpsStrYandex := getEnv("SCRAPER_RATE_LIMIT_RPS_YANDEX", "2")
+	rpsStrOzon := getEnv("SCRAPER_RATE_LIMIT_RPS_OZON", "1")
 	rpsWB, err := strconv.ParseFloat(rpsStrWB, 64)
 	if err != nil {
 		return fmt.Errorf("SCRAPER_RATE_LIMIT_RPS_WB: %w", err)
@@ -59,6 +60,10 @@ func run(log *slog.Logger) error {
 	rpsYandex, err := strconv.ParseFloat(rpsStrYandex, 64)
 	if err != nil {
 		return fmt.Errorf("SCRAPER_RATE_LIMIT_RPS_YANDEX: %w", err)
+	}
+	rpsOzon, err := strconv.ParseFloat(rpsStrOzon, 64)
+	if err != nil {
+		return fmt.Errorf("SCRAPER_RATE_LIMIT_RPS_OZON: %w", err)
 	}
 
 	// ── Подключения ──────────────────────────────────────────────────────────
@@ -118,7 +123,15 @@ func run(log *slog.Logger) error {
 	// ── Скрейперы (товарные карточки) ──────────────────────────────────────────
 	registry := scraper.NewRegistry(
 		scraper.NewWildberriesScraper(rpsWB),
-		scraper.NewOzonScraper(),
+		scraper.NewOzonScraper(scraper.OzonOptions{
+			ProxyURL:     getEnv("OZON_PROXY_URL", ""),
+			RPS:          rpsOzon,
+			Mode:         getEnv("OZON_API_MODE", "mobile"),
+			AccessToken:  getEnv("OZON_ACCESS_TOKEN", ""),
+			RefreshToken: getEnv("OZON_REFRESH_TOKEN", ""),
+			Cookie:       getEnv("OZON_COOKIE", ""),
+			Logger:       log,
+		}),
 		scraper.NewYandexMarketScraper(rpsYandex),
 	)
 

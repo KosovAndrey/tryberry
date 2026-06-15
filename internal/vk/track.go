@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"gitlab.com/KosovAndrey/tryberrybot/internal/domain"
+	"gitlab.com/KosovAndrey/tryberrybot/internal/scraper"
 )
 
 // Трекинг товаров из VK: та же логика, что в telegram.doTrack (скрейп → upsert
@@ -32,7 +33,17 @@ func (b *Bot) handleTrack(ctx context.Context, vkID int64, user *domain.User, ra
 	result, err := s.Scrape(ctx, rawURL)
 	if err != nil {
 		b.log.Error("vk: scrape on track", "url", rawURL, "err", err)
-		b.send(ctx, vkID, "❌ Не удалось получить данные о товаре. Попробуй позже.", nil)
+		msg := "❌ Не удалось получить данные о товаре. Попробуй позже."
+		switch {
+		case errors.Is(err, scraper.ErrAgeRestricted):
+			msg = "🔞 Это товар 18+. Ozon прячет его цену за подтверждением возраста — пока не могу отслеживать такие товары."
+		case s.Marketplace() == scraper.MarketplaceOzon &&
+			(errors.Is(err, scraper.ErrNotImplemented) || errors.Is(err, scraper.ErrMarketplaceBlocked)):
+			// Заглушка: Ozon не сконфигурён/заблокирован — понятное «скоро будет».
+			msg = "🔵 Ozon скоро будет — отслеживание этого маркетплейса ещё в разработке.\n\n" +
+				"Пока отслеживаю Wildberries 🟣 — пришли ссылку на товар оттуда."
+		}
+		b.send(ctx, vkID, msg, nil)
 		return
 	}
 
