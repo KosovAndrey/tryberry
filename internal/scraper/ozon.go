@@ -471,15 +471,25 @@ func candidateWidgets(ws map[string]string, namePrefix, nameSub string, withRubl
 	return out
 }
 
-// extractOzonPrice ищет цену рекурсивно по полям price/cardPrice/originalPrice в
-// ценовом виджете (имя webPrice* / содержит "price" / со знаком ₽). Берём «price»
-// (текущая цена), фолбэк cardPrice (цена с Ozon Картой), затем originalPrice.
+// extractOzonPrice достаёт цену из ценового виджета (имя webPrice* / содержит
+// "price" / со знаком ₽). Реальная структура мобильного API: price.price[] —
+// массив строк цены вида {"text":"202 ₽","textStyle":"PRICE"}. Берём по textStyle
+// PRICE (текущая) → CARD_PRICE (с Ozon Картой) → ORIGINAL_PRICE (старая). Фолбэк —
+// старый рекурсивный поиск строковых полей price/cardPrice/originalPrice.
 func extractOzonPrice(ws map[string]string) float64 {
 	for _, raw := range candidateWidgets(ws, "webPrice", "price", true) {
 		var data any
 		if json.Unmarshal([]byte(raw), &data) != nil {
 			continue
 		}
+		byStyle := map[string]string{}
+		findPriceTexts(data, byStyle)
+		for _, style := range []string{"PRICE", "CARD_PRICE", "ORIGINAL_PRICE"} {
+			if v := parseRubles(byStyle[style]); v > 0 {
+				return v
+			}
+		}
+		// фолбэк: вдруг цена пришла плоской строкой в поле price/cardPrice/originalPrice.
 		found := map[string]string{}
 		findStringFields(data, map[string]bool{
 			"price": true, "cardprice": true, "originalprice": true,
@@ -493,18 +503,46 @@ func extractOzonPrice(ws map[string]string) float64 {
 	return 0
 }
 
+// findPriceTexts рекурсивно собирает text по textStyle из объектов вида
+// {"text":"202 ₽","textStyle":"PRICE"} (требуем цифру в тексте, чтобы отсечь
+// подписи без цены). Первое значение для каждого стиля побеждает.
+func findPriceTexts(v any, out map[string]string) {
+	switch t := v.(type) {
+	case map[string]any:
+		text, hasText := t["text"].(string)
+		style, hasStyle := t["textStyle"].(string)
+		if hasText && hasStyle && strings.ContainsAny(text, "0123456789") {
+			st := strings.ToUpper(style)
+			if _, done := out[st]; !done {
+				out[st] = text
+			}
+		}
+		for _, val := range t {
+			findPriceTexts(val, out)
+		}
+	case []any:
+		for _, e := range t {
+			findPriceTexts(e, out)
+		}
+	}
+}
+
 func extractOzonName(ws map[string]string) string {
-	for _, raw := range candidateWidgets(ws, "webProductHeading", "heading", false) {
-		var data any
-		if json.Unmarshal([]byte(raw), &data) != nil {
-			continue
-		}
-		// title может быть строкой ИЛИ объектом {text:...}; пробуем оба ключа.
-		if s := findFirstString(data, "title"); s != "" {
-			return strings.TrimSpace(s)
-		}
-		if s := findFirstString(data, "text"); s != "" {
-			return strings.TrimSpace(s)
+	// web-эндпоинт: webProductHeading*; мобильный composer-api: navTitle* (заголовок
+	// товара). Пробуем оба варианта подстроки имени виджета.
+	for _, sub := range []string{"heading", "title"} {
+		for _, raw := range candidateWidgets(ws, "webProductHeading", sub, false) {
+			var data any
+			if json.Unmarshal([]byte(raw), &data) != nil {
+				continue
+			}
+			// title может быть строкой ИЛИ объектом {text:...}; пробуем оба ключа.
+			if s := findFirstString(data, "title"); s != "" {
+				return strings.TrimSpace(s)
+			}
+			if s := findFirstString(data, "text"); s != "" {
+				return strings.TrimSpace(s)
+			}
 		}
 	}
 	return ""

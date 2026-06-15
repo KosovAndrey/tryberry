@@ -66,6 +66,28 @@ func TestParseOzonWidgets(t *testing.T) {
 	}
 }
 
+func TestParseOzonWidgetsMobilePrice(t *testing.T) {
+	// Реальная структура мобильного composer-api: виджет price-… с массивом
+	// price.price[] из {text, textStyle}. Берём PRICE (текущую), не ORIGINAL_PRICE.
+	body := []byte(`{
+		"widgetStates": {
+			"price-11475853-pdppage2copy-1": "{\"price\":{\"price\":[{\"text\":\"202 ₽\",\"textStyle\":\"PRICE\"},{\"text\":\"798 ₽\",\"textStyle\":\"ORIGINAL_PRICE\"}],\"discount\":\"−74%\"}}",
+			"navTitle-4572512-pdppage2copy-1": "{\"title\":\"Подставка для телефона\"}",
+			"galleryPreview-7889442-pdppage2copy-1": "{\"coverImage\":\"https://ir.ozone.ru/s3/x.jpg\"}"
+		}
+	}`)
+	res, err := parseOzonWidgets(body)
+	if err != nil {
+		t.Fatalf("parseOzonWidgets error: %v", err)
+	}
+	if res.Price != 202 {
+		t.Errorf("Price = %v; want 202 (PRICE, not ORIGINAL_PRICE)", res.Price)
+	}
+	if res.Name != "Подставка для телефона" {
+		t.Errorf("Name = %q; want product title", res.Name)
+	}
+}
+
 func TestParseOzonWidgetsNoPrice(t *testing.T) {
 	body := []byte(`{"widgetStates":{"webProductHeading-1":"{\"title\":\"X\"}"}}`)
 	if _, err := parseOzonWidgets(body); err == nil {
