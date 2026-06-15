@@ -372,7 +372,9 @@ services:
         MINE_RETRY_MINUTES: "10"
         MINE_MAX_RELOADS: "2"
         MINE_TIMEOUT_SECONDS: "150"
-        WB_TOKEN_PROXY_URL: "http://lte2c8614d8-country-ru:wBD7AR4ndi1Q@resext-ru.lteboost.com:8989"
+        # Прокси для майнинга WB-токенов — секрет, из .env (раньше был захардкожен
+        # резидентский lteboost, истёк). Сейчас гоняем через мобильный РФ-прокси.
+        WB_TOKEN_PROXY_URL: "${WB_TOKEN_PROXY_URL:-}"
         HEADLESS: "false"
         LOG_LEVEL: "INFO"
       shm_size: "1gb"
