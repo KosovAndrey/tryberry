@@ -48,7 +48,7 @@ func TestParseOzonWidgets(t *testing.T) {
 		"widgetStates": {
 			"webPrice-3132441-default-1": "{\"price\":\"1 299 ₽\",\"originalPrice\":\"2 000 ₽\",\"cardPrice\":\"1 199 ₽\"}",
 			"webProductHeading-1234-default-1": "{\"title\":\"Смартфон Apple iPhone 15\"}",
-			"webGallery-5678-default-1": "{\"coverImage\":\"https://cdn1.ozone.ru/s3/x.jpg\",\"images\":[{\"src\":\"https://cdn1.ozone.ru/s3/1.jpg\"}]}"
+			"webGallery-5678-default-1": "{\"coverImage\":\"https://ir.ozone.ru/s3/multimedia-1-c/wc1000/7012345678.jpg\",\"images\":[{\"src\":\"https://ir.ozone.ru/s3/multimedia-1-d/wc1000/7012345679.jpg\"}]}"
 		}
 	}`)
 	res, err := parseOzonWidgets(body)
@@ -61,8 +61,8 @@ func TestParseOzonWidgets(t *testing.T) {
 	if res.Name != "Смартфон Apple iPhone 15" {
 		t.Errorf("Name = %q; want product title", res.Name)
 	}
-	if res.ImageURL != "https://cdn1.ozone.ru/s3/x.jpg" {
-		t.Errorf("ImageURL = %q; want coverImage", res.ImageURL)
+	if res.ImageURL != "https://ir.ozone.ru/s3/multimedia-1-c/wc1000/7012345678.jpg" {
+		t.Errorf("ImageURL = %q; want coverImage multimedia URL", res.ImageURL)
 	}
 }
 

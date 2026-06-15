@@ -242,6 +242,11 @@ func (s *OzonScraper) Scrape(ctx context.Context, url string) (*Result, error) {
 	if err != nil {
 		return nil, err
 	}
+	if res.ImageURL == "" {
+		names, gallery := ozonImageDiag(body)
+		s.log.Warn("ozon: image not found in widgetStates",
+			"name", res.Name, "widgets", names, "gallery", snippet([]byte(gallery), 2000))
+	}
 	return res, nil
 }
 
@@ -548,20 +553,85 @@ func extractOzonName(ws map[string]string) string {
 	return ""
 }
 
+// extractOzonImage достаёт URL фото товара. Продуктовые картинки Ozon лежат на CDN
+// с "/multimedia" в пути (ir.ozone.ru/s3/multimedia-…), что отличает их от иконок
+// банков/доставки (payments-cdn и пр.). Сначала смотрим галерейный виджет, затем
+// фолбэком — любой виджет (структура имён нестабильна между web/mobile).
 func extractOzonImage(ws map[string]string) string {
 	for _, raw := range candidateWidgets(ws, "webGallery", "gallery", false) {
 		var data any
 		if json.Unmarshal([]byte(raw), &data) != nil {
 			continue
 		}
-		// имена в lowercase: findFirstString сравнивает с уже lowercase-ключом JSON.
-		for _, key := range []string{"coverimage", "src", "image", "link", "url"} {
-			if s := findFirstString(data, key); strings.HasPrefix(s, "http") {
+		if u := findOzonImageURL(data); u != "" {
+			return u
+		}
+	}
+	for _, raw := range ws {
+		var data any
+		if json.Unmarshal([]byte(raw), &data) != nil {
+			continue
+		}
+		if u := findOzonImageURL(data); u != "" {
+			return u
+		}
+	}
+	return ""
+}
+
+// findOzonImageURL рекурсивно возвращает первый строковый URL продуктовой картинки.
+func findOzonImageURL(v any) string {
+	switch t := v.(type) {
+	case string:
+		if isOzonImageURL(t) {
+			return t
+		}
+	case map[string]any:
+		// обложка важнее прочих кадров — пробуем явные ключи первыми (детерминированно).
+		for _, k := range []string{"coverImage", "image", "img", "src", "link", "url"} {
+			if s, ok := t[k].(string); ok && isOzonImageURL(s) {
 				return s
+			}
+		}
+		for _, val := range t {
+			if u := findOzonImageURL(val); u != "" {
+				return u
+			}
+		}
+	case []any:
+		for _, e := range t {
+			if u := findOzonImageURL(e); u != "" {
+				return u
 			}
 		}
 	}
 	return ""
+}
+
+func isOzonImageURL(s string) bool {
+	if !strings.HasPrefix(s, "http") {
+		return false
+	}
+	ls := strings.ToLower(s)
+	return (strings.Contains(ls, "ozone.ru") || strings.Contains(ls, "ozon.ru")) &&
+		strings.Contains(ls, "multimedia")
+}
+
+// ozonImageDiag достаёт имена виджетов и сырой галерейный виджет для диагностики,
+// когда фото не нашлось.
+func ozonImageDiag(body []byte) (names []string, gallery string) {
+	var env ozonEnvelope
+	if json.Unmarshal(body, &env) != nil {
+		return
+	}
+	for k, v := range env.WidgetStates {
+		names = append(names, k)
+		if gallery == "" && strings.Contains(strings.ToLower(k), "gallery") {
+			gallery = v
+		}
+	}
+	sort.Strings(names)
+	return
 }
 
 // findStringFields рекурсивно собирает первое строковое значение для каждого из
