@@ -48,7 +48,7 @@ type Button struct {
 }
 
 type ButtonAction struct {
-	Type    string `json:"type"`              // text | open_link
+	Type    string `json:"type"` // text | open_link
 	Label   string `json:"label,omitempty"`
 	Payload string `json:"payload,omitempty"` // JSON-строка, прилетает в message_new.payload
 	Link    string `json:"link,omitempty"`
