@@ -198,6 +198,10 @@ func (s *OzonScraper) Scrape(ctx context.Context, url string) (*Result, error) {
 			"incident", incident, "body", snippet(body, 300))
 		return nil, ErrMarketplaceBlocked
 	}
+	if resp.StatusCode == 401 {
+		s.log.Warn("ozon: auth expired (401) — нужен свежий cookie/рефреш токена", "id", id)
+		return nil, ErrAuthExpired
+	}
 	if resp.StatusCode == 404 {
 		return nil, ErrProductNotFound
 	}
@@ -358,6 +362,11 @@ func parseOzonWidgets(body []byte) (*Result, error) {
 	}
 
 	if res.Price == 0 {
+		// Протухшая сессия: вместо карточки пришла страница логина (200, но цены нет).
+		// Отдельный сигнал — НЕ путать с «товар не найден».
+		if isOzonLoginGate(env.WidgetStates) {
+			return nil, ErrAuthExpired
+		}
 		// 18+ гейт: цены нет, потому что Ozon прячет товар за подтверждением возраста.
 		if isOzonAgeGated(env.WidgetStates) {
 			return nil, ErrAgeRestricted
@@ -379,6 +388,25 @@ func parseOzonWidgets(body []byte) (*Result, error) {
 		res.Name = "Товар Ozon"
 	}
 	return res, nil
+}
+
+// isOzonLoginGate эвристически распознаёт страницу/виджет логина — признак
+// протухшей аккаунт-сессии (Ozon отдал 200, но просит авторизоваться вместо
+// карточки товара). Маркеры best-effort.
+func isOzonLoginGate(ws map[string]string) bool {
+	for k, v := range ws {
+		lk := strings.ToLower(k)
+		if strings.Contains(lk, "login") || strings.Contains(lk, "signin") ||
+			strings.Contains(lk, "auth") {
+			return true
+		}
+		lv := strings.ToLower(v)
+		if strings.Contains(lv, "войдите") || strings.Contains(lv, "авториз") ||
+			strings.Contains(lv, "войти в озон") || strings.Contains(lv, "войти в ozon") {
+			return true
+		}
+	}
+	return false
 }
 
 // isOzonAgeGated эвристически распознаёт возрастной гейт 18+ (нож/алкоголь): когда

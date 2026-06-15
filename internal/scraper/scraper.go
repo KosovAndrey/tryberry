@@ -45,4 +45,8 @@ var (
 	// и т.п.). В widgetStates нет цены. Лечится подтверждением 18+ в настройках
 	// аккаунта, под которым ходит скрейпер.
 	ErrAgeRestricted = errors.New("product is age-restricted (18+)")
+	// ErrAuthExpired — аккаунт-сессия скрейпера протухла (Ozon: 401 или 200 со
+	// страницей логина вместо карточки). Отдельный сигнал, чтобы НЕ путать со
+	// «товар не найден» и громко алертить: нужен свежий cookie / авто-рефреш токена.
+	ErrAuthExpired = errors.New("scraper account session expired")
 )

@@ -64,6 +64,9 @@ func (r *Registry) Scrape(ctx context.Context, url string) (*Result, Marketplace
 		status = "not_found"
 	case errors.Is(err, ErrMarketplaceBlocked):
 		status = "blocked"
+	case errors.Is(err, ErrAuthExpired):
+		// аккаунт-сессия протухла — отдельный статус для громкого алерта.
+		status = "auth"
 	case errors.Is(err, ErrNotImplemented):
 		status = "disabled"
 	case isProxyError(err):

@@ -91,6 +91,18 @@ groups:
           summary: "Прокси скрейпинга {{ $labels.marketplace }} не отвечает (407/502)"
           description: "3+ ошибок уровня прокси за 5 минут. Вероятно истёк/сломался прокси — обновить OZON_PROXY_URL в .env и пересоздать scraper+bot-worker (--force-recreate)."
 
+      # Аккаунт-сессия скрейпера протухла (401 / страница логина вместо карточки).
+      # Громкий критикал: иначе протухание токена растворится в "not_found"/"error".
+      - alert: ScrapeAuthExpired
+        expr: |
+          increase(tryberrybot_scrape_requests_total{status="auth"}[10m]) > 0
+        for: 0m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Сессия скрейпера {{ $labels.marketplace }} протухла (нужен свежий токен)"
+          description: "Ozon вернул 401/страницу логина — access-token истёк. Снять свежий OZON_COOKIE (HTTP Toolkit) и recreate scraper+bot-worker, либо включить авто-рефреш."
+
       # Скрейпер маркетплейса выключен (не сконфигурён — нет cookie/токена/прокси)
       - alert: ScrapeMarketplaceDisabled
         expr: |
