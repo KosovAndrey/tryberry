@@ -6,8 +6,9 @@
 // задач в Kafka. Благодаря этому api/scraper/notifier реплицируются свободно.
 //
 // Два независимых тикера:
-//   • товарный  → топик scrape-tasks  (интервал SCRAPE_INTERVAL_MINUTES)
-//   • поисковый → топик search-tasks  (интервал SEARCH_SCRAPE_INTERVAL_MINUTES)
+//   - товарный  → топик scrape-tasks  (интервал SCRAPE_INTERVAL_MINUTES)
+//   - поисковый → топик search-tasks  (интервал SEARCH_SCRAPE_INTERVAL_MINUTES)
+//
 // Поисковый тикер (M1b) заменил in-process runSearchLoop, который раньше жил в
 // scraper и мешал его репликации.
 package main
@@ -60,6 +61,10 @@ func run(log *slog.Logger) error {
 	// Дефолт-фолбэк интервала для тарифов без своего Interval (на практике все
 	// планы его задают; фолбэк — страховка).
 	defaultInterval := time.Duration(getEnvInt("SCRAPE_INTERVAL_MINUTES", 15)) * time.Minute
+	// Пол интервала для Ozon: антибот FAB + один аккаунт/IP не терпят частого
+	// опроса (в отличие от WB basket CDN). Ozon-товары скрейпим не чаще этого,
+	// даже у reseller_pro (1 мин). 0 — отключить ограничение.
+	ozonMinInterval := time.Duration(getEnvInt("OZON_MIN_INTERVAL_MINUTES", 20)) * time.Minute
 	// Шаг тикера: часто опрашиваем БД, но эмитим только «созревшие» товары/запросы
 	// (по last_enqueued_at + их интервал). Должен быть заметно меньше самого
 	// короткого тарифного интервала (reseller = 1 мин). Один шаг на оба пути.
@@ -99,9 +104,10 @@ func run(log *slog.Logger) error {
 
 	log.Info("scheduler started",
 		"default_interval", defaultInterval.String(),
+		"ozon_min_interval", ozonMinInterval.String(),
 		"tick", tick.String())
 
-	go runProductScheduler(ctx, log, productRepo, productProducer, tick, defaultInterval)
+	go runProductScheduler(ctx, log, productRepo, productProducer, tick, defaultInterval, ozonMinInterval)
 	go runSearchScheduler(ctx, log, searchQueryRepo, searchProducer, resellerProducer, tick, defaultInterval)
 
 	<-ctx.Done()
@@ -121,10 +127,10 @@ func runProductScheduler(
 	log *slog.Logger,
 	productRepo *postgres.ProductRepo,
 	producer *kafka.Producer,
-	tickInterval, defaultInterval time.Duration,
+	tickInterval, defaultInterval, ozonMinInterval time.Duration,
 ) {
 	tick := func() {
-		if err := productSchedulerTick(ctx, log, productRepo, producer, defaultInterval); err != nil {
+		if err := productSchedulerTick(ctx, log, productRepo, producer, defaultInterval, ozonMinInterval); err != nil {
 			log.Error("product scheduler tick failed", "err", err)
 		}
 	}
@@ -146,7 +152,7 @@ func productSchedulerTick(
 	log *slog.Logger,
 	productRepo *postgres.ProductRepo,
 	producer *kafka.Producer,
-	defaultInterval time.Duration,
+	defaultInterval, ozonMinInterval time.Duration,
 ) error {
 	rows, err := productRepo.GetSchedulableProducts(ctx)
 	if err != nil {
@@ -173,6 +179,16 @@ func productSchedulerTick(
 		}
 		if iv < a.eff {
 			a.eff = iv
+		}
+	}
+
+	// Пол интервала для Ozon: даже самый быстрый тариф не опрашивает Ozon чаще
+	// ozonMinInterval (антибот/один аккаунт+IP). WB остаётся на тарифном кадансе.
+	if ozonMinInterval > 0 {
+		for _, a := range byProduct {
+			if a.eff < ozonMinInterval && strings.Contains(strings.ToLower(a.url), "ozon.ru") {
+				a.eff = ozonMinInterval
+			}
 		}
 	}
 
