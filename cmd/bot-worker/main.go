@@ -109,9 +109,8 @@ func run(log *slog.Logger) error {
 	registry := scraper.NewRegistry(
 		wbSearch,
 		// Бот при /track скрейпит сразу (показать товар) → Ozon нужен рабочим:
-		// тот же ETC из Redis и тот же мобильный прокси, что у scraper/ozon-miner.
+		// аккаунт-cookie (OZON_COOKIE) + тот же мобильный прокси, что у scraper.
 		scraper.NewOzonScraper(scraper.OzonOptions{
-			RedisClient:  redisClient,
 			ProxyURL:     getEnv("OZON_PROXY_URL", ""),
 			Mode:         getEnv("OZON_API_MODE", "mobile"),
 			AccessToken:  getEnv("OZON_ACCESS_TOKEN", ""),

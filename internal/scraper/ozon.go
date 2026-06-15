@@ -13,12 +13,10 @@ import (
 	"sort"
 	"strconv"
 	"strings"
-	"time"
 
 	fhttp "github.com/bogdanfinn/fhttp"
 	tls_client "github.com/bogdanfinn/tls-client"
 	"github.com/bogdanfinn/tls-client/profiles"
-	"github.com/redis/go-redis/v9"
 	"golang.org/x/time/rate"
 )
 
@@ -38,44 +36,38 @@ const (
 )
 
 // OzonScraper получает цену/название/картинку товара Ozon через storefront-API
-// (entrypoint-api.bx → widgetStates), переиспользуя антибот-cookie __Secure-ETC,
-// добытый сайдкаром ozon-miner (см. ozon-miner/miner.py).
+// (composer-api.bx → widgetStates), под залогиненным аккаунтом (путь B).
 //
 // Почему так, а не чистый Go-запрос: эндпоинт закрыт антиботом FAB, который на
-// первом контакте отдаёт обфусцированный JS-VM challenge.html (чистым Go не
-// пройти) и режет по TLS-отпечатку + репутации IP. Решение: браузер-майнер
-// изредка решает челлендж в WebView через мобильный РФ-прокси и кладёт cookie в
-// Redis; здесь мы шлём дешёвые частые запросы с этим cookie через ТОТ ЖЕ прокси
-// (ETC привязан к IP) и с браузерным TLS (bogdanfinn/tls-client, Chrome-профиль
-// под Chromium майнера). Браузер — НЕ на каждый скрейп.
+// первом контакте отдаёт обфусцированный JS-VM challenge (чистым Go не пройти) и
+// режет по TLS-отпечатку + репутации IP. Рабочая схема: cookie залогиненной
+// аккаунт-сессии (снятая из приложения, OZON_COOKIE) + okhttp-TLS
+// (bogdanfinn/tls-client, профиль Okhttp4Android13) + RU-мобильный прокси →
+// доверенная сессия проходит FAB. Браузер не нужен вообще.
 type OzonScraper struct {
 	client     tls_client.HttpClient // nil → режим только Matches (бот/api)
-	rc         *redis.Client
 	limiter    *rate.Limiter
 	log        *slog.Logger
-	slotKey    string // ozon:etc:pool:0
 	mode       string // ozonModeMobile | ozonModeWeb
 	configured bool
 
-	// account-режим (путь B): cookie из аккаунт-токенов вместо ETC из Redis.
-	accountCookie string // "" → используем ETC-слот из Redis
+	// cookie аккаунт-сессии (путь B). "" → скрейпер не сконфигурён (только Matches).
+	accountCookie string
 }
 
 // OzonOptions — конфигурация рабочего скрейпера. Нулевое значение даёт
 // «облегчённый» скрейпер: Matches работает (нужно боту/api для разбора URL),
-// а Scrape вернёт ошибку. Реальный скрейп включается, когда заданы RedisClient
-// и ProxyURL (мобильный РФ-прокси — тот же, что у ozon-miner).
+// а Scrape вернёт ErrNotImplemented. Реальный скрейп включается, когда заданы
+// Cookie (или AccessToken) и ProxyURL (RU-мобильный прокси).
 type OzonOptions struct {
-	RedisClient *redis.Client
-	ProxyURL    string  // http://user:pass@host:port мобильного прокси
-	PoolPrefix  string  // префикс ключей Redis; пусто → "ozon:etc:"
-	RPS         float64 // лимит запросов к Ozon (один IP → держим низким), 0 → 1
-	Mode        string  // "mobile" (по умолчанию) | "web"
-	Logger      *slog.Logger
+	ProxyURL string  // http://user:pass@host:port мобильного прокси
+	RPS      float64 // лимит запросов к Ozon (один IP → держим низким), 0 → 1
+	Mode     string  // "mobile" (по умолчанию) | "web"
+	Logger   *slog.Logger
 
 	// Путь B (аккаунт-токены): если задан AccessToken — скрейпер ходит под
-	// залогиненным аккаунтом (cookie __Secure-access-token/__Secure-refresh-token),
-	// без ETC-майнера и Redis. Доверенная сессия проходит FAB. Секреты — из .env.
+	// залогиненным аккаунтом (cookie __Secure-access-token/__Secure-refresh-token).
+	// Доверенная сессия проходит FAB. Секреты — из .env.
 	AccessToken  string
 	RefreshToken string
 	// Cookie — готовая cookie-строка целиком (снятая из запроса приложения через
@@ -89,10 +81,6 @@ func NewOzonScraper(opts OzonOptions) *OzonScraper {
 	if log == nil {
 		log = slog.Default()
 	}
-	prefix := opts.PoolPrefix
-	if prefix == "" {
-		prefix = "ozon:etc:"
-	}
 	rps := opts.RPS
 	if rps <= 0 {
 		rps = 1
@@ -103,15 +91,13 @@ func NewOzonScraper(opts OzonOptions) *OzonScraper {
 	}
 
 	s := &OzonScraper{
-		rc:      opts.RedisClient,
 		limiter: rate.NewLimiter(rate.Limit(rps), 1),
 		log:     log,
-		slotKey: prefix + "pool:0",
 		mode:    mode,
 	}
 
-	// Путь B: готовая cookie-строка или аккаунт-токены заданы → ходим под
-	// залогиненной сессией (mobile/okhttp), ETC/Redis не нужны. Иначе — ETC-майнер.
+	// Путь B: готовая cookie-строка или аккаунт-токены → ходим под залогиненной
+	// сессией (mobile/okhttp).
 	if opts.Cookie != "" {
 		s.accountCookie = opts.Cookie // полная cookie-строка из приложения
 	} else if opts.AccessToken != "" {
@@ -120,25 +106,19 @@ func NewOzonScraper(opts OzonOptions) *OzonScraper {
 			s.accountCookie += "; __Secure-refresh-token=" + opts.RefreshToken
 		}
 	}
+
+	// Без аккаунт-cookie скрейпер не сконфигурён (только Matches): аноним FAB не проходит.
 	if s.accountCookie != "" {
 		s.mode = ozonModeMobile // аккаунт-API живёт на composer-api.bx (okhttp)
 		mode = ozonModeMobile
-	}
-
-	// Клиент нужен и для account-режима, и для ETC-режима.
-	if s.accountCookie != "" || opts.RedisClient != nil {
 		client, err := newOzonTLSClient(opts.ProxyURL, mode)
 		if err != nil {
 			log.Error("ozon: tls-client init failed, scraper disabled", "err", err)
 		} else {
 			s.client = client
 			s.configured = true
-			auth := "etc-miner"
-			if s.accountCookie != "" {
-				auth = "account-token"
-			}
 			// длину cookie логируем (НЕ значение) — подтвердить, что .env подхватился.
-			log.Info("ozon scraper configured", "mode", mode, "auth", auth,
+			log.Info("ozon scraper configured", "mode", mode, "auth", "account-token",
 				"cookie_len", len(s.accountCookie), "proxy", opts.ProxyURL != "")
 		}
 	}
@@ -184,7 +164,7 @@ func extractOzonID(url string) (string, error) {
 
 func (s *OzonScraper) Scrape(ctx context.Context, url string) (*Result, error) {
 	if !s.configured {
-		return nil, fmt.Errorf("%w: ozon scraper not configured (no redis/tls-client)", ErrNotImplemented)
+		return nil, fmt.Errorf("%w: ozon scraper not configured (no account cookie)", ErrNotImplemented)
 	}
 	id, err := extractOzonID(url)
 	if err != nil {
@@ -194,15 +174,7 @@ func (s *OzonScraper) Scrape(ctx context.Context, url string) (*Result, error) {
 		return nil, err
 	}
 
-	cookie, ua, mintedIP, err := s.token(ctx)
-	if err != nil {
-		return nil, fmt.Errorf("%w: no ozon ETC token (miner not ready?)", ErrMarketplaceBlocked)
-	}
-	if ua == "" {
-		ua = ozonDefaultUA
-	}
-
-	req, err := s.buildRequest(ctx, id, cookie, ua)
+	req, err := s.buildRequest(ctx, id, s.accountCookie, ozonAppUA)
 	if err != nil {
 		return nil, err
 	}
@@ -215,19 +187,14 @@ func (s *OzonScraper) Scrape(ctx context.Context, url string) (*Result, error) {
 
 	body, _ := io.ReadAll(io.LimitReader(resp.Body, 4<<20))
 
-	// FAB-блок / протухший ETC: помечаем слот битым, чтобы майнер перевыдал.
-	// Диагностика: сверяем IP минта ETC с текущим egress — расхождение значит,
-	// что прокси отротировал IP (ETC привязан к IP) → лечится sticky-режимом
-	// прокси, а не кодом. Совпадение → дело в TLS/заголовках/сессии (incident +
-	// тело подскажут: fab_chlg_ = токен не признан, иное = признан, но запрос режут).
+	// FAB-блок: incident + тело подскажут причину (fab_chlg_ = сессия/токен не
+	// признаны; иное = признаны, но запрос режут — обычно репутация IP). current_ip
+	// показывает, какой egress прокси заблокирован.
 	if resp.StatusCode == 403 || bytesHasFAB(body) {
 		incident := fabIncidentRe.FindString(string(body))
-		curIP := s.currentEgressIP(ctx)
-		s.markBad(ctx)
-		s.log.Warn("ozon: FAB block / stale ETC",
+		s.log.Warn("ozon: FAB block",
 			"status", resp.StatusCode, "id", id, "mode", s.mode,
-			"minted_ip", mintedIP, "current_ip", curIP,
-			"ip_rotated", mintedIP != "" && curIP != "" && mintedIP != curIP,
+			"current_ip", s.currentEgressIP(ctx),
 			"incident", incident, "body", snippet(body, 300))
 		return nil, ErrMarketplaceBlocked
 	}
@@ -245,7 +212,7 @@ func (s *OzonScraper) Scrape(ctx context.Context, url string) (*Result, error) {
 	if res.ImageURL == "" {
 		names, gallery := ozonImageDiag(body)
 		s.log.Warn("ozon: image not found in widgetStates",
-			"name", res.Name, "widgets", names, "gallery", snippet([]byte(gallery), 2000))
+			"name", res.Name, "widgets", names, "gallery", snippet([]byte(gallery), 600))
 	}
 	return res, nil
 }
@@ -335,25 +302,6 @@ func snippet(b []byte, n int) string {
 	return s
 }
 
-// token отдаёт cookie+UA для запроса. Путь B (account): cookie из аккаунт-токенов.
-// Путь ETC: свежий слот майнера (+ IP, на котором он добыт).
-func (s *OzonScraper) token(ctx context.Context) (cookie, ua, mintedIP string, err error) {
-	if s.accountCookie != "" {
-		return s.accountCookie, ozonAppUA, "", nil
-	}
-	if s.rc == nil {
-		return "", "", "", fmt.Errorf("redis unavailable")
-	}
-	h, err := s.rc.HGetAll(ctx, s.slotKey).Result()
-	if err != nil {
-		return "", "", "", err
-	}
-	if h["status"] != "ok" || h["cookie"] == "" {
-		return "", "", "", fmt.Errorf("no healthy ozon ETC")
-	}
-	return h["cookie"], h["ua"], h["ip"], nil
-}
-
 // currentEgressIP узнаёт текущий exit-IP прокси (через тот же tls-client) —
 // только для диагностики ротации на FAB-блоке.
 func (s *OzonScraper) currentEgressIP(ctx context.Context) string {
@@ -374,20 +322,6 @@ func (s *OzonScraper) currentEgressIP(ctx context.Context) string {
 	return r.IP
 }
 
-// markBad помечает слот битым — майнер перевыдаст ETC на следующем цикле.
-// В account-режиме слота нет — ничего не делаем.
-func (s *OzonScraper) markBad(ctx context.Context) {
-	if s.accountCookie != "" || s.rc == nil {
-		return
-	}
-	if err := s.rc.HSet(ctx, s.slotKey,
-		"status", "broken",
-		"broken_at", time.Now().Unix(),
-	).Err(); err != nil {
-		s.log.Warn("ozon: mark slot broken failed", "err", err)
-	}
-}
-
 func bytesHasFAB(b []byte) bool {
 	return strings.Contains(string(b), "incidentId") || strings.Contains(string(b), "fab_")
 }
@@ -395,18 +329,14 @@ func bytesHasFAB(b []byte) bool {
 // Ловит и подтипы (fab_chlg_/fab_cp_/fab_nmk_), и общий формат (fab_<timestamp>_).
 var fabIncidentRe = regexp.MustCompile(`fab_[A-Za-z0-9]+_[A-Za-z0-9]+`)
 
-const ozonDefaultUA = "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 " +
-	"(KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
-
 // ── Разбор widgetStates ──────────────────────────────────────────────────────
 //
 // Ответ entrypoint-api: {"widgetStates": {"<widgetName>-<hash>": "<json-строка>"}}.
-// Цена/название/галерея лежат в виджетах с устойчивыми префиксами имён:
-//   webPrice*          → {"price":"1 299 ₽","cardPrice":"1 199 ₽","originalPrice":"2 000 ₽"}
-//   webProductHeading* → {"title":"..."}
-//   webGallery*        → {"images":[{"src":"https://..."}],"coverImage":"https://..."}
-// Префиксы стабильны у Ozon много лет; точные поля сверим по первому живому 200
-// (см. OZON_VALIDATE_PRODUCT в ozon-miner) и при необходимости подправим.
+// Цена/название/галерея лежат в виджетах (имена нестабильны между web/mobile,
+// полагаемся на содержимое — см. extractOzonPrice/Name/Image):
+//   price* / webPrice* → price.price[] из {text,textStyle} (mobile) или плоско (web)
+//   navTitle* / webProductHeading* → {"title":"..."}
+//   galleryPreview* / webGallery*  → URL фото на ir.ozone.ru/.../multimedia-…
 
 type ozonEnvelope struct {
 	WidgetStates map[string]string `json:"widgetStates"`
@@ -428,6 +358,10 @@ func parseOzonWidgets(body []byte) (*Result, error) {
 	}
 
 	if res.Price == 0 {
+		// 18+ гейт: цены нет, потому что Ozon прячет товар за подтверждением возраста.
+		if isOzonAgeGated(env.WidgetStates) {
+			return nil, ErrAgeRestricted
+		}
 		// Диагностика на случай неудачи: имена виджетов + сырой JSON виджета с ₽.
 		keys := make([]string, 0, len(env.WidgetStates))
 		var priceRaw, priceKey string
@@ -439,12 +373,34 @@ func parseOzonWidgets(body []byte) (*Result, error) {
 		}
 		sort.Strings(keys)
 		return nil, fmt.Errorf("%w: price not found; widgets=%v; priceKey=%s; priceRaw=%s",
-			ErrProductNotFound, keys, priceKey, snippet([]byte(priceRaw), 2500))
+			ErrProductNotFound, keys, priceKey, snippet([]byte(priceRaw), 700))
 	}
 	if res.Name == "" {
 		res.Name = "Товар Ozon"
 	}
 	return res, nil
+}
+
+// isOzonAgeGated эвристически распознаёт возрастной гейт 18+ (нож/алкоголь): когда
+// аккаунт не подтвердил 18+, Ozon вместо цены отдаёт виджет/текст подтверждения
+// возраста. Маркеры best-effort (точную сигнатуру 18+-ответа вживую не снимали).
+func isOzonAgeGated(ws map[string]string) bool {
+	for k, v := range ws {
+		lk := strings.ToLower(k)
+		if strings.Contains(lk, "adult") || strings.Contains(lk, "ageverif") ||
+			strings.Contains(lk, "age_verif") {
+			return true
+		}
+		lv := strings.ToLower(v)
+		if strings.Contains(lv, "adultmodal") ||
+			strings.Contains(lv, "для взрослых") ||
+			strings.Contains(lv, "вам есть 18") ||
+			strings.Contains(lv, "вам уже есть 18") ||
+			strings.Contains(lv, "подтвердите возраст") {
+			return true
+		}
+	}
+	return false
 }
 
 // candidateWidgets возвращает значения виджетов в порядке приоритета: сперва с

@@ -41,4 +41,8 @@ var (
 	ErrProductNotFound    = errors.New("product not found")
 	ErrMarketplaceBlocked = errors.New("marketplace blocked the request")
 	ErrNotImplemented     = errors.New("marketplace not implemented yet")
+	// ErrAgeRestricted — товар скрыт за возрастным гейтом 18+ (Ozon: нож, алкоголь
+	// и т.п.). В widgetStates нет цены. Лечится подтверждением 18+ в настройках
+	// аккаунта, под которым ходит скрейпер.
+	ErrAgeRestricted = errors.New("product is age-restricted (18+)")
 )

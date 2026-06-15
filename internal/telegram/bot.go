@@ -547,6 +547,10 @@ func (b *Bot) doTrack(ctx context.Context, chatID int64, rawURL string, user *do
 
 		msg := "❌ Не удалось получить данные о товаре. Попробуй позже."
 		switch {
+		case errors.Is(err, scraper.ErrAgeRestricted):
+			// 18+ товар: цена скрыта за возрастным гейтом Ozon — понятное сообщение
+			// вместо «не удалось».
+			msg = "🔞 Это товар <b>18+</b>. Ozon прячет его цену за подтверждением возраста — пока не могу отслеживать такие товары."
 		case s.Marketplace() == scraper.MarketplaceOzon &&
 			(errors.Is(err, scraper.ErrNotImplemented) || errors.Is(err, scraper.ErrMarketplaceBlocked)):
 			// Заглушка: Ozon ещё в разработке (антибот/прокси). Не пугаем «ошибкой» —

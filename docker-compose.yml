@@ -181,13 +181,12 @@ services:
       YOOKASSA_RETURN_URL: "${YOOKASSA_RETURN_URL:-https://t.me/TryBerryBot}"
       # Ставка НДС в чеке 54-ФЗ. Самозанятый (НПД) → 1 = «без НДС».
       YOOKASSA_VAT_CODE: "${YOOKASSA_VAT_CODE:-1}"
-      # Ozon: бот при /track скрейпит сразу → нужен тот же мобильный прокси,
-      # что у scraper/ozon-miner (tls-client ходит через него напрямую, мимо
-      # HTTPS_PROXY). ETC берётся из Redis (ozon:etc:pool:0).
+      # Ozon: бот при /track скрейпит сразу → нужен тот же мобильный РФ-прокси,
+      # что у scraper (tls-client ходит через него напрямую, мимо HTTPS_PROXY).
       OZON_PROXY_URL: "${OZON_PROXY_URL:-}"
       OZON_API_MODE: "${OZON_API_MODE:-mobile}"
-      # Путь B (аккаунт-токены): если заданы — Ozon ходит под залогиненной
-      # сессией без ETC-майнера. Секреты — в .env, в логи не пишутся.
+      # Путь B (аккаунт-токены): Ozon ходит под залогиненной аккаунт-сессией.
+      # Секреты — в .env, в логи не пишутся (только cookie_len).
       OZON_ACCESS_TOKEN: "${OZON_ACCESS_TOKEN:-}"
       OZON_REFRESH_TOKEN: "${OZON_REFRESH_TOKEN:-}"
       # Готовая cookie-строка из приложения (HTTP Toolkit) — приоритетнее токенов.
@@ -224,8 +223,8 @@ services:
       TELEGRAM_BOT_TOKEN: "${TELEGRAM_BOT_TOKEN}"
       SCRAPER_RATE_LIMIT_RPS: "5"
       SCRAPER_RATE_LIMIT_RPS_OZON: "1"
-      # Мобильный РФ-прокси Ozon (тот же, что у ozon-miner): ETC привязан к IP,
-      # майнер и скрейпер обязаны ходить через один выход. Секрет — в .env.
+      # Мобильный РФ-прокси Ozon (путь B: аккаунт-сессия проходит FAB через
+      # доверенный IP). Sticky/ротация 0. Секрет — в .env.
       OZON_PROXY_URL: "${OZON_PROXY_URL:-}"
       # Эндпоинт Ozon: mobile (composer-api.bx + okhttp) | web (entrypoint-api.bx).
       OZON_API_MODE: "${OZON_API_MODE:-mobile}"
@@ -415,38 +414,6 @@ services:
       labels:
         logging: "promtail"
         service: "token-miner-reseller"
-
-  # ── Ozon ETC-майнер ────────────────────────────────────────────────────────
-  # Headful Chromium (Patchright) в Xvfb через мобильный РФ-прокси решает FAB-
-  # челлендж Ozon в браузере и кладёт cookie __Secure-ETC в Redis (ozon:etc:pool:0).
-  # Go-скрейпер (scraper) переиспользует cookie через ТОТ ЖЕ прокси. Пул = 1 слот
-  # (один sticky-IP). Прокси — секрет, держим в .env (OZON_PROXY_URL).
-  ozon-miner:
-      build:
-        context: ./ozon-miner
-        dockerfile: Dockerfile
-      container_name: pt_ozon_miner
-      init: true
-      environment:
-        REDIS_URL: "redis://redis:6379"
-        OZON_POOL_SIZE: "1"
-        OZON_PROXY_URL: "${OZON_PROXY_URL:-}"
-        OZON_WARMUP_URL: "https://www.ozon.ru/"
-        OZON_VALIDATE_PRODUCT: "${OZON_VALIDATE_PRODUCT:-}"
-        MINE_CHECK_INTERVAL_MINUTES: "5"
-        MINE_MAX_AGE_HOURS: "6"
-        MINE_RETRY_MINUTES: "5"
-        MINE_MAX_RELOADS: "3"
-        MINE_TIMEOUT_SECONDS: "150"
-        HEADLESS: "false"
-        LOG_LEVEL: "INFO"
-      shm_size: "1gb"
-      depends_on:
-        redis:
-          condition: service_healthy
-      labels:
-        logging: "promtail"
-        service: "ozon-miner"
 
   scheduler:
       build:
