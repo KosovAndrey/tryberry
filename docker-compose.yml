@@ -185,6 +185,8 @@ services:
       # что у scraper (tls-client ходит через него напрямую, мимо HTTPS_PROXY).
       OZON_PROXY_URL: "${OZON_PROXY_URL:-}"
       OZON_API_MODE: "${OZON_API_MODE:-mobile}"
+      # browser-режим: тот же сайдкар-пул, что у scraper.
+      OZON_BROWSER_URL: "${OZON_BROWSER_URL:-http://ozon-miner:8080}"
       # Путь B (аккаунт-токены): Ozon ходит под залогиненной аккаунт-сессией.
       # Секреты — в .env, в логи не пишутся (только cookie_len).
       OZON_ACCESS_TOKEN: "${OZON_ACCESS_TOKEN:-}"
@@ -226,8 +228,11 @@ services:
       # Мобильный РФ-прокси Ozon (путь B: аккаунт-сессия проходит FAB через
       # доверенный IP). Sticky/ротация 0. Секрет — в .env.
       OZON_PROXY_URL: "${OZON_PROXY_URL:-}"
-      # Эндпоинт Ozon: mobile (composer-api.bx + okhttp) | web (entrypoint-api.bx).
+      # Эндпоинт Ozon: mobile (composer-api.bx) | web (entrypoint-api.bx) |
+      # browser (через сайдкар-пул ozon-miner — проходит FAB живой сессией).
       OZON_API_MODE: "${OZON_API_MODE:-mobile}"
+      # browser-режим: URL сайдкара пула дорожек (см. сервис ozon-miner).
+      OZON_BROWSER_URL: "${OZON_BROWSER_URL:-http://ozon-miner:8080}"
       # Путь B (аккаунт-токены) — секреты из .env, в логи не пишутся.
       OZON_ACCESS_TOKEN: "${OZON_ACCESS_TOKEN:-}"
       OZON_REFRESH_TOKEN: "${OZON_REFRESH_TOKEN:-}"
@@ -421,6 +426,39 @@ services:
       labels:
         logging: "promtail"
         service: "token-miner-reseller"
+
+  # ── Ozon miner: браузер-как-транспорт, пул дорожек ─────────────────────────
+  # Долгоживущий сервис: на каждую дорожку — залогиненный Chromium через свой
+  # мобильный прокси и свою аккаунт-cookie. Проходит FAB живой сессией и сам
+  # рефрешит токен. Go-скрейпер (OZON_API_MODE=browser, OZON_BROWSER_URL) зовёт
+  # GET /scrape?id=… по внутренней сети — портов наружу нет.
+  # Масштабирование: поднять OZON_POOL_SIZE и задать OZON_LANE_<i>_PROXY/_COOKIE
+  # (по IP+аккаунту на дорожку). Старт N=1: дорожка 0 фолбэчит на
+  # OZON_PROXY_URL / OZON_COOKIE.
+  ozon-miner:
+      build:
+        context: ./ozon-miner
+        dockerfile: Dockerfile
+      container_name: pt_ozon_miner
+      init: true
+      environment:
+        OZON_MINER_PORT: "8080"
+        OZON_POOL_SIZE: "${OZON_POOL_SIZE:-1}"
+        # Дорожка 0 (legacy-фолбэк). Доп. дорожки — OZON_LANE_1_PROXY/_COOKIE и т.д.
+        OZON_PROXY_URL: "${OZON_PROXY_URL:-}"
+        OZON_COOKIE: "${OZON_COOKIE:-}"
+        OZON_LANE_1_PROXY: "${OZON_LANE_1_PROXY:-}"
+        OZON_LANE_1_COOKIE: "${OZON_LANE_1_COOKIE:-}"
+        OZON_LANE_2_PROXY: "${OZON_LANE_2_PROXY:-}"
+        OZON_LANE_2_COOKIE: "${OZON_LANE_2_COOKIE:-}"
+        # Человекоподобный интервал между запросами одной дорожки (тюним по спайку).
+        OZON_LANE_MIN_INTERVAL_MS: "${OZON_LANE_MIN_INTERVAL_MS:-1500}"
+        HEADLESS: "false"
+        LOG_LEVEL: "INFO"
+      shm_size: "1gb"
+      labels:
+        logging: "promtail"
+        service: "ozon-miner"
 
   scheduler:
       build:

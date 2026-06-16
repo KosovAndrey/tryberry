@@ -17,28 +17,73 @@ mobile-связку `cookie + статичный x-o3-fp + рандомный ga
 
 Гоняется в уже собранном образе `pt_token_miner` (Patchright+браузеры+Xvfb уже там):
 
+Проба **самодостаточна**: сама поднимает Xvfb и сама знает реальный товар по
+умолчанию — команда тривиальная, без возни с дисплеем. Гоняется в готовом образе
+`pt_token_miner` (Patchright+браузеры уже там), сборка нового образа не нужна.
+
+Перед запуском впиши в `.env` **свежую cookie залогиненного аккаунта** (`OZON_COOKIE=`)
+и мобильный прокси (`OZON_PROXY_URL=`) — это и есть метод друга.
+
 ```bash
-# имя сети уточни: docker network ls | grep tryberry
-docker run --rm --network tryberrybot_default \
+cd ~/projects/tryberrybot
+set -a; . ./.env; set +a                                  # подтянуть OZON_COOKIE/OZON_PROXY_URL
+NET=$(docker network ls --format '{{.Name}}' | grep -m1 tryberry)
+
+docker run --rm --network "$NET" \
   -v "$PWD/ozon-miner/probe.py:/app/probe.py" \
-  -e OZON_PROBE_URL="https://www.ozon.ru/product/mixit-...-1889984997/" \
+  -e OZON_COOKIE="$OZON_COOKIE" \
   -e OZON_MINER_PROXY_URL="$OZON_PROXY_URL" \
-  -e HEADLESS=false \
-  --entrypoint sh pt_token_miner \
-  -c 'Xvfb :99 -screen 0 1920x1080x24 -nolisten tcp -ac >/tmp/x.log 2>&1 & \
-      sleep 2; DISPLAY=:99 python /app/probe.py'
+  --entrypoint python pt_token_miner /app/probe.py
 ```
 
-`OZON_MINER_PROXY_URL` бери из `.env` (значение `OZON_PROXY_URL`). Пустой → прямой
-заход, полезно для сравнения «прокси vs без».
+`OZON_PROBE_URL` можно не задавать — дефолт это реальный товар (mixit, не 18+). Хочешь
+другой — добавь `-e OZON_PROBE_URL="https://www.ozon.ru/product/...-<id>/"` с ПОЛНЫМ URL.
 
 ### Трактовка вердикта (exit code)
 
-| Вердикт | Что значит | Следующий шаг |
+| Код | Вердикт | Следующий шаг |
 |---|---|---|
-| ✅ `0` | аноним проходит FAB и видит цену | строим майнер **без** логина; Go → web-режим, читает cookie из Redis |
-| ❌ `2` | FAB душит даже реальный браузер через прокси | прокси спалён/датацентр → берём другой RU-резидентный/мобильный |
-| ⚠️ `3` | FAB прошли, но цены нет анонимно | нужен залогиненный профиль (региональная цена) — майнер с persistent-контекстом |
+| ✅ `0` | метод друга работает (200 + widgetStates + ₽) | строим/деплоим пул (`server.py`), Go → `OZON_API_MODE=browser` |
+| ❌ `2` | FAB-инцидент `nmk` = жёсткий бан egress (датацентр/спалённый IP) | сменить мобильный IP ссылкой-ротацией, повторить |
+| ⚠️ `3` | заход анонимный (нет `__Secure-access-token`) | подставить cookie залогиненного аккаунта |
+| ❌ `4` | залогинен, но FAB-челлендж | свежая cookie из приложения / сильнее анти-детект; иначе fallback на платный API |
 
-После зелёной пробы — фаза 2 (пул `ozon:pool:{i}`, клон `miner.py`) и фаза 3
-(Go-скрейпер читает куку из Redis + `OZON_API_MODE=web`).
+После зелёной пробы (код `0`) — фаза 2 (ниже).
+
+## Фаза 2: `server.py` — браузер-как-транспорт, ПУЛ ДОРОЖЕК
+
+Долгоживущий сервис (`pt_ozon_miner`). На каждую **дорожку** (lane) — отдельный
+залогиненный Chromium через свой мобильный прокси и свою аккаунт-cookie. Живая
+сессия проходит FAB и сама рефрешит access-token. Цену достаём **методом друга**:
+in-page fetch к `entrypoint-api` изнутри доверенного контекста (как в `probe.py`).
+
+Go-скрейпер в browser-режиме (`OZON_API_MODE=browser`, `OZON_BROWSER_URL=
+http://ozon-miner:8080`) зовёт `GET /scrape?id=<product_id>` → сервис маршрутизирует
+на дорожку (аффинити по id) → отдаёт сырой `widgetStates`, зеркаля upstream-статус
+(в т.ч. 403 на FAB). Go разбирает тем же `parseOzonWidgets`. Есть `GET /healthz`.
+
+### Масштабирование
+
+Узкое место — **не браузер, а связка {мобильный IP + аккаунт}**: FAB бьёт по
+репутации IP и частоте с него. Растём, добавляя дорожки (по IP+аккаунту):
+
+```env
+OZON_POOL_SIZE=3
+OZON_LANE_0_PROXY=http://user:pass@host0:port   # дорожка 0 фолбэчит на OZON_PROXY_URL
+OZON_LANE_0_COOKIE=...                           # ... и OZON_COOKIE
+OZON_LANE_1_PROXY=http://user:pass@host1:port   OZON_LANE_1_COOKIE=...
+OZON_LANE_2_PROXY=http://user:pass@host2:port   OZON_LANE_2_COOKIE=...
+OZON_LANE_MIN_INTERVAL_MS=1500                   # человекоподобный интервал/дорожку
+```
+
+Одна дорожка держит ≈ низкие сотни товаров при 20-мин кадансе (точную ёмкость даёт
+спайк «сколько req/мин до челленджа»). Стоимость растёт линейно по дорожкам
+(прокси+аккаунт), внутри дорожки — flat. Дешевле новых дорожек — растягивать каданс
+низкоприоритетных товаров (`OZON_MIN_INTERVAL_MINUTES`).
+
+### Статус скелета (TODO до прода)
+
+- [ ] прогнать `probe.py` с залогиненной cookie → подтвердить, что метод друга даёт 200;
+- [ ] уточнить маркер «сессия жива» в `Lane.warm()` (сейчас best-effort по `_FAB_RE`);
+- [ ] замерить TTL FAB-стейта → перепрогрев/ротация cookie дорожки по таймеру;
+- [ ] метрики/алерты здоровья пула (healthy lanes) — по образцу `wb_tokens`.

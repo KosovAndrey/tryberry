@@ -1,0 +1,7 @@
+# Patchright — стелс-форк Playwright (только Chromium). Браузер ставится в
+# Dockerfile командой `patchright install chromium`. Headful Chromium в Xvfb
+# проходит FAB живой сессией. aiohttp — лёгкий async HTTP-сервер сайдкара
+# (GET /scrape, /healthz). Redis тут НЕ нужен: browser-как-транспорт отдаёт
+# widgetStates прямо по HTTP, без пула токенов в Redis.
+patchright
+aiohttp>=3,<4

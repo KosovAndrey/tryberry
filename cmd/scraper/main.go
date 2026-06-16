@@ -130,6 +130,7 @@ func run(log *slog.Logger) error {
 			AccessToken:  getEnv("OZON_ACCESS_TOKEN", ""),
 			RefreshToken: getEnv("OZON_REFRESH_TOKEN", ""),
 			Cookie:       getEnv("OZON_COOKIE", ""),
+			BrowserURL:   getEnv("OZON_BROWSER_URL", ""),
 			Logger:       log,
 		}),
 		scraper.NewYandexMarketScraper(rpsYandex),

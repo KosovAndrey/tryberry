@@ -8,11 +8,13 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"net/http"
 	"net/url"
 	"regexp"
 	"sort"
 	"strconv"
 	"strings"
+	"time"
 
 	fhttp "github.com/bogdanfinn/fhttp"
 	tls_client "github.com/bogdanfinn/tls-client"
@@ -26,6 +28,11 @@ import (
 const (
 	ozonModeMobile = "mobile"
 	ozonModeWeb    = "web"
+	// browser = браузер-как-транспорт: запрос к storefront-API делает живой
+	// залогиненный Chromium (сайдкар ozon-miner) через мобильный прокси —
+	// он проходит FAB и сам рефрешит токен. Go только зовёт сайдкар по HTTP и
+	// парсит тот же widgetStates. Масштабируется пулом дорожек на стороне сайдкара.
+	ozonModeBrowser = "browser"
 
 	// Заголовки мобильного приложения (из снятого живого 200-запроса).
 	ozonAppUA   = "ozonapp_android/19.20.0+2684"
@@ -45,14 +52,19 @@ const (
 // (bogdanfinn/tls-client, профиль Okhttp4Android13) + RU-мобильный прокси →
 // доверенная сессия проходит FAB. Браузер не нужен вообще.
 type OzonScraper struct {
-	client     tls_client.HttpClient // nil → режим только Matches (бот/api)
+	client     tls_client.HttpClient // nil → browser-режим или только Matches
 	limiter    *rate.Limiter
 	log        *slog.Logger
-	mode       string // ozonModeMobile | ozonModeWeb
+	mode       string // ozonModeMobile | ozonModeWeb | ozonModeBrowser
 	configured bool
 
-	// cookie аккаунт-сессии (путь B). "" → скрейпер не сконфигурён (только Matches).
+	// cookie аккаунт-сессии (путь B, mobile/web). "" → не сконфигурён (только Matches).
 	accountCookie string
+
+	// browser-режим: базовый URL сайдкара ozon-miner (http://ozon-miner:PORT) и
+	// http-клиент для походов к нему. Сам сайдкар держит пул залогиненных дорожек.
+	browserURL    string
+	browserClient *http.Client
 }
 
 // OzonOptions — конфигурация рабочего скрейпера. Нулевое значение даёт
@@ -74,6 +86,11 @@ type OzonOptions struct {
 	// HTTP Toolkit): самый надёжный вариант, несёт все куки аккаунт-сессии
 	// (access/refresh-token, __Secure-user-id, abt_data). Приоритетнее токенов.
 	Cookie string
+
+	// BrowserURL — базовый URL сайдкара ozon-miner (например http://ozon-miner:8080).
+	// Задан вместе с Mode="browser" → скрейпер ходит через живой браузер-пул, а не
+	// tls-client. Cookie/прокси в этом режиме не нужны (их держат дорожки сайдкара).
+	BrowserURL string
 }
 
 func NewOzonScraper(opts OzonOptions) *OzonScraper {
@@ -86,7 +103,7 @@ func NewOzonScraper(opts OzonOptions) *OzonScraper {
 		rps = 1
 	}
 	mode := opts.Mode
-	if mode != ozonModeWeb {
+	if mode != ozonModeWeb && mode != ozonModeBrowser {
 		mode = ozonModeMobile
 	}
 
@@ -94,6 +111,22 @@ func NewOzonScraper(opts OzonOptions) *OzonScraper {
 		limiter: rate.NewLimiter(rate.Limit(rps), 1),
 		log:     log,
 		mode:    mode,
+	}
+
+	// browser-режим: транспорт — сайдкар ozon-miner (пул залогиненных дорожек).
+	// Не нужны ни tls-client, ни cookie/прокси — всё это держат дорожки сайдкара.
+	if mode == ozonModeBrowser {
+		if opts.BrowserURL == "" {
+			log.Error("ozon: mode=browser, но OZON_BROWSER_URL пуст — скрейпер disabled")
+			return s
+		}
+		s.browserURL = strings.TrimRight(opts.BrowserURL, "/")
+		// Таймаут с запасом: дорожка может прогревать сессию/решать FAB на холодном старте.
+		s.browserClient = &http.Client{Timeout: 60 * time.Second}
+		s.configured = true
+		log.Info("ozon scraper configured", "mode", mode, "transport", "browser-pool",
+			"sidecar", s.browserURL)
+		return s
 	}
 
 	// Путь B: готовая cookie-строка или аккаунт-токены → ходим под залогиненной
@@ -174,39 +207,31 @@ func (s *OzonScraper) Scrape(ctx context.Context, url string) (*Result, error) {
 		return nil, err
 	}
 
-	req, err := s.buildRequest(ctx, id, s.accountCookie, ozonAppUA)
+	statusCode, body, err := s.fetch(ctx, id)
 	if err != nil {
 		return nil, err
 	}
 
-	resp, err := s.client.Do(req)
-	if err != nil {
-		return nil, fmt.Errorf("ozon request: %w", err)
-	}
-	defer resp.Body.Close()
-
-	body, _ := io.ReadAll(io.LimitReader(resp.Body, 4<<20))
-
 	// FAB-блок: incident + тело подскажут причину (fab_chlg_ = сессия/токен не
 	// признаны; иное = признаны, но запрос режут — обычно репутация IP). current_ip
 	// показывает, какой egress прокси заблокирован.
-	if resp.StatusCode == 403 || bytesHasFAB(body) {
+	if statusCode == 403 || bytesHasFAB(body) {
 		incident := fabIncidentRe.FindString(string(body))
 		s.log.Warn("ozon: FAB block",
-			"status", resp.StatusCode, "id", id, "mode", s.mode,
+			"status", statusCode, "id", id, "mode", s.mode,
 			"current_ip", s.currentEgressIP(ctx),
 			"incident", incident, "body", snippet(body, 300))
 		return nil, ErrMarketplaceBlocked
 	}
-	if resp.StatusCode == 401 {
+	if statusCode == 401 {
 		s.log.Warn("ozon: auth expired (401) — нужен свежий cookie/рефреш токена", "id", id)
 		return nil, ErrAuthExpired
 	}
-	if resp.StatusCode == 404 {
+	if statusCode == 404 {
 		return nil, ErrProductNotFound
 	}
-	if resp.StatusCode != 200 {
-		return nil, fmt.Errorf("ozon status %d", resp.StatusCode)
+	if statusCode != 200 {
+		return nil, fmt.Errorf("ozon status %d", statusCode)
 	}
 
 	res, err := parseOzonWidgets(body)
@@ -219,6 +244,57 @@ func (s *OzonScraper) Scrape(ctx context.Context, url string) (*Result, error) {
 			"name", res.Name, "widgets", names, "gallery", snippet([]byte(gallery), 600))
 	}
 	return res, nil
+}
+
+// fetch выполняет запрос к storefront-API и возвращает (HTTP-статус, тело). Ветка
+// по режиму: browser → через сайдкар-пул (живой Chromium), иначе → tls-client
+// (mobile/web). Дальше Scrape единообразно разбирает статус/тело независимо от
+// транспорта.
+func (s *OzonScraper) fetch(ctx context.Context, id string) (int, []byte, error) {
+	if s.mode == ozonModeBrowser {
+		return s.fetchViaBrowser(ctx, id)
+	}
+	return s.fetchViaTLS(ctx, id)
+}
+
+// fetchViaTLS — путь B (mobile/web): tls-client под аккаунт-cookie через мобильный
+// прокси.
+func (s *OzonScraper) fetchViaTLS(ctx context.Context, id string) (int, []byte, error) {
+	req, err := s.buildRequest(ctx, id, s.accountCookie, ozonAppUA)
+	if err != nil {
+		return 0, nil, err
+	}
+	resp, err := s.client.Do(req)
+	if err != nil {
+		return 0, nil, fmt.Errorf("ozon request: %w", err)
+	}
+	defer resp.Body.Close()
+	body, _ := io.ReadAll(io.LimitReader(resp.Body, 4<<20))
+	return resp.StatusCode, body, nil
+}
+
+// fetchViaBrowser — browser-режим: просим сайдкар ozon-miner сделать запрос к
+// storefront-API из живой залогиненной сессии (она проходит FAB и сама рефрешит
+// токен). Сайдкар возвращает сырое тело widgetStates и зеркалит upstream-статус
+// (включая 403 при FAB), поэтому дальнейшая обработка в Scrape — общая.
+func (s *OzonScraper) fetchViaBrowser(ctx context.Context, id string) (int, []byte, error) {
+	api := s.browserURL + "/scrape?id=" + url.QueryEscape(id)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, api, nil)
+	if err != nil {
+		return 0, nil, err
+	}
+	resp, err := s.browserClient.Do(req)
+	if err != nil {
+		return 0, nil, fmt.Errorf("ozon browser sidecar: %w", err)
+	}
+	defer resp.Body.Close()
+	body, _ := io.ReadAll(io.LimitReader(resp.Body, 4<<20))
+	// 502/504 от сайдкара = его внутренняя беда (нет живых дорожек/таймаут), не FAB.
+	if resp.StatusCode == http.StatusBadGateway || resp.StatusCode == http.StatusGatewayTimeout {
+		return 0, nil, fmt.Errorf("ozon browser sidecar unavailable: status %d: %s",
+			resp.StatusCode, snippet(body, 200))
+	}
+	return resp.StatusCode, body, nil
 }
 
 // buildRequest собирает запрос к storefront-API по режиму:
@@ -309,6 +385,11 @@ func snippet(b []byte, n int) string {
 // currentEgressIP узнаёт текущий exit-IP прокси (через тот же tls-client) —
 // только для диагностики ротации на FAB-блоке.
 func (s *OzonScraper) currentEgressIP(ctx context.Context) string {
+	// В browser-режиме tls-client нет: egress держат дорожки сайдкара (он сам
+	// логирует свой exit-IP). Диагностику egress отсюда пропускаем.
+	if s.client == nil {
+		return ""
+	}
 	req, err := fhttp.NewRequestWithContext(ctx, fhttp.MethodGet, "https://api.ipify.org?format=json", nil)
 	if err != nil {
 		return ""
