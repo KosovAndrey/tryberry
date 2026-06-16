@@ -103,15 +103,34 @@ def _parse_proxy(url: str):
 
 
 def _cookie_jar(header: str):
-    """'k=v; k2=v2' → формат Playwright add_cookies (домен .ozon.ru)."""
+    """'k=v; k2=v2' → формат Playwright add_cookies (домен .ozon.ru). secure=True
+    ОБЯЗАТЕЛЕН: иначе Chrome отвергает всю пачку из-за куки __Secure-/__Host-."""
     out = []
     for part in header.split(";"):
         if "=" in part:
             k, v = part.strip().split("=", 1)
             if k.strip():
                 out.append({"name": k.strip(), "value": v.strip(),
-                            "domain": ".ozon.ru", "path": "/"})
+                            "domain": ".ozon.ru", "path": "/", "secure": True})
     return out
+
+
+async def _add_cookies_safe(context, cookies) -> int:
+    """Добавить куки устойчиво: пачкой, при отказе — по-одной, пропуская кривые
+    (в строке из приложения бывают не-cookie поля вроде x-o3-* со скобками)."""
+    try:
+        await context.add_cookies(cookies)
+        return len(cookies)
+    except Exception:  # noqa: BLE001
+        ok = 0
+        for c in cookies:
+            try:
+                await context.add_cookies([c])
+                ok += 1
+            except Exception as e:  # noqa: BLE001
+                log.warning("дорожка: пропускаю cookie %r: %s",
+                            c["name"], str(e).splitlines()[0])
+        return ok
 
 
 def _looks_blocked(status: int, body: str) -> bool:
@@ -161,7 +180,7 @@ class Lane:
         self._browser = await self._pw.chromium.launch(**launch)
         self._context = await self._browser.new_context(
             locale=LOCALE, timezone_id=TIMEZONE, viewport={"width": 1366, "height": 768})
-        await self._context.add_cookies(_cookie_jar(self.cookie))
+        await _add_cookies_safe(self._context, _cookie_jar(self.cookie))
         self._page = await self._context.new_page()
         if BLOCK_RESOURCES:
             async def _block(route):

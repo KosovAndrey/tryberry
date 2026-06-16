@@ -125,7 +125,8 @@ def parse_proxy(url: str):
 
 def cookie_jar(header: str):
     """'k=v; k2=v2' → формат Playwright add_cookies на домен .ozon.ru
-    (покрывает www. и api. поддомены)."""
+    (покрывает www. и api. поддомены). secure=True ОБЯЗАТЕЛЕН: иначе Chrome
+    отвергает всю пачку из-за куки с префиксом __Secure-/__Host-."""
     out = []
     for part in header.split(";"):
         if "=" not in part:
@@ -133,8 +134,25 @@ def cookie_jar(header: str):
         k, v = part.strip().split("=", 1)
         if k.strip():
             out.append({"name": k.strip(), "value": v.strip(),
-                        "domain": ".ozon.ru", "path": "/"})
+                        "domain": ".ozon.ru", "path": "/", "secure": True})
     return out
+
+
+def add_cookies_safe(context, cookies) -> int:
+    """Добавить куки устойчиво: сперва пачкой, при отказе — по-одной, пропуская
+    кривые (в строке из приложения бывают не-cookie поля вроде x-o3-* со скобками)."""
+    try:
+        context.add_cookies(cookies)
+        return len(cookies)
+    except Exception:  # noqa: BLE001
+        ok = 0
+        for c in cookies:
+            try:
+                context.add_cookies([c])
+                ok += 1
+            except Exception as e:  # noqa: BLE001
+                log.warning("пропускаю cookie %r: %s", c["name"], str(e).splitlines()[0])
+        return ok
 
 
 def product_id(url: str) -> str:
@@ -171,10 +189,9 @@ def probe(pw) -> int:
 
         injected = cookie_jar(OZON_COOKIE)
         logged_in = any(c["name"] == "__Secure-access-token" for c in injected)
-        if injected:
-            context.add_cookies(injected)
-        log.info("прокси=%s | cookie=%d шт (logged_in=%s) | url=%s",
-                 proxy["server"] if proxy else "НЕТ", len(injected), logged_in, PROBE_URL)
+        added = add_cookies_safe(context, injected) if injected else 0
+        log.info("прокси=%s | cookie=%d/%d шт (logged_in=%s) | url=%s",
+                 proxy["server"] if proxy else "НЕТ", added, len(injected), logged_in, PROBE_URL)
         if not logged_in:
             log.warning("в OZON_COOKIE нет __Secure-access-token — это НЕ метод друга "
                         "(аноним FAB режет). Подставь cookie залогиненного аккаунта.")
