@@ -451,8 +451,15 @@ services:
         OZON_LANE_1_COOKIE: "${OZON_LANE_1_COOKIE:-}"
         OZON_LANE_2_PROXY: "${OZON_LANE_2_PROXY:-}"
         OZON_LANE_2_COOKIE: "${OZON_LANE_2_COOKIE:-}"
-        # Человекоподобный интервал между запросами одной дорожки (тюним по спайку).
+        # Человекоподобный интервал между запросами одной дорожки + джиттер.
         OZON_LANE_MIN_INTERVAL_MS: "${OZON_LANE_MIN_INTERVAL_MS:-1500}"
+        OZON_LANE_JITTER: "${OZON_LANE_JITTER:-0.4}"
+        # Периодический re-warm живой сессии (рефреш токена/доверия), мин.
+        OZON_WARM_KEEPALIVE_MINUTES: "${OZON_WARM_KEEPALIVE_MINUTES:-45}"
+        # Ротация IP: switch-ссылка провайдера + период (мин, 0=выкл). Частую
+        # можно, но каждая ротация = пере-прогрев (заново FAB на новом IP).
+        OZON_PROXY_ROTATE_URL: "${OZON_PROXY_ROTATE_URL:-}"
+        OZON_ROTATE_INTERVAL_MINUTES: "${OZON_ROTATE_INTERVAL_MINUTES:-0}"
         HEADLESS: "false"
         LOG_LEVEL: "INFO"
       shm_size: "1gb"
@@ -472,6 +479,9 @@ services:
         KAFKA_BROKERS: "kafka:29092"
         SCRAPE_INTERVAL_MINUTES: "15"
         OZON_MIN_INTERVAL_MINUTES: "${OZON_MIN_INTERVAL_MINUTES:-20}"
+        # Ozon идёт кадансом тарифа × этот множитель (free 60→120 мин и т.д.);
+        # reseller-планы Ozon не тянут. Антибот не любит частоту.
+        OZON_INTERVAL_MULTIPLIER: "${OZON_INTERVAL_MULTIPLIER:-2}"
         SCHEDULER_TICK_SECONDS: "20"
         SCHEDULER_HEALTH_PORT: "8092"
         OTLP_ENDPOINT: "jaeger:4317"
