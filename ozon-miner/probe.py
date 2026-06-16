@@ -1,82 +1,120 @@
 #!/usr/bin/env python3
 """
-probe.py — спайк-проба гипотезы Ozon-майнера (фаза 1, де-риск перед пулом).
+probe.py — спайк «метода друга» для Ozon (де-риск перед постройкой пула дорожек).
 
-Открывает карточку товара Ozon в реальном Chromium (Patchright, стелс-форк
-Playwright) через ТОТ ЖЕ прокси, что у скрейпера, и отвечает на три вопроса,
-от которых зависит весь дизайн майнера:
+МЕТОД ДРУГА (что именно проверяем):
+  1) поднять РЕАЛЬНЫЙ Chromium (Patchright, стелс-форк) через прод-прокси;
+  2) залогинить его, вложив аккаунт-cookie (OZON_COOKIE) ДО навигации;
+  3) открыть страницу на www.ozon.ru — живая доверенная сессия проходит FAB;
+  4) запросить карточку API-запросом ИЗНУТРИ этой же страницы (in-page fetch):
+     same-origin, с её куками и её JA3, а решённый FAB-челлендж — общий.
+  Куку наружу НЕ отдаём и Go-tls-client НЕ реплеим — в этом вся соль: транспорт и
+  доверие FAB остаются согласованными.
 
-  1) Проходит ли АНОНИМНЫЙ браузер FAB через прод-прокси? (видим 200 на
-     entrypoint-api без fab_/403 → да)
-  2) Видна ли цена без логина? (₽ в ответе/на странице → логин не нужен,
-     майнер можно делать без credentials и SMS-кода)
-  3) Какие куки выдаёт сессия? (есть ли trust-набор abt_data/__Secure-* —
-     именно его реплеит Go-скрейпер)
+Проба ничего не майнит и не пишет — открывает один товар и печатает вердикт с
+кодом возврата (см. таблицу внизу). Это решает «да/нет» перед фазой 2 (пул).
 
-Не пишет в Redis, ничего не майнит — только смотрит и печатает вердикт.
-Запускать в уже собранном образе pt_token_miner (там Patchright+браузеры+Xvfb):
-
-  docker run --rm --network tryberrybot_default \
-    -v "$PWD/ozon-miner/probe.py:/app/probe.py" \
-    -e OZON_PROBE_URL="https://www.ozon.ru/product/...-1889984997/" \
-    -e OZON_MINER_PROXY_URL="$OZON_PROXY_URL" \
-    -e HEADLESS=false \
-    --entrypoint sh pt_token_miner \
-    -c 'Xvfb :99 -screen 0 1920x1080x24 -nolisten tcp -ac >/tmp/x.log 2>&1 & \
-        sleep 2; DISPLAY=:99 python /app/probe.py'
-
-(OZON_MINER_PROXY_URL пусто → ходим напрямую, для сравнения «прокси vs без».)
+Самодостаточна: сама поднимает Xvfb, если дисплея нет. Запуск в готовом образе
+(там уже Patchright+браузеры), БЕЗ сборки нового — команда в README.
 """
 
+import json
 import logging
 import os
-import random
 import re
+import shutil
+import subprocess
 import sys
 import time
-from collections import Counter
 from urllib.parse import unquote, urlparse
 
 from patchright.sync_api import sync_playwright
 from patchright.sync_api import TimeoutError as PWTimeout
 
-PROBE_URL = os.getenv("OZON_PROBE_URL", "").strip()
+# ── Конфиг ───────────────────────────────────────────────────────────────────
+# Реальный товар по умолчанию (не 18+, цена видна) — из боевых логов 15.06.
+DEFAULT_URL = ("https://www.ozon.ru/product/"
+               "mixit-patch-ot-pryshchey-gelevyy-s-kislotami-dlya-problemnoy-"
+               "kozhi-stop-acne-15-ml-1889984997/")
+
+PROBE_URL = os.getenv("OZON_PROBE_URL", "").strip() or DEFAULT_URL
 PROXY_URL = os.getenv("OZON_MINER_PROXY_URL", os.getenv("OZON_PROXY_URL", "")).strip()
-# Аккаунт-кука из приложения (вся cookie-строка с __Secure-access-token). Пусто →
-# анонимный заход (FAB режет — проверено). С кукой проверяем «метод друга»:
-# залогиненный реальный браузер + in-page fetch.
 OZON_COOKIE = os.getenv("OZON_COOKIE", "").strip()
 HEADLESS = os.getenv("HEADLESS", "false").lower() in ("1", "true", "yes")
-BLOCK_RESOURCES = os.getenv("MINER_BLOCK_RESOURCES", "true").lower() in ("1", "true", "yes")
 LOCALE = os.getenv("MINER_LOCALE", "ru-RU")
 TIMEZONE = os.getenv("MINER_TIMEZONE", "Europe/Moscow")
-TIMEOUT_S = float(os.getenv("PROBE_TIMEOUT_SECONDS", "90"))
-MAX_RELOADS = int(os.getenv("PROBE_MAX_RELOADS", "3"))
+NAV_TIMEOUT_S = float(os.getenv("PROBE_NAV_TIMEOUT_SECONDS", "45"))
+SETTLE_S = float(os.getenv("PROBE_SETTLE_SECONDS", "4"))
 LOG_LEVEL = os.getenv("LOG_LEVEL", "INFO").upper()
-
-# Эндпоинты, на которых карточка отдаёт widgetStates (web: entrypoint-api,
-# на части сборок ещё composer-api). Ловим именно их 200 как «FAB пройден».
-API_MARKERS = ("entrypoint-api.bx/page/json", "composer-api.bx/page/json")
-# Куки, на которых держится доверие FAB к веб-сессии (best-effort список —
-# проба и покажет реальный набор, который потом реплеит Go-скрейпер).
-TRUST_COOKIES = ("abt_data", "__Secure-ext_xcid", "__Secure-ab-group",
-                 "__Secure-access-token", "xcid", "ADDRESSBOOKBAR_WEB_CLARIFICATION")
-# Маркеры «стены» FAB/антибота в теле/заголовке (best-effort).
-WALL_MARKERS = ("доступ ограничен", "подтвердите, что вы не робот",
-                "что-то пошло не так", "access denied", "fab_")
 
 logging.basicConfig(level=getattr(logging, LOG_LEVEL, logging.INFO),
                     format="%(asctime)s %(levelname)s %(message)s")
 log = logging.getLogger("ozon-probe")
+
+_ID_RE = re.compile(r"/product/(?:[^/?#]*-)?(\d+)")
+_INCIDENT_RE = re.compile(r'"incidentId":\s*"(fab_[A-Za-z0-9_]+)"')
+
+# In-page fetch — сердце метода друга. credentials:'include' тащит куки сессии;
+# запрос едет тем же JA3, что и прошедший FAB браузер. Возвращаем сырые признаки.
+_FRIEND_FETCH_JS = """
+async (id) => {
+  const url = '/api/entrypoint-api.bx/page/json/v2?url=' +
+              encodeURIComponent('/product/' + id + '/');
+  try {
+    const r = await fetch(url, {
+      headers: {'accept': 'application/json', 'x-requested-with': 'XMLHttpRequest'},
+      credentials: 'include',
+    });
+    const body = await r.text();
+    return {
+      status: r.status,
+      widgets: body.includes('widgetStates'),
+      ruble:   body.includes('\\u20bd'),
+      fab:     body.includes('fab_') || body.includes('incidentId'),
+      len:     body.length,
+      snippet: body.slice(0, 240),
+    };
+  } catch (e) { return {status: -1, error: String(e)}; }
+}
+"""
+
+
+def _display_alive(disp: str) -> bool:
+    """Жив ли X-сервер на дисплее: проверяем unix-сокет /tmp/.X11-unix/X<n>.
+    Переменной DISPLAY недостаточно — образ может её выставлять без живого Xvfb."""
+    num = disp.lstrip(":").split(".")[0]
+    return os.path.exists(f"/tmp/.X11-unix/X{num}")
+
+
+def ensure_display():
+    """Поднять Xvfb, если headful и живого дисплея ещё нет. Делает команду
+    запуска тривиальной (не нужно городить Xvfb в docker-run)."""
+    if HEADLESS:
+        return
+    disp = os.getenv("DISPLAY") or ":99"
+    if _display_alive(disp):
+        os.environ["DISPLAY"] = disp
+        return
+    if not shutil.which("Xvfb"):
+        log.warning("Xvfb не найден, а HEADLESS=false — браузер может не стартовать")
+        return
+    subprocess.Popen(
+        ["Xvfb", disp, "-screen", "0", "1920x1080x24", "-nolisten", "tcp", "-ac"],
+        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    os.environ["DISPLAY"] = disp
+    # ждём появления сокета (до ~5с), не фиксированный sleep
+    for _ in range(25):
+        if _display_alive(disp):
+            break
+        time.sleep(0.2)
+    log.info("поднял Xvfb на %s", disp)
 
 
 def parse_proxy(url: str):
     if not url:
         return None
     u = urlparse(url)
-    server = f"{u.scheme}://{u.hostname}"
-    if u.port:
-        server += f":{u.port}"
+    server = f"{u.scheme}://{u.hostname}" + (f":{u.port}" if u.port else "")
     proxy = {"server": server}
     if u.username:
         proxy["username"] = unquote(u.username)
@@ -85,12 +123,18 @@ def parse_proxy(url: str):
     return proxy
 
 
-def _should_block(rt: str) -> bool:
-    return rt in ("image", "media", "font")
-
-
-_ID_RE = re.compile(r"/product/(?:[^/?#]*-)?(\d+)")
-_INCIDENT_RE = re.compile(r'"incidentId":\s*"(fab_[A-Za-z0-9_]+)"')
+def cookie_jar(header: str):
+    """'k=v; k2=v2' → формат Playwright add_cookies на домен .ozon.ru
+    (покрывает www. и api. поддомены)."""
+    out = []
+    for part in header.split(";"):
+        if "=" not in part:
+            continue
+        k, v = part.strip().split("=", 1)
+        if k.strip():
+            out.append({"name": k.strip(), "value": v.strip(),
+                        "domain": ".ozon.ru", "path": "/"})
+    return out
 
 
 def product_id(url: str) -> str:
@@ -98,246 +142,128 @@ def product_id(url: str) -> str:
     return m.group(1) if m else ""
 
 
-def cookie_jar(header: str):
-    """Распарсить cookie-строку 'k=v; k2=v2' в формат Playwright add_cookies."""
-    out = []
-    for part in header.split(";"):
-        if "=" in part:
-            k, v = part.strip().split("=", 1)
-            if k.strip():
-                out.append({"name": k.strip(), "value": v.strip(),
-                            "domain": ".ozon.ru", "path": "/"})
-    return out
-
-
-def classify_incident(incident: str) -> str:
-    """Тип FAB-инцидента: nmk=жёсткий датацентр-бан (нужен другой IP),
-    chlg/прочее=решаемый челлендж (нужен логин/анти-детект/solver)."""
-    if not incident:
-        return ""
-    if "nmk" in incident:
-        return "nmk"
-    if "chlg" in incident:
-        return "chlg"
-    return "challenge"
-
-
-# Метод друга: НЕ экспортируем куку в сторонний клиент, а делаем API-запрос
-# ИЗНУТРИ уже доверенного браузера (fetch в контексте страницы). JA3+куки+решённый
-# челлендж остаются согласованными. Проверяем, что из одного контекста можно
-# скрейпить произвольный товар дешёвым XHR без перезагрузки страницы.
-_INPAGE_FETCH_JS = """
-async (id) => {
-  const url = '/api/entrypoint-api.bx/page/json/v2?url=' +
-              encodeURIComponent('/product/' + id + '/');
-  try {
-    const r = await fetch(url, {headers: {accept: 'application/json'},
-                                credentials: 'include'});
-    const body = await r.text();
-    return {status: r.status,
-            widgets: body.includes('widgetStates'),
-            ruble: body.includes('\\u20bd'),
-            fab: body.includes('fab_') || body.includes('incidentId'),
-            len: body.length,
-            snippet: body.slice(0, 200)};
-  } catch (e) { return {status: -1, error: String(e)}; }
-}
-"""
-
-
-def _human_nudge(page):
+def egress_ip(context) -> str:
     try:
-        page.mouse.move(random.randint(80, 1280), random.randint(80, 700),
-                        steps=random.randint(4, 9))
-        page.mouse.wheel(0, random.randint(200, 1100))
-    except Exception:
-        pass
+        p = context.new_page()
+        p.goto("https://api.ipify.org?format=json", timeout=15000)
+        ip = json.loads(p.evaluate("() => document.body.innerText")).get("ip", "?")
+        p.close()
+        return ip
+    except Exception:  # noqa: BLE001
+        return "?"
 
 
 def probe(pw) -> int:
-    proxy = parse_proxy(PROXY_URL)
+    pid = product_id(PROBE_URL)
+    if not pid:
+        log.error("не разобрал id товара из URL: %s", PROBE_URL)
+        return 1
+
     launch = {"headless": HEADLESS, "args": ["--no-sandbox", "--disable-dev-shm-usage"]}
+    proxy = parse_proxy(PROXY_URL)
     if proxy:
         launch["proxy"] = proxy
-    log.info("прокси: %s | headless=%s | url=%s",
-             proxy["server"] if proxy else "НЕТ (напрямую)", HEADLESS, PROBE_URL)
 
     browser = pw.chromium.launch(**launch)
     try:
         context = browser.new_context(locale=LOCALE, timezone_id=TIMEZONE,
                                       viewport={"width": 1366, "height": 768})
 
-        # Метод друга: залогиненный браузер. Вкладываем аккаунт-куку ДО навигации.
-        injected = cookie_jar(OZON_COOKIE) if OZON_COOKIE else []
+        injected = cookie_jar(OZON_COOKIE)
         logged_in = any(c["name"] == "__Secure-access-token" for c in injected)
         if injected:
-            try:
-                context.add_cookies(injected)
-                log.info("вложил %d cookie из OZON_COOKIE (logged_in=%s)",
-                         len(injected), logged_in)
-            except Exception as e:  # noqa: BLE001
-                log.warning("add_cookies упало: %s", e)
-        else:
-            log.info("OZON_COOKIE пуст → анонимный заход (FAB ожидаемо режет)")
+            context.add_cookies(injected)
+        log.info("прокси=%s | cookie=%d шт (logged_in=%s) | url=%s",
+                 proxy["server"] if proxy else "НЕТ", len(injected), logged_in, PROBE_URL)
+        if not logged_in:
+            log.warning("в OZON_COOKIE нет __Secure-access-token — это НЕ метод друга "
+                        "(аноним FAB режет). Подставь cookie залогиненного аккаунта.")
 
+        ip = egress_ip(context)
+
+        # Навигация на карточку: живая сессия проходит FAB и задаёт origin ozon.ru,
+        # чтобы in-page fetch был same-origin и нёс куки.
         page = context.new_page()
-        if BLOCK_RESOURCES:
-            page.route("**/*", lambda r: (
-                r.abort() if _should_block(r.request.resource_type) else r.continue_()))
-
-        st = {"api_ok": False, "api_statuses": [], "fab": False,
-              "responses": [], "price_in_api": False}
-
-        def on_response(resp):
-            try:
-                st["responses"].append((resp.request.resource_type, resp.status, resp.url))
-                if any(m in resp.url for m in API_MARKERS):
-                    st["api_statuses"].append(resp.status)
-                    if resp.status == 200:
-                        st["api_ok"] = True
-                        # цена видна анонимно? ищем ₽ в теле ответа карточки.
-                        try:
-                            body = resp.text()
-                            if "fab_" in body or "incidentId" in body:
-                                st["fab"] = True
-                            if "₽" in body:
-                                st["price_in_api"] = True
-                        except Exception:
-                            pass
-                    elif resp.status == 403:
-                        st["fab"] = True
-            except Exception:
-                pass
-
-        page.on("response", on_response)
-
-        per = max(30.0, TIMEOUT_S / max(1, MAX_RELOADS))
-        for attempt in range(1, MAX_RELOADS + 1):
-            try:
-                page.goto(PROBE_URL, wait_until="domcontentloaded", timeout=int(per * 1000))
-            except PWTimeout:
-                pass
-            except Exception as e:  # noqa: BLE001
-                log.warning("goto ошибка (попытка %d): %s", attempt, e)
-            end = time.time() + per
-            while time.time() < end and not st["api_ok"]:
-                _human_nudge(page)
-                page.wait_for_timeout(2500)
-            if st["api_ok"]:
-                break
-            log.info("попытка %d: 200 на API нет (статусы: %s)",
-                     attempt, st["api_statuses"][-6:] or "—")
-
-        # ── Метод друга: API-запрос из доверенного контекста (in-page fetch) ──
-        inpage = {}
-        pid = product_id(PROBE_URL)
-        if pid:
-            try:
-                inpage = page.evaluate(_INPAGE_FETCH_JS, pid) or {}
-            except Exception as e:  # noqa: BLE001
-                inpage = {"status": -1, "error": str(e)}
-
-        # ── Сбор фактов ──────────────────────────────────────────────────────
-        cookies = [c for c in context.cookies() if "ozon.ru" in (c.get("domain") or "")]
-        names = sorted(c["name"] for c in cookies)
-        present_trust = [n for n in TRUST_COOKIES if n in names]
-        ua = page.evaluate("() => navigator.userAgent")
+        nav_status = None
         try:
-            page_text = (page.evaluate("() => document.body ? document.body.innerText : ''") or "")
-        except Exception:
+            resp = page.goto(PROBE_URL, wait_until="domcontentloaded",
+                             timeout=int(NAV_TIMEOUT_S * 1000))
+            nav_status = resp.status if resp else None
+        except PWTimeout:
+            log.warning("навигация: таймаут (продолжаю — fetch может сработать)")
+        except Exception as e:  # noqa: BLE001
+            log.warning("навигация упала: %s", e)
+        page.wait_for_timeout(int(SETTLE_S * 1000))
+
+        # ── Метод друга: in-page fetch карточки ──────────────────────────────
+        try:
+            f = page.evaluate(_FRIEND_FETCH_JS, pid) or {}
+        except Exception as e:  # noqa: BLE001
+            f = {"status": -1, "error": str(e)}
+
+        # Признаки/диагностика.
+        try:
+            page_text = page.evaluate("() => document.body ? document.body.innerText : ''") or ""
+        except Exception:  # noqa: BLE001
             page_text = ""
-        wall = any(m in (page_text.lower()) for m in WALL_MARKERS)
         price_on_page = "₽" in page_text
-
-        # Тип FAB-инцидента (из тела in-page fetch): nmk=жёсткий бан IP,
-        # chlg/challenge=решаемый челлендж → разные диагнозы.
-        m_inc = _INCIDENT_RE.search(inpage.get("snippet", "") or "")
+        m_inc = _INCIDENT_RE.search(f.get("snippet", "") or "")
         incident = m_inc.group(1) if m_inc else ""
-        inc_type = classify_incident(incident)
+        inc_type = ("nmk" if "nmk" in incident else
+                    "chlg" if "chlg" in incident else
+                    "challenge" if incident else "")
 
-        hosts = Counter(urlparse(u).netloc for (_, _, u) in st["responses"])
-
-        # ── Вердикт ──────────────────────────────────────────────────────────
-        print("\n" + "=" * 64)
-        print("OZON PROBE — РЕЗУЛЬТАТ")
-        print("=" * 64)
-        print(f"  exit-IP прокси     : {_egress_ip(context)}")
+        # ── Отчёт ────────────────────────────────────────────────────────────
+        print("\n" + "=" * 66)
+        print("OZON PROBE — МЕТОД ДРУГА")
+        print("=" * 66)
+        print(f"  exit-IP прокси     : {ip}")
         print(f"  залогинен (cookie)  : {'ДА' if logged_in else 'НЕТ (аноним)'}")
-        print(f"  API 200 (FAB ok)   : {'ДА' if st['api_ok'] else 'НЕТ'}  "
-              f"(статусы API: {st['api_statuses'] or '—'})")
-        print(f"  FAB-инцидент        : {incident or '—'} "
-              f"(тип: {inc_type or '—'})")
-        print(f"  FAB-челлендж        : {'ЕСТЬ ⚠️' if st['fab'] else 'нет'}")
-        print(f"  стена/антибот текст : {'ЕСТЬ ⚠️' if wall else 'нет'}")
-        print(f"  цена ₽ в API        : {'ДА' if st['price_in_api'] else 'нет'}")
+        print(f"  навигация status    : {nav_status if nav_status is not None else '—'}")
         print(f"  цена ₽ на странице  : {'ДА' if price_on_page else 'нет'}")
-        print(f"  in-page fetch (друг): status={inpage.get('status', '—')} "
-              f"widgets={inpage.get('widgets')} ₽={inpage.get('ruble')} "
-              f"fab={inpage.get('fab')} len={inpage.get('len', '—')}")
-        if inpage.get("status") not in (200, None) or inpage.get("error"):
-            print(f"    in-page snippet/err: {inpage.get('error') or inpage.get('snippet', '')!r}")
-        print(f"  UA                  : {ua}")
-        print(f"  cookie всего        : {len(names)}")
-        print(f"  trust-cookie        : {present_trust or '— НИ ОДНОЙ ⚠️'}")
-        print(f"  все cookie          : {names}")
-        print(f"  ответы по хостам    : {dict(hosts.most_common(8))}")
-        print("=" * 64)
+        print(f"  in-page fetch       : status={f.get('status')} "
+              f"widgets={f.get('widgets')} ₽={f.get('ruble')} "
+              f"fab={f.get('fab')} len={f.get('len', '—')}")
+        if incident:
+            print(f"  FAB-инцидент        : {incident} (тип: {inc_type})")
+        if f.get("error"):
+            print(f"  fetch error         : {f['error']}")
+        elif f.get("status") != 200:
+            print(f"  fetch snippet       : {f.get('snippet', '')!r}")
+        print("=" * 66)
 
-        # in-page fetch (метод друга) — главный сигнал: можно ли скрейпить
-        # произвольный товар из одного доверенного контекста.
-        inpage_ok = inpage.get("status") == 200 and inpage.get("widgets") \
-            and inpage.get("ruble") and not inpage.get("fab")
-        nav_ok = st["api_ok"] and not st["fab"] and (st["price_in_api"] or price_on_page)
-
-        if inpage_ok:
-            print(f"ВЕРДИКТ: ✅✅ метод друга РАБОТАЕТ (logged_in={logged_in}) — из одного "
-                  "доверенного браузера in-page fetch отдаёт widgetStates+цену. Архитектура: "
-                  "браузер-как-скрейпер (Python держит контекст, Go — тонкий клиент).")
-            return 0
-        if nav_ok:
-            print(f"ВЕРДИКТ: ✅ FAB пройден, цена видна при навигации (logged_in={logged_in}), "
-                  f"но in-page fetch не отдал (status={inpage.get('status')}). Скрейпить "
-                  "навигацией на /product/<id> либо доискать заголовки fetch.")
+        friend_ok = (f.get("status") == 200 and f.get("widgets")
+                     and f.get("ruble") and not f.get("fab"))
+        if friend_ok:
+            print("ВЕРДИКТ: ✅✅ МЕТОД ДРУГА РАБОТАЕТ — из одного залогиненного браузера "
+                  "in-page fetch отдаёт widgetStates+цену. Строим пул дорожек "
+                  "(server.py), Go ходит в browser-режиме.")
             return 0
         if inc_type == "nmk":
-            print("ВЕРДИКТ: ❌ FAB-инцидент типа nmk = жёсткий бан egress (датацентр/спалённый "
-                  "IP). ВОТ ТУТ реально нужен другой IP — сменить мобильный IP ссылкой-ротацией.")
+            print("ВЕРДИКТ: ❌ FAB-инцидент nmk = жёсткий бан egress (датацентр/спалённый IP). "
+                  "Сменить мобильный IP ссылкой-ротацией и повторить.")
             return 2
-        # FAB-челлендж (chlg/challenge) — IP в порядке, вопрос в доверии сессии.
         if not logged_in:
-            print("ВЕРДИКТ: ⚠️ АНОНИМНЫЙ заход → FAB ожидаемо даёт челлендж (это НЕ проблема "
-                  "прокси: IP отдаёт решаемый chlg, а не nmk). Рабочий путь — ЗАЛОГИНЕННЫЙ "
-                  "браузер: прогони повторно с -e OZON_COOKIE=\"$(docker exec pt_scraper "
-                  "printenv OZON_COOKIE)\" (метод друга — он был залогинен).")
+            print("ВЕРДИКТ: ⚠️ Заход анонимный → это не метод друга. Подставь OZON_COOKIE "
+                  "залогиненного аккаунта и повтори.")
             return 3
-        print("ВЕРДИКТ: ❌ Даже ЗАЛОГИНЕННЫЙ браузер упёрся в FAB-челлендж. Значит либо "
-              "FAB-доверие самой OZON_COOKIE протухло (нужна свежая из приложения), либо "
-              "плоский Chromium-в-Xvfb палится фингерпринтом (нужен анти-детект сильнее: "
-              "camoufox/undetect или реальный Chrome-канал). Это и было у друга иначе.")
+        print("ВЕРДИКТ: ❌ Залогиненный браузер упёрся в FAB-челлендж. Причины: либо "
+              "FAB-доверие OZON_COOKIE протухло (снять свежую из приложения), либо "
+              "Chromium-в-Xvfb палится фингерпринтом (нужен сильнее анти-детект: "
+              "реальный Chrome-канал / camoufox). Тогда — fallback на платный API.")
         return 4
     finally:
         try:
             browser.close()
-        except Exception:
+        except Exception:  # noqa: BLE001
             pass
 
 
-def _egress_ip(context) -> str:
-    try:
-        p = context.new_page()
-        p.goto("https://api.ipify.org?format=json", timeout=15000)
-        import json
-        ip = json.loads(p.evaluate("() => document.body.innerText")).get("ip", "?")
-        p.close()
-        return ip
-    except Exception:
-        return "?"
-
-
+# Коды возврата: 0 метод друга ОК (строим пул) | 2 nmk-бан IP (сменить IP) |
+# 3 аноним (подставить cookie) | 4 залогинен, но FAB (свежая cookie / анти-детект).
 def main():
-    if not PROBE_URL:
-        log.error("задай OZON_PROBE_URL=https://www.ozon.ru/product/...")
-        sys.exit(1)
+    log.info("OZON PROBE старт: headless=%s", HEADLESS)
+    ensure_display()
     with sync_playwright() as pw:
         sys.exit(probe(pw))
 
