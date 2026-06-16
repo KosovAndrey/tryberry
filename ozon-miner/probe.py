@@ -42,6 +42,10 @@ from patchright.sync_api import TimeoutError as PWTimeout
 
 PROBE_URL = os.getenv("OZON_PROBE_URL", "").strip()
 PROXY_URL = os.getenv("OZON_MINER_PROXY_URL", os.getenv("OZON_PROXY_URL", "")).strip()
+# Аккаунт-кука из приложения (вся cookie-строка с __Secure-access-token). Пусто →
+# анонимный заход (FAB режет — проверено). С кукой проверяем «метод друга»:
+# залогиненный реальный браузер + in-page fetch.
+OZON_COOKIE = os.getenv("OZON_COOKIE", "").strip()
 HEADLESS = os.getenv("HEADLESS", "false").lower() in ("1", "true", "yes")
 BLOCK_RESOURCES = os.getenv("MINER_BLOCK_RESOURCES", "true").lower() in ("1", "true", "yes")
 LOCALE = os.getenv("MINER_LOCALE", "ru-RU")
@@ -86,11 +90,36 @@ def _should_block(rt: str) -> bool:
 
 
 _ID_RE = re.compile(r"/product/(?:[^/?#]*-)?(\d+)")
+_INCIDENT_RE = re.compile(r'"incidentId":\s*"(fab_[A-Za-z0-9_]+)"')
 
 
 def product_id(url: str) -> str:
     m = _ID_RE.search(url)
     return m.group(1) if m else ""
+
+
+def cookie_jar(header: str):
+    """Распарсить cookie-строку 'k=v; k2=v2' в формат Playwright add_cookies."""
+    out = []
+    for part in header.split(";"):
+        if "=" in part:
+            k, v = part.strip().split("=", 1)
+            if k.strip():
+                out.append({"name": k.strip(), "value": v.strip(),
+                            "domain": ".ozon.ru", "path": "/"})
+    return out
+
+
+def classify_incident(incident: str) -> str:
+    """Тип FAB-инцидента: nmk=жёсткий датацентр-бан (нужен другой IP),
+    chlg/прочее=решаемый челлендж (нужен логин/анти-детект/solver)."""
+    if not incident:
+        return ""
+    if "nmk" in incident:
+        return "nmk"
+    if "chlg" in incident:
+        return "chlg"
+    return "challenge"
 
 
 # Метод друга: НЕ экспортируем куку в сторонний клиент, а делаем API-запрос
@@ -137,6 +166,20 @@ def probe(pw) -> int:
     try:
         context = browser.new_context(locale=LOCALE, timezone_id=TIMEZONE,
                                       viewport={"width": 1366, "height": 768})
+
+        # Метод друга: залогиненный браузер. Вкладываем аккаунт-куку ДО навигации.
+        injected = cookie_jar(OZON_COOKIE) if OZON_COOKIE else []
+        logged_in = any(c["name"] == "__Secure-access-token" for c in injected)
+        if injected:
+            try:
+                context.add_cookies(injected)
+                log.info("вложил %d cookie из OZON_COOKIE (logged_in=%s)",
+                         len(injected), logged_in)
+            except Exception as e:  # noqa: BLE001
+                log.warning("add_cookies упало: %s", e)
+        else:
+            log.info("OZON_COOKIE пуст → анонимный заход (FAB ожидаемо режет)")
+
         page = context.new_page()
         if BLOCK_RESOURCES:
             page.route("**/*", lambda r: (
@@ -206,6 +249,12 @@ def probe(pw) -> int:
         wall = any(m in (page_text.lower()) for m in WALL_MARKERS)
         price_on_page = "₽" in page_text
 
+        # Тип FAB-инцидента (из тела in-page fetch): nmk=жёсткий бан IP,
+        # chlg/challenge=решаемый челлендж → разные диагнозы.
+        m_inc = _INCIDENT_RE.search(inpage.get("snippet", "") or "")
+        incident = m_inc.group(1) if m_inc else ""
+        inc_type = classify_incident(incident)
+
         hosts = Counter(urlparse(u).netloc for (_, _, u) in st["responses"])
 
         # ── Вердикт ──────────────────────────────────────────────────────────
@@ -213,8 +262,11 @@ def probe(pw) -> int:
         print("OZON PROBE — РЕЗУЛЬТАТ")
         print("=" * 64)
         print(f"  exit-IP прокси     : {_egress_ip(context)}")
+        print(f"  залогинен (cookie)  : {'ДА' if logged_in else 'НЕТ (аноним)'}")
         print(f"  API 200 (FAB ok)   : {'ДА' if st['api_ok'] else 'НЕТ'}  "
               f"(статусы API: {st['api_statuses'] or '—'})")
+        print(f"  FAB-инцидент        : {incident or '—'} "
+              f"(тип: {inc_type or '—'})")
         print(f"  FAB-челлендж        : {'ЕСТЬ ⚠️' if st['fab'] else 'нет'}")
         print(f"  стена/антибот текст : {'ЕСТЬ ⚠️' if wall else 'нет'}")
         print(f"  цена ₽ в API        : {'ДА' if st['price_in_api'] else 'нет'}")
@@ -238,22 +290,31 @@ def probe(pw) -> int:
         nav_ok = st["api_ok"] and not st["fab"] and (st["price_in_api"] or price_on_page)
 
         if inpage_ok:
-            print("ВЕРДИКТ: ✅✅ метод друга РАБОТАЕТ — из одного доверенного браузера "
-                  "in-page fetch отдаёт widgetStates+цену без логина. Архитектура: "
+            print(f"ВЕРДИКТ: ✅✅ метод друга РАБОТАЕТ (logged_in={logged_in}) — из одного "
+                  "доверенного браузера in-page fetch отдаёт widgetStates+цену. Архитектура: "
                   "браузер-как-скрейпер (Python держит контекст, Go — тонкий клиент).")
             return 0
         if nav_ok:
-            print("ВЕРДИКТ: ✅ FAB пройден и цена видна при навигации, но in-page fetch "
-                  f"не отдал (status={inpage.get('status')}). Скрейпить навигацией на "
-                  "/product/<id> (дороже) либо доискать правильные заголовки fetch.")
+            print(f"ВЕРДИКТ: ✅ FAB пройден, цена видна при навигации (logged_in={logged_in}), "
+                  f"но in-page fetch не отдал (status={inpage.get('status')}). Скрейпить "
+                  "навигацией на /product/<id> либо доискать заголовки fetch.")
             return 0
-        if st["fab"] or wall or inpage.get("fab"):
-            print("ВЕРДИКТ: ❌ FAB душит даже реальный браузер через этот прокси → "
-                  "egress спалён/датацентр. Нужен другой RU-резидентный/мобильный прокси.")
+        if inc_type == "nmk":
+            print("ВЕРДИКТ: ❌ FAB-инцидент типа nmk = жёсткий бан egress (датацентр/спалённый "
+                  "IP). ВОТ ТУТ реально нужен другой IP — сменить мобильный IP ссылкой-ротацией.")
             return 2
-        print("ВЕРДИКТ: ⚠️ FAB прошли, но цены нет анонимно → вероятно нужен логин "
-              "(региональная/персональная цена). Майнеру понадобится залогиненный профиль.")
-        return 3
+        # FAB-челлендж (chlg/challenge) — IP в порядке, вопрос в доверии сессии.
+        if not logged_in:
+            print("ВЕРДИКТ: ⚠️ АНОНИМНЫЙ заход → FAB ожидаемо даёт челлендж (это НЕ проблема "
+                  "прокси: IP отдаёт решаемый chlg, а не nmk). Рабочий путь — ЗАЛОГИНЕННЫЙ "
+                  "браузер: прогони повторно с -e OZON_COOKIE=\"$(docker exec pt_scraper "
+                  "printenv OZON_COOKIE)\" (метод друга — он был залогинен).")
+            return 3
+        print("ВЕРДИКТ: ❌ Даже ЗАЛОГИНЕННЫЙ браузер упёрся в FAB-челлендж. Значит либо "
+              "FAB-доверие самой OZON_COOKIE протухло (нужна свежая из приложения), либо "
+              "плоский Chromium-в-Xvfb палится фингерпринтом (нужен анти-детект сильнее: "
+              "camoufox/undetect или реальный Chrome-канал). Это и было у друга иначе.")
+        return 4
     finally:
         try:
             browser.close()
