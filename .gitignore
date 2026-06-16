@@ -2,6 +2,10 @@
 .idea/
 .vscode/
 
+# Python (token-miner / ozon-miner)
+__pycache__/
+*.pyc
+
 # Go
 *.exe
 *.exe~
