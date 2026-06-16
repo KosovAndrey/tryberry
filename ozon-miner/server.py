@@ -39,8 +39,10 @@ from camoufox.async_api import AsyncCamoufox
 PORT = int(os.getenv("OZON_MINER_PORT", "8080"))
 POOL_SIZE = int(os.getenv("OZON_POOL_SIZE", "1"))
 
-WARM_URL = os.getenv("OZON_WARM_URL", "https://www.ozon.ru/")
+# Прогрев идёт на СТРАНИЦУ ТОВАРА (проверенный пробой путь), а не на тяжёлую
+# главную: FAB гейтит главную иначе и навигация залипает.
 WARM_PRODUCT_ID = os.getenv("OZON_WARM_PRODUCT_ID", "1889984997")
+WARM_URL = os.getenv("OZON_WARM_URL", f"https://www.ozon.ru/product/{WARM_PRODUCT_ID}/")
 
 HEADLESS = os.getenv("HEADLESS", "false").lower() in ("1", "true", "yes")
 SCRAPE_TIMEOUT_S = float(os.getenv("OZON_SCRAPE_TIMEOUT_SECONDS", "30"))
@@ -195,8 +197,9 @@ class Lane:
         await self.warm()
 
     async def warm(self):
-        """Навигация на главную + ожидание, что FAB пройден (тестовый fetch=200).
+        """Навигация на карточку + ожидание, что FAB пройден (тестовый fetch=200).
         Успех → healthy, сброс backoff. Неудача → экспоненциальный backoff."""
+        log.info("дорожка %d: прогрев — навигация на %s", self.idx, WARM_URL)
         try:
             await self._page.goto(WARM_URL, wait_until="domcontentloaded",
                                   timeout=int(NAV_TIMEOUT_S * 1000))
@@ -204,6 +207,8 @@ class Lane:
             log.warning("дорожка %d: навигация прогрева: %s",
                         self.idx, str(e).splitlines()[0])
         self.egress_ip = await self._egress_ip()
+        log.info("дорожка %d: навигация ок (egress=%s), жду прохождения FAB…",
+                 self.idx, self.egress_ip or "?")
         deadline = time.time() + WARM_WAIT_S
         while time.time() < deadline:
             status, body = await self._inpage_fetch(WARM_PRODUCT_ID)
