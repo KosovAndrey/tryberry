@@ -45,6 +45,9 @@ LOCALE = os.getenv("MINER_LOCALE", "ru-RU")
 TIMEZONE = os.getenv("MINER_TIMEZONE", "Europe/Moscow")
 NAV_TIMEOUT_S = float(os.getenv("PROBE_NAV_TIMEOUT_SECONDS", "45"))
 SETTLE_S = float(os.getenv("PROBE_SETTLE_SECONDS", "4"))
+# Сколько ждём авто-решения challenge.html (JS-VM исполняется в браузере и
+# редиректит обратно). Повторяем in-page fetch, пока не 200 или не истечёт.
+CHALLENGE_WAIT_S = float(os.getenv("PROBE_CHALLENGE_WAIT_SECONDS", "40"))
 LOG_LEVEL = os.getenv("LOG_LEVEL", "INFO").upper()
 
 logging.basicConfig(level=getattr(logging, LOG_LEVEL, logging.INFO),
@@ -160,6 +163,17 @@ def product_id(url: str) -> str:
     return m.group(1) if m else ""
 
 
+def _nudge(page):
+    """Лёгкая имитация живого юзера — помогает challenge.html досчитаться."""
+    import random
+    try:
+        page.mouse.move(random.randint(80, 1200), random.randint(80, 680),
+                        steps=random.randint(4, 9))
+        page.mouse.wheel(0, random.randint(200, 900))
+    except Exception:  # noqa: BLE001
+        pass
+
+
 def egress_ip(context) -> str:
     try:
         p = context.new_page()
@@ -212,11 +226,24 @@ def probe(pw) -> int:
             log.warning("навигация упала: %s", e)
         page.wait_for_timeout(int(SETTLE_S * 1000))
 
-        # ── Метод друга: in-page fetch карточки ──────────────────────────────
-        try:
-            f = page.evaluate(_FRIEND_FETCH_JS, pid) or {}
-        except Exception as e:  # noqa: BLE001
-            f = {"status": -1, "error": str(e)}
+        # ── Метод друга: in-page fetch с ОЖИДАНИЕМ авто-решения челленджа ─────
+        # FAB отдаёт challenge.html (JS-VM) — даём браузеру время её исполнить и
+        # стать доверенным, повторяя fetch, пока не 200 (или таймаут).
+        f = {"status": -1}
+        deadline = time.time() + CHALLENGE_WAIT_S
+        attempt = 0
+        while time.time() < deadline:
+            attempt += 1
+            try:
+                f = page.evaluate(_FRIEND_FETCH_JS, pid) or {}
+            except Exception as e:  # noqa: BLE001
+                f = {"status": -1, "error": str(e)}
+            if f.get("status") == 200 and not f.get("fab"):
+                break
+            log.info("попытка %d: fetch status=%s fab=%s — жду решения челленджа",
+                     attempt, f.get("status"), f.get("fab"))
+            _nudge(page)
+            page.wait_for_timeout(3000)
 
         # Признаки/диагностика.
         try:
@@ -224,6 +251,12 @@ def probe(pw) -> int:
         except Exception:  # noqa: BLE001
             page_text = ""
         price_on_page = "₽" in page_text
+        try:
+            final_url = page.url
+            final_title = page.title()
+        except Exception:  # noqa: BLE001
+            final_url, final_title = "?", "?"
+        on_challenge = "challenge" in (final_url + " " + final_title).lower()
         m_inc = _INCIDENT_RE.search(f.get("snippet", "") or "")
         incident = m_inc.group(1) if m_inc else ""
         inc_type = ("nmk" if "nmk" in incident else
@@ -243,6 +276,9 @@ def probe(pw) -> int:
               f"fab={f.get('fab')} len={f.get('len', '—')}")
         if incident:
             print(f"  FAB-инцидент        : {incident} (тип: {inc_type})")
+        print(f"  финальный URL       : {final_url}")
+        print(f"  заголовок страницы  : {final_title!r}")
+        print(f"  висим на челлендже  : {'ДА ⚠️' if on_challenge else 'нет'}")
         if f.get("error"):
             print(f"  fetch error         : {f['error']}")
         elif f.get("status") != 200:
