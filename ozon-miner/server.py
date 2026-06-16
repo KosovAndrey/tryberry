@@ -1,31 +1,21 @@
 #!/usr/bin/env python3
 """
-server.py — ozon-miner, фаза 2: БРАУЗЕР-КАК-ТРАНСПОРТ с ПУЛОМ ДОРОЖЕК.
+server.py — ozon-miner, фаза 2: БРАУЗЕР-КАК-ТРАНСПОРТ с ПУЛОМ ДОРОЖЕК (camoufox).
 
 Долгоживущий HTTP-сервис. Держит пул из N «дорожек» (lane). Каждая дорожка =
-отдельный залогиненный Chromium (Patchright, стелс-форк Playwright) через СВОЙ
-мобильный прокси и СВОЮ аккаунт-cookie. Живая сессия дорожки проходит антибот FAB
-и сама рефрешит access-token (это делает веб-приложение Ozon в фоне). Цену достаём
-«методом друга»: in-page fetch к entrypoint-api ИЗНУТРИ доверенного контекста —
-JA3 + куки + решённый челлендж остаются согласованными (см. probe.py, фаза 1).
+отдельный залогиненный браузер **camoufox** (анти-детект Firefox) через СВОЙ
+мобильный прокси и СВОЮ аккаунт-cookie. Живая сессия проходит антибот FAB
+(camoufox пробил его там, где голый Chromium палился) и сама держит доверие.
+Цену достаём «методом друга»: in-page fetch к entrypoint-api ИЗНУТРИ доверенного
+контекста (JA3 + куки + решённый челлендж согласованы) — см. probe.py.
 
-Go-скрейпер в browser-режиме зовёт:
+Go-скрейпер в browser-режиме зовёт GET /scrape?id=<id> — сервис маршрутизирует на
+дорожку (аффинити по id), делает in-page fetch и отдаёт СЫРОЙ widgetStates,
+зеркаля upstream-статус Ozon (403 при FAB). Go разбирает тем же parseOzonWidgets.
 
-    GET /scrape?id=<product_id>
-
-сервис маршрутизирует запрос на дорожку (аффинити по id → стабильная сессия),
-делает in-page fetch и отдаёт СЫРОЙ widgetStates, зеркаля upstream-статус Ozon
-(в т.ч. 403 при FAB). Дальше Go разбирает тело тем же parseOzonWidgets.
-
-── Масштабирование ───────────────────────────────────────────────────────────
-Узкое место — НЕ браузер, а связка {мобильный IP + аккаунт}. Растём, добавляя
-дорожки (каждая = свой IP + аккаунт + браузер):
-
-    OZON_POOL_SIZE=3
-    OZON_LANE_0_PROXY=http://user:pass@host1:port   OZON_LANE_0_COOKIE=...
-    OZON_LANE_1_PROXY=http://user:pass@host2:port   OZON_LANE_1_COOKIE=...
-    OZON_LANE_2_PROXY=http://user:pass@host3:port   OZON_LANE_2_COOKIE=...
-
+Масштабирование = добавить дорожек (по IP+аккаунту):
+  OZON_POOL_SIZE=3
+  OZON_LANE_0_PROXY/_COOKIE, OZON_LANE_1_PROXY/_COOKIE, ...
 Дорожка 0 фолбэчит на legacy OZON_PROXY_URL / OZON_COOKIE (старт N=1 без правок).
 """
 
@@ -38,48 +28,45 @@ import time
 from urllib.parse import unquote, urlparse
 
 from aiohttp import web
-from patchright.async_api import async_playwright
+from camoufox.async_api import AsyncCamoufox
 
-# ── Конфиг из окружения ──────────────────────────────────────────────────────
+# ── Конфиг ───────────────────────────────────────────────────────────────────
 PORT = int(os.getenv("OZON_MINER_PORT", "8080"))
 POOL_SIZE = int(os.getenv("OZON_POOL_SIZE", "1"))
 
-# Прогрев/база сессии: главная Ozon (там приложение поднимает куки и проходит FAB).
+# Прогрев: главная Ozon — задаёт origin www.ozon.ru и поднимает доверие FAB.
 WARM_URL = os.getenv("OZON_WARM_URL", "https://www.ozon.ru/")
-# Эндпоинт карточки (web): отдаёт widgetStates, как и mobile composer-api.
-PRODUCT_API = "/api/entrypoint-api.bx/page/json/v2?url=" + "%2Fproduct%2F{id}%2F"
+# Тестовый товар для прогрева (проверяем, что FAB пройден до пометки healthy).
+WARM_PRODUCT_ID = os.getenv("OZON_WARM_PRODUCT_ID", "1889984997")
 
-# Человекоподобный минимум между запросами одной дорожки (один IP/аккаунт = бюджет
-# одного живого юзера). Тюним по спайку «сколько req/мин до челленджа».
+HEADLESS = os.getenv("HEADLESS", "false").lower() in ("1", "true", "yes")
+# Человекоподобный минимум между запросами одной дорожки.
 LANE_MIN_INTERVAL_S = float(os.getenv("OZON_LANE_MIN_INTERVAL_MS", "1500")) / 1000.0
 SCRAPE_TIMEOUT_S = float(os.getenv("OZON_SCRAPE_TIMEOUT_SECONDS", "30"))
-WARM_TIMEOUT_S = float(os.getenv("OZON_WARM_TIMEOUT_SECONDS", "45"))
-# Фоновый чинильщик дорожек (перепрогрев нездоровых), как «ремонтник» в WB-майнере.
+SCRAPE_RETRIES = int(os.getenv("OZON_SCRAPE_RETRIES", "3"))
+NAV_TIMEOUT_S = float(os.getenv("OZON_NAV_TIMEOUT_SECONDS", "60"))
+WARM_WAIT_S = float(os.getenv("OZON_WARM_WAIT_SECONDS", "45"))
+# Фоновый чинильщик дорожек (перепрогрев нездоровых).
 HEALTH_INTERVAL_S = float(os.getenv("OZON_HEALTH_INTERVAL_SECONDS", "30"))
-
-BLOCK_RESOURCES = os.getenv("MINER_BLOCK_RESOURCES", "true").lower() in ("1", "true", "yes")
-HEADLESS = os.getenv("HEADLESS", "false").lower() in ("1", "true", "yes")
-LOCALE = os.getenv("MINER_LOCALE", "ru-RU")
-TIMEZONE = os.getenv("MINER_TIMEZONE", "Europe/Moscow")
 LOG_LEVEL = os.getenv("LOG_LEVEL", "INFO").upper()
 
 logging.basicConfig(level=getattr(logging, LOG_LEVEL, logging.INFO),
                     format="%(asctime)s %(levelname)s %(message)s")
 log = logging.getLogger("ozon-miner")
 
-# Маркеры FAB в теле ответа (best-effort; спайк уточнит реальную сигнатуру).
 _FAB_RE = re.compile(r"fab_|incidentId")
 
-# In-page fetch «методом друга»: запрос к entrypoint-api ИЗНУТРИ доверенного
-# контекста страницы. credentials:'include' тащит куки сессии, fetch едет тем же
-# JA3, что и прошедший FAB браузер.
+# In-page fetch к entrypoint-api ИЗНУТРИ доверенного контекста. Возвращает сырое
+# тело widgetStates (Go разбирает его) + статус.
 _FETCH_JS = """
 async (id) => {
   const url = '/api/entrypoint-api.bx/page/json/v2?url=' +
               encodeURIComponent('/product/' + id + '/');
   try {
-    const r = await fetch(url, {headers: {accept: 'application/json'},
-                                credentials: 'include'});
+    const r = await fetch(url, {
+      headers: {'accept': 'application/json', 'x-requested-with': 'XMLHttpRequest'},
+      credentials: 'include',
+    });
     const body = await r.text();
     return {status: r.status, body: body};
   } catch (e) { return {status: -1, body: '', error: String(e)}; }
@@ -91,9 +78,7 @@ def _parse_proxy(url: str):
     if not url:
         return None
     u = urlparse(url)
-    server = f"{u.scheme}://{u.hostname}"
-    if u.port:
-        server += f":{u.port}"
+    server = f"{u.scheme}://{u.hostname}" + (f":{u.port}" if u.port else "")
     proxy = {"server": server}
     if u.username:
         proxy["username"] = unquote(u.username)
@@ -103,8 +88,8 @@ def _parse_proxy(url: str):
 
 
 def _cookie_jar(header: str):
-    """'k=v; k2=v2' → формат Playwright add_cookies (домен .ozon.ru). secure=True
-    ОБЯЗАТЕЛЕН: иначе Chrome отвергает всю пачку из-за куки __Secure-/__Host-."""
+    """'k=v; k2=v2' → add_cookies на .ozon.ru. secure=True ОБЯЗАТЕЛЕН: иначе
+    браузер отвергает всю пачку из-за куки __Secure-/__Host-."""
     out = []
     for part in header.split(";"):
         if "=" in part:
@@ -116,8 +101,6 @@ def _cookie_jar(header: str):
 
 
 async def _add_cookies_safe(context, cookies) -> int:
-    """Добавить куки устойчиво: пачкой, при отказе — по-одной, пропуская кривые
-    (в строке из приложения бывают не-cookie поля вроде x-o3-* со скобками)."""
     try:
         await context.add_cookies(cookies)
         return len(cookies)
@@ -138,8 +121,6 @@ def _looks_blocked(status: int, body: str) -> bool:
 
 
 def _load_lane_configs():
-    """Собирает конфиги дорожек из env. Дорожка i: OZON_LANE_<i>_PROXY/_COOKIE;
-    дорожка 0 фолбэчит на legacy OZON_PROXY_URL / OZON_COOKIE."""
     configs = []
     for i in range(POOL_SIZE):
         proxy = os.getenv(f"OZON_LANE_{i}_PROXY", "").strip()
@@ -156,11 +137,11 @@ def _load_lane_configs():
 
 # ── Дорожка (lane) ───────────────────────────────────────────────────────────
 class Lane:
-    """Одна залогиненная браузер-сессия через свой прокси. Сериализует запросы
-    (один in-page fetch за раз) и держит человекоподобный интервал."""
+    """Залогиненная camoufox-сессия через свой прокси. Сериализует запросы и
+    держит человекоподобный интервал. Прогревается до healthy, проверяя что FAB
+    реально пройден (тестовый in-page fetch отдаёт 200)."""
 
-    def __init__(self, pw, cfg: dict):
-        self._pw = pw
+    def __init__(self, cfg: dict):
         self.idx = cfg["idx"]
         self.proxy = cfg["proxy"]
         self.cookie = cfg["cookie"]
@@ -168,73 +149,92 @@ class Lane:
         self.healthy = False
         self.egress_ip = ""
         self._last_at = 0.0
+        self._cam = None
         self._browser = None
-        self._context = None
         self._page = None
 
     async def start(self):
-        launch = {"headless": HEADLESS, "args": ["--no-sandbox", "--disable-dev-shm-usage"]}
+        kw = {"headless": HEADLESS}
         proxy = _parse_proxy(self.proxy)
         if proxy:
-            launch["proxy"] = proxy
-        self._browser = await self._pw.chromium.launch(**launch)
-        self._context = await self._browser.new_context(
-            locale=LOCALE, timezone_id=TIMEZONE, viewport={"width": 1366, "height": 768})
-        await _add_cookies_safe(self._context, _cookie_jar(self.cookie))
-        self._page = await self._context.new_page()
-        if BLOCK_RESOURCES:
-            async def _block(route):
-                if route.request.resource_type in ("image", "media", "font"):
-                    await route.abort()
-                else:
-                    await route.continue_()
-            await self._page.route("**/*", _block)
+            kw["proxy"] = proxy
+        # geoip=True рекомендуется camoufox при прокси (выравнивает локаль/таймзону/гео
+        # под exit-IP, чтобы не палиться). Включим, если установлен extra; иначе без.
+        try:
+            self._cam = AsyncCamoufox(geoip=True, **kw)
+            self._browser = await self._cam.__aenter__()
+        except Exception as e:  # noqa: BLE001
+            log.warning("дорожка %d: geoip недоступен (%s) — запускаю без него",
+                        self.idx, str(e).splitlines()[0])
+            self._cam = AsyncCamoufox(**kw)
+            self._browser = await self._cam.__aenter__()
+        self._page = await self._browser.new_page()
+        await _add_cookies_safe(self._page.context, _cookie_jar(self.cookie))
         await self.warm()
 
     async def warm(self):
-        """Прогрев: навигация на главную (поднять/освежить сессию, пройти FAB).
-        Успех → healthy=True. TODO(спайк): уточнить маркер «сессия жива»."""
+        """Навигация на главную + ожидание, что FAB пройден (тестовый fetch=200).
+        Только тогда healthy=True."""
         try:
             await self._page.goto(WARM_URL, wait_until="domcontentloaded",
-                                  timeout=int(WARM_TIMEOUT_S * 1000))
-            await self._page.wait_for_timeout(random.randint(1500, 3000))
-            self.egress_ip = await self._egress_ip()
-            self.healthy = True
-            log.info("дорожка %d прогрета: egress=%s", self.idx, self.egress_ip or "?")
+                                  timeout=int(NAV_TIMEOUT_S * 1000))
         except Exception as e:  # noqa: BLE001
-            self.healthy = False
-            log.warning("дорожка %d: прогрев не удался: %s", self.idx, e)
+            log.warning("дорожка %d: навигация прогрева: %s",
+                        self.idx, str(e).splitlines()[0])
+        self.egress_ip = await self._egress_ip()
+        # ждём, пока сессия станет доверенной (FAB решится) — как в probe.py
+        deadline = time.time() + WARM_WAIT_S
+        while time.time() < deadline:
+            status, body = await self._inpage_fetch(WARM_PRODUCT_ID)
+            if status == 200 and not _looks_blocked(status, body):
+                self.healthy = True
+                log.info("дорожка %d прогрета: egress=%s, FAB пройден", self.idx, self.egress_ip or "?")
+                return
+            await self._nudge()
+            await self._page.wait_for_timeout(3000)
+        self.healthy = False
+        log.warning("дорожка %d: прогрев не дал 200 за %.0fс (FAB не пройден)",
+                    self.idx, WARM_WAIT_S)
 
     async def scrape(self, product_id: str):
-        """In-page fetch карточки. Возвращает (status, body_bytes). На FAB метит
-        дорожку нездоровой (фоновый чинильщик перепрогреет)."""
+        """In-page fetch карточки с ретраями. На стойкий FAB метит дорожку
+        нездоровой (фоновый чинильщик перепрогреет). Возвращает (status, body_bytes)."""
         async with self.lock:
-            # человекоподобный интервал между запросами одной сессии
             wait = LANE_MIN_INTERVAL_S - (time.monotonic() - self._last_at)
             if wait > 0:
                 await asyncio.sleep(wait)
-            self._last_at = time.monotonic()
-            try:
-                res = await asyncio.wait_for(
-                    self._page.evaluate(_FETCH_JS, product_id), timeout=SCRAPE_TIMEOUT_S)
-            except Exception as e:  # noqa: BLE001
-                self.healthy = False
-                log.warning("дорожка %d: fetch упал (%s) — метим нездоровой", self.idx, e)
-                return 0, b""
-            status = int(res.get("status") or 0)
-            body = (res.get("body") or "")
-            if _looks_blocked(status, body):
-                self.healthy = False
-                inc = _FAB_RE.search(body)
-                log.warning("дорожка %d: FAB/блок (status=%s, marker=%s) — перепрогрев",
-                            self.idx, status, inc.group(0) if inc else "?")
-                # отдаём 403, чтобы Go классифицировал как blocked (как upstream)
-                return 403, body.encode("utf-8")
-            return status, body.encode("utf-8")
+            for attempt in range(1, SCRAPE_RETRIES + 1):
+                self._last_at = time.monotonic()
+                status, body = await self._inpage_fetch(product_id)
+                if status == 200 and not _looks_blocked(status, body):
+                    return 200, body.encode("utf-8")
+                if attempt < SCRAPE_RETRIES:
+                    await self._nudge()
+                    await self._page.wait_for_timeout(2000)
+            # не пробились — метим нездоровой и отдаём 403 (Go → blocked, как upstream)
+            self.healthy = False
+            log.warning("дорожка %d: FAB/блок на id=%s (status=%s) — перепрогрев",
+                        self.idx, product_id, status)
+            return 403, (body or "").encode("utf-8")
+
+    async def _inpage_fetch(self, product_id: str):
+        try:
+            res = await asyncio.wait_for(
+                self._page.evaluate(_FETCH_JS, product_id), timeout=SCRAPE_TIMEOUT_S)
+        except Exception as e:  # noqa: BLE001
+            log.warning("дорожка %d: fetch упал: %s", self.idx, str(e).splitlines()[0])
+            return 0, ""
+        return int(res.get("status") or 0), (res.get("body") or "")
+
+    async def _nudge(self):
+        try:
+            await self._page.mouse.wheel(0, random.randint(200, 900))
+        except Exception:  # noqa: BLE001
+            pass
 
     async def _egress_ip(self) -> str:
         try:
-            p = await self._context.new_page()
+            p = await self._browser.new_page()
             await p.goto("https://api.ipify.org?format=json", timeout=15000)
             txt = await p.evaluate("() => document.body.innerText")
             await p.close()
@@ -245,8 +245,8 @@ class Lane:
 
     async def close(self):
         try:
-            if self._browser:
-                await self._browser.close()
+            if self._cam:
+                await self._cam.__aexit__(None, None, None)
         except Exception:  # noqa: BLE001
             pass
 
@@ -257,8 +257,6 @@ class Pool:
         self.lanes = lanes
 
     def pick(self, product_id: str):
-        """Аффинити по id → стабильная сессия на товар. Если выбранная дорожка
-        нездорова — фолбэк на любую живую."""
         if not self.lanes:
             return None
         try:
@@ -275,8 +273,6 @@ class Pool:
         return sum(1 for l in self.lanes if l.healthy)
 
     async def repair_loop(self):
-        """Фоновый чинильщик: перепрогревает нездоровые дорожки (аналог
-        ремонтника пула в WB-майнере)."""
         while True:
             await asyncio.sleep(HEALTH_INTERVAL_S)
             for lane in self.lanes:
@@ -294,7 +290,6 @@ async def handle_scrape(request: web.Request) -> web.Response:
         return web.json_response({"error": "id must be numeric"}, status=400)
     lane = pool.pick(product_id)
     if lane is None:
-        # нет живых дорожек → 502, Go поймёт как «сайдкар недоступен» (не FAB)
         return web.Response(status=502, text="no healthy lanes")
     status, body = await lane.scrape(product_id)
     if status == 0:
@@ -309,9 +304,8 @@ async def handle_health(request: web.Request) -> web.Response:
     lanes = [{"idx": l.idx, "healthy": l.healthy, "egress_ip": l.egress_ip}
              for l in pool.lanes]
     healthy = pool.healthy_count()
-    return web.json_response(
-        {"healthy": healthy, "total": len(pool.lanes), "lanes": lanes},
-        status=200 if healthy > 0 else 503)
+    return web.json_response({"healthy": healthy, "total": len(pool.lanes), "lanes": lanes},
+                             status=200 if healthy > 0 else 503)
 
 
 async def main():
@@ -319,13 +313,12 @@ async def main():
     if not configs:
         raise SystemExit("нет ни одной сконфигурённой дорожки: задай OZON_COOKIE "
                          "(дорожка 0) или OZON_LANE_<i>_COOKIE")
-    log.info("старт ozon-miner: port=%d дорожек=%d (из POOL_SIZE=%d) interval=%.1fс",
-             PORT, len(configs), POOL_SIZE, LANE_MIN_INTERVAL_S)
+    log.info("старт ozon-miner: port=%d дорожек=%d (POOL_SIZE=%d) движок=camoufox",
+             PORT, len(configs), POOL_SIZE)
 
-    pw = await async_playwright().start()
     lanes = []
     for cfg in configs:
-        lane = Lane(pw, cfg)
+        lane = Lane(cfg)
         try:
             await lane.start()
         except Exception as e:  # noqa: BLE001
@@ -346,7 +339,6 @@ async def main():
     await site.start()
     log.info("слушаю :%d (живых дорожек %d/%d)", PORT, pool.healthy_count(), len(lanes))
 
-    # держим процесс
     while True:
         await asyncio.sleep(3600)
 
