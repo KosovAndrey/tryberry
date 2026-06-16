@@ -538,7 +538,11 @@ func (b *Bot) doTrack(ctx context.Context, chatID int64, rawURL string, user *do
 	wait.ParseMode = "HTML"
 	sent, _ := b.api.Send(wait)
 
-	result, err := s.Scrape(ctx, rawURL)
+	// Через registry.Scrape (а не s.Scrape напрямую), чтобы инкрементить
+	// tryberrybot_scrape_requests_total. Иначе ручные /track-скрейпы невидимы
+	// метрике, и success-rate/алерт HighScrapeErrorRate считаются только по
+	// фоновому воркеру — success-rate смещён. Маркетплейс уже знаем из s.
+	result, _, err := b.registry.Scrape(ctx, rawURL)
 	if err != nil {
 		span.RecordError(err)
 		span.SetStatus(codes.Error, err.Error())
