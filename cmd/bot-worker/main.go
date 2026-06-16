@@ -109,13 +109,15 @@ func run(log *slog.Logger) error {
 	registry := scraper.NewRegistry(
 		wbSearch,
 		// Бот при /track скрейпит сразу (показать товар) → Ozon нужен рабочим:
-		// аккаунт-cookie (OZON_COOKIE) + тот же мобильный прокси, что у scraper.
+		// browser-режим (OZON_BROWSER_URL) идёт через тот же сайдкар-пул, что и
+		// scraper; иначе путь B (OZON_COOKIE + мобильный прокси).
 		scraper.NewOzonScraper(scraper.OzonOptions{
 			ProxyURL:     getEnv("OZON_PROXY_URL", ""),
 			Mode:         getEnv("OZON_API_MODE", "mobile"),
 			AccessToken:  getEnv("OZON_ACCESS_TOKEN", ""),
 			RefreshToken: getEnv("OZON_REFRESH_TOKEN", ""),
 			Cookie:       getEnv("OZON_COOKIE", ""),
+			BrowserURL:   getEnv("OZON_BROWSER_URL", ""),
 			Logger:       log,
 		}),
 		scraper.NewYandexMarketScraper(2),

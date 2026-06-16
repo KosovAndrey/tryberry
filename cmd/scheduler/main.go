@@ -65,6 +65,13 @@ func run(log *slog.Logger) error {
 	// опроса (в отличие от WB basket CDN). Ozon-товары скрейпим не чаще этого,
 	// даже у reseller_pro (1 мин). 0 — отключить ограничение.
 	ozonMinInterval := time.Duration(getEnvInt("OZON_MIN_INTERVAL_MINUTES", 20)) * time.Minute
+	// Ozon идёт тарифным кадансом как WB, но в N раз реже (антибот не любит
+	// частоту): эффективный интервал Ozon-товара = интервал плана × этот множитель,
+	// с полом ozonMinInterval. Reseller-планы Ozon не тянут вовсе (см. ниже).
+	ozonMult := getEnvInt("OZON_INTERVAL_MULTIPLIER", 2)
+	if ozonMult < 1 {
+		ozonMult = 1
+	}
 	// Шаг тикера: часто опрашиваем БД, но эмитим только «созревшие» товары/запросы
 	// (по last_enqueued_at + их интервал). Должен быть заметно меньше самого
 	// короткого тарифного интервала (reseller = 1 мин). Один шаг на оба пути.
@@ -105,9 +112,10 @@ func run(log *slog.Logger) error {
 	log.Info("scheduler started",
 		"default_interval", defaultInterval.String(),
 		"ozon_min_interval", ozonMinInterval.String(),
+		"ozon_mult", ozonMult,
 		"tick", tick.String())
 
-	go runProductScheduler(ctx, log, productRepo, productProducer, tick, defaultInterval, ozonMinInterval)
+	go runProductScheduler(ctx, log, productRepo, productProducer, tick, defaultInterval, ozonMinInterval, ozonMult)
 	go runSearchScheduler(ctx, log, searchQueryRepo, searchProducer, resellerProducer, tick, defaultInterval)
 
 	<-ctx.Done()
@@ -128,9 +136,10 @@ func runProductScheduler(
 	productRepo *postgres.ProductRepo,
 	producer *kafka.Producer,
 	tickInterval, defaultInterval, ozonMinInterval time.Duration,
+	ozonMult int,
 ) {
 	tick := func() {
-		if err := productSchedulerTick(ctx, log, productRepo, producer, defaultInterval, ozonMinInterval); err != nil {
+		if err := productSchedulerTick(ctx, log, productRepo, producer, defaultInterval, ozonMinInterval, ozonMult); err != nil {
 			log.Error("product scheduler tick failed", "err", err)
 		}
 	}
@@ -153,6 +162,7 @@ func productSchedulerTick(
 	productRepo *postgres.ProductRepo,
 	producer *kafka.Producer,
 	defaultInterval, ozonMinInterval time.Duration,
+	ozonMult int,
 ) error {
 	rows, err := productRepo.GetSchedulableProducts(ctx)
 	if err != nil {
@@ -168,27 +178,33 @@ func productSchedulerTick(
 		url    string
 		eff    time.Duration
 		lastEn *time.Time
+		has    bool // есть хоть один подписчик, по которому товар скрейпится
 	}
 	byProduct := make(map[int64]*agg)
 	for _, r := range rows {
-		iv := domain.EffectivePlanFor(r.OwnerPlan, r.PlanExpiresAt, now).EffectiveInterval(defaultInterval)
 		a, ok := byProduct[r.ProductID]
 		if !ok {
-			byProduct[r.ProductID] = &agg{url: r.URL, eff: iv, lastEn: r.LastEnqueuedAt}
+			a = &agg{url: r.URL, lastEn: r.LastEnqueuedAt}
+			byProduct[r.ProductID] = a
+		}
+		isOzon := strings.Contains(strings.ToLower(r.URL), "ozon.ru")
+		plan := domain.EffectivePlanFor(r.OwnerPlan, r.PlanExpiresAt, now)
+		// Reseller-планы Ozon не тянут (минутный каданс губителен для антибота):
+		// такой подписчик не вносит вклад в Ozon-товар. На WB он работает как обычно.
+		if isOzon && domain.IsResellerPlan(plan.Name) {
 			continue
 		}
-		if iv < a.eff {
-			a.eff = iv
-		}
-	}
-
-	// Пол интервала для Ozon: даже самый быстрый тариф не опрашивает Ozon чаще
-	// ozonMinInterval (антибот/один аккаунт+IP). WB остаётся на тарифном кадансе.
-	if ozonMinInterval > 0 {
-		for _, a := range byProduct {
-			if a.eff < ozonMinInterval && strings.Contains(strings.ToLower(a.url), "ozon.ru") {
-				a.eff = ozonMinInterval
+		iv := plan.EffectiveInterval(defaultInterval)
+		if isOzon {
+			// Ozon = тарифный каданс WB, но в ozonMult раз реже, с полом ozonMinInterval.
+			iv *= time.Duration(ozonMult)
+			if ozonMinInterval > 0 && iv < ozonMinInterval {
+				iv = ozonMinInterval
 			}
+		}
+		if !a.has || iv < a.eff {
+			a.eff = iv
+			a.has = true
 		}
 	}
 
@@ -198,6 +214,10 @@ func productSchedulerTick(
 	}
 	var dueList []due
 	for id, a := range byProduct {
+		// Ozon-товар, у которого все подписчики — reseller: ни одного вклада → не скрейпим.
+		if !a.has {
+			continue
+		}
 		if a.lastEn != nil && now.Sub(*a.lastEn) < a.eff {
 			continue
 		}

@@ -1,6 +1,9 @@
 package domain
 
-import "time"
+import (
+	"strings"
+	"time"
+)
 
 // TrialDuration — срок бесплатного триала поиска.
 const TrialDuration = 3 * 24 * time.Hour
@@ -91,4 +94,12 @@ func (p Plan) EffectiveInterval(def time.Duration) time.Duration {
 func EffectivePlanFor(name string, expiresAt *time.Time, now time.Time) Plan {
 	u := User{Plan: name, PlanExpiresAt: expiresAt}
 	return u.EffectivePlan(now)
+}
+
+// IsResellerPlan — план «для перекупов» (минутная быстрая дорожка).
+// По таким подпискам Ozon НЕ скрейпится: антибот FAB не любит частоту, а Ozon и
+// так идёт замедленным тарифным кадансом (×OZON_INTERVAL_MULTIPLIER от WB).
+// Распознаём по префиксу имени (reseller_start/reseller_pro/legacy reseller).
+func IsResellerPlan(name string) bool {
+	return strings.HasPrefix(name, "reseller")
 }

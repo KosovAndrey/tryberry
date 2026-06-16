@@ -30,7 +30,11 @@ func (b *Bot) handleTrack(ctx context.Context, vkID int64, user *domain.User, ra
 
 	b.send(ctx, vkID, "⏳ Получаю данные о товаре...", nil)
 
-	result, err := s.Scrape(ctx, rawURL)
+	// Через registry.Scrape (а не s.Scrape напрямую), чтобы инкрементить
+	// tryberrybot_scrape_requests_total — иначе ручные /track-скрейпы из VK
+	// не попадают в success-rate/алерт (см. telegram.doTrack). Маркетплейс
+	// уже знаем из s.
+	result, _, err := b.registry.Scrape(ctx, rawURL)
 	if err != nil {
 		b.log.Error("vk: scrape on track", "url", rawURL, "err", err)
 		msg := "❌ Не удалось получить данные о товаре. Попробуй позже."

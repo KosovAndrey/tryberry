@@ -1,0 +1,11 @@
+# Браузеры для прохождения антибота FAB:
+#  - camoufox — анти-детект Firefox-сборка (сильный спуфинг отпечатка); основной
+#    движок пробы/майнера. Голый Chromium (patchright) FAB палит на Xvfb-фингерпринте.
+#  - patchright — стелс-Chromium (Playwright-форк), запасной движок.
+# aiohttp — async HTTP-сервер сайдкара (GET /scrape, /healthz).
+# Браузеры ставятся в Dockerfile (`camoufox fetch`, `patchright install chromium`).
+# [geoip] — extra для geoip=True: выравнивает локаль/таймзону/гео отпечатка под
+# exit-IP прокси (стелс). `camoufox fetch` тогда тянет ещё и базу GeoLite2.
+camoufox[geoip]
+patchright
+aiohttp>=3,<4
