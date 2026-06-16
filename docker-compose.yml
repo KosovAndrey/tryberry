@@ -135,6 +135,11 @@ services:
       # Оплата ЮKassa (пусто = вебхук не монтируется). Секреты — из .env.
       YOOKASSA_SHOP_ID: "${YOOKASSA_SHOP_ID:-}"
       YOOKASSA_SECRET_KEY: "${YOOKASSA_SECRET_KEY:-}"
+      # Робокасса: вебхук /robokassa/result монтируется при заданных LOGIN+PASSWORD2.
+      PAYMENT_PROVIDER: "${PAYMENT_PROVIDER:-yookassa}"
+      ROBOKASSA_MERCHANT_LOGIN: "${ROBOKASSA_MERCHANT_LOGIN:-}"
+      ROBOKASSA_PASSWORD2: "${ROBOKASSA_PASSWORD2:-}"
+      ROBOKASSA_HASH_TYPE: "${ROBOKASSA_HASH_TYPE:-md5}"
     depends_on:
       postgres:
         condition: service_healthy
@@ -181,6 +186,17 @@ services:
       YOOKASSA_RETURN_URL: "${YOOKASSA_RETURN_URL:-https://t.me/TryBerryBot}"
       # Ставка НДС в чеке 54-ФЗ. Самозанятый (НПД) → 1 = «без НДС».
       YOOKASSA_VAT_CODE: "${YOOKASSA_VAT_CODE:-1}"
+      # Робокасса (выбор провайдера через PAYMENT_PROVIDER=robokassa). Секреты — из .env.
+      # Для теста: ROBOKASSA_IS_TEST=1 + тестовые пароли. SNO/NPD — формат чека НПД.
+      PAYMENT_PROVIDER: "${PAYMENT_PROVIDER:-yookassa}"
+      ROBOKASSA_MERCHANT_LOGIN: "${ROBOKASSA_MERCHANT_LOGIN:-}"
+      ROBOKASSA_PASSWORD1: "${ROBOKASSA_PASSWORD1:-}"
+      ROBOKASSA_PASSWORD2: "${ROBOKASSA_PASSWORD2:-}"
+      ROBOKASSA_IS_TEST: "${ROBOKASSA_IS_TEST:-0}"
+      ROBOKASSA_HASH_TYPE: "${ROBOKASSA_HASH_TYPE:-md5}"
+      ROBOKASSA_SNO: "${ROBOKASSA_SNO:-npd}"
+      ROBOKASSA_NPD: "${ROBOKASSA_NPD:-1}"
+      BILLING_CHARGE_INTERVAL_MINUTES: "${BILLING_CHARGE_INTERVAL_MINUTES:-60}"
       # Ozon: бот при /track скрейпит сразу → нужен тот же мобильный РФ-прокси,
       # что у scraper (tls-client ходит через него напрямую, мимо HTTPS_PROXY).
       OZON_PROXY_URL: "${OZON_PROXY_URL:-}"
