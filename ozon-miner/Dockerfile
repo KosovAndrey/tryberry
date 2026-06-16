@@ -15,9 +15,15 @@ ENV PYTHONUNBUFFERED=1 \
 WORKDIR /app
 
 COPY requirements.txt .
-# pip + Chromium + его OS-зависимости. (Этот слой кэшируется.)
+# pip + браузеры + их OS-зависимости. (Этот слой кэшируется.)
+#  - patchright install chromium — запасной Chromium-движок (+ его deps).
+#  - camoufox fetch — скачивает анти-детект Firefox-сборку (основной движок).
+#  - playwright install-deps firefox — системные либы для Firefox/camoufox
+#    (camoufox тянет playwright, поэтому CLI доступен; ставит GTK/X11/звук и пр.).
 RUN pip install -r requirements.txt \
  && patchright install --with-deps chromium \
+ && python -m camoufox fetch \
+ && playwright install-deps firefox \
  && apt-get clean \
  && rm -rf /var/lib/apt/lists/* /root/.cache/pip
 
