@@ -4,6 +4,8 @@
 #  - patchright — стелс-Chromium (Playwright-форк), запасной движок.
 # aiohttp — async HTTP-сервер сайдкара (GET /scrape, /healthz).
 # Браузеры ставятся в Dockerfile (`camoufox fetch`, `patchright install chromium`).
-camoufox
+# [geoip] — extra для geoip=True: выравнивает локаль/таймзону/гео отпечатка под
+# exit-IP прокси (стелс). `camoufox fetch` тогда тянет ещё и базу GeoLite2.
+camoufox[geoip]
 patchright
 aiohttp>=3,<4
