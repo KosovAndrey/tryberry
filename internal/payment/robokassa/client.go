@@ -33,7 +33,7 @@ type Client struct {
 	password1 string
 	password2 string
 	isTest    bool
-	sno       string // система налогообложения для чека (самозанятый → "npd")
+	sno       string // система налогообложения для чека; "" → не передаём (самозанятый)
 	hashType  string // md5 | sha256 | sha512 (как настроено в ЛК)
 
 	payURL       string
@@ -47,7 +47,7 @@ type Config struct {
 	Password1 string
 	Password2 string
 	IsTest    bool
-	SNO       string // "npd" для самозанятого
+	SNO       string // "npd"/"" для самозанятого (sno в чек не кладём); иначе osn/usn_income/...
 	HashType  string // пусто → md5
 }
 
@@ -57,9 +57,13 @@ func NewClient(cfg Config) *Client {
 	if ht == "" {
 		ht = "md5"
 	}
-	sno := cfg.SNO
-	if sno == "" {
-		sno = "npd"
+	// У Робокассы НЕТ кода sno для НПД (только osn/usn_income/usn_income_outcome/
+	// esn/patent). Для самозанятого sno в чек не кладём — Робокасса берёт систему
+	// налогообложения из ЛК. Поэтому "npd" (и пустое) → "" = sno опускаем; иначе
+	// валидное значение прокидываем как есть. Невалидный sno даёт ошибку 29.
+	sno := strings.ToLower(strings.TrimSpace(cfg.SNO))
+	if sno == "npd" {
+		sno = ""
 	}
 	return &Client{
 		login:        cfg.Login,
@@ -102,7 +106,8 @@ type PaymentParams struct {
 
 // receiptEncoded — компактный JSON чека в URL-encoded виде (в этом виде он идёт
 // и в подпись, и в URL — url.Values.Encode применит то же QueryEscape). Если у
-// чека не задана система налогообложения, подставляем sno клиента (npd).
+// чека не задана система налогообложения, подставляем sno клиента (пустой → sno
+// в JSON не попадёт благодаря omitempty: самозанятый sno не передаёт).
 func (c *Client) receiptEncoded(r *Receipt) (raw, encoded string, err error) {
 	if r == nil {
 		return "", "", nil

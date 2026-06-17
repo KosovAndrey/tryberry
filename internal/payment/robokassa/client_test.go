@@ -53,8 +53,8 @@ func TestBuildPaymentURL_SignatureNoReceipt(t *testing.T) {
 
 func TestBuildPaymentURL_SignatureWithReceiptMatchesURL(t *testing.T) {
 	c := newTestClient()
+	// Самозанятый: sno в чеке НЕ задаём (у Робокассы нет кода НПД).
 	rcpt := &Receipt{
-		SNO: "npd",
 		Items: []ReceiptItem{{
 			Name: "Подписка Lite", Quantity: 1, Sum: 189.0,
 			PaymentMethod: "full_prepayment", PaymentObject: "service", Tax: "none",
@@ -72,6 +72,23 @@ func TestBuildPaymentURL_SignatureWithReceiptMatchesURL(t *testing.T) {
 	u, _ := url.Parse(rawURL)
 	if got := u.Query().Get("SignatureValue"); got != want {
 		t.Fatalf("signature with receipt = %q, want %q (encReceipt=%q)", got, want, encInURL)
+	}
+
+	// sno не должен попасть в чек: невалидный sno=npd → ошибка 29 у Робокассы.
+	if rcptJSON := u.Query().Get("Receipt"); strings.Contains(rcptJSON, "sno") {
+		t.Fatalf("receipt must not contain sno for self-employed, got %q", rcptJSON)
+	}
+}
+
+// Явное значение sno (не самозанятый) должно прокидываться в чек как есть.
+func TestReceipt_ExplicitSNOPassesThrough(t *testing.T) {
+	c := NewClient(Config{Login: "shop", Password1: "pw1", Password2: "pw2", SNO: "usn_income"})
+	raw, _, err := c.receiptEncoded(&Receipt{Items: []ReceiptItem{{Name: "x", Quantity: 1, Sum: 1}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(raw, `"sno":"usn_income"`) {
+		t.Fatalf("explicit sno not in receipt: %q", raw)
 	}
 }
 
