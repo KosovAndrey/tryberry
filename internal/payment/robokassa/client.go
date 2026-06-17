@@ -104,13 +104,14 @@ type PaymentParams struct {
 	Receipt     *Receipt // nil → без чека
 }
 
-// receiptEncoded — чек как URL-encoded JSON. В ЭТОМ ЖЕ виде он идёт и в подпись,
-// и в URL. Кодируем в стиле encodeURIComponent / RFC 3986 (пробел → "%20", не
-// "+"): .NET-бэкенд Робокассы при сверке подписи перекодирует чек именно так, и
-// расхождение "+"/"%20" даёт ошибку 29 («Неверный параметр Signature»). Если у
-// чека не задана система налогообложения, подставляем sno клиента (пустой → sno
-// в JSON не попадёт благодаря omitempty: самозанятый sno не передаёт).
-func (c *Client) receiptEncoded(r *Receipt) (string, error) {
+// receiptJSON — чек как компактный JSON. ВАЖНО про подпись: Робокасса считает
+// SignatureValue от СЫРОГО JSON чека (MerchantLogin:OutSum:InvId:Receipt:Пароль1),
+// а в URL/тело тот же JSON идёт уже URL-кодированным (это делает url.Values.Encode
+// и декодируется обратно в тот же JSON). Кодировать чек ПЕРЕД подписью НЕ нужно —
+// именно это давало ошибку 29 («Неверный параметр Signature»). Если у чека не
+// задана система налогообложения, подставляем sno клиента (пустой → sno в JSON не
+// попадёт благодаря omitempty: самозанятый sno не передаёт).
+func (c *Client) receiptJSON(r *Receipt) (string, error) {
 	if r == nil {
 		return "", nil
 	}
@@ -121,21 +122,21 @@ func (c *Client) receiptEncoded(r *Receipt) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	return strings.ReplaceAll(url.QueryEscape(string(b)), "+", "%20"), nil
+	return string(b), nil
 }
 
 // BuildPaymentURL — подписанная ссылка на оплату.
-// Подпись: MerchantLogin:OutSum:InvId[:Receipt]:Password1 (Receipt — URL-encoded).
+// Подпись: MerchantLogin:OutSum:InvId[:Receipt]:Password1 (Receipt — СЫРОЙ JSON).
 func (c *Client) BuildPaymentURL(p PaymentParams) (string, error) {
 	invID := strconv.FormatInt(p.InvID, 10)
-	encReceipt, err := c.receiptEncoded(p.Receipt)
+	receipt, err := c.receiptJSON(p.Receipt)
 	if err != nil {
 		return "", fmt.Errorf("robokassa: marshal receipt: %w", err)
 	}
 
 	sigParts := []string{c.login, p.OutSum, invID}
-	if encReceipt != "" {
-		sigParts = append(sigParts, encReceipt)
+	if receipt != "" {
+		sigParts = append(sigParts, receipt) // сырой JSON, без URL-кодирования
 	}
 	sigParts = append(sigParts, c.password1)
 	sig := c.hashHex(strings.Join(sigParts, ":"))
@@ -147,6 +148,11 @@ func (c *Client) BuildPaymentURL(p PaymentParams) (string, error) {
 	if p.Description != "" {
 		q.Set("Description", p.Description)
 	}
+	if receipt != "" {
+		// В URL чек кодируется q.Encode(); Робокасса декодирует его обратно в тот
+		// же JSON и сверит подпись (которая по сырому JSON).
+		q.Set("Receipt", receipt)
+	}
 	q.Set("SignatureValue", sig)
 	if p.Email != "" {
 		q.Set("Email", p.Email)
@@ -157,15 +163,7 @@ func (c *Client) BuildPaymentURL(p PaymentParams) (string, error) {
 	if c.isTest {
 		q.Set("IsTest", "1")
 	}
-
-	u := c.payURL + "?" + q.Encode()
-	if encReceipt != "" {
-		// Receipt дописываем уже закодированным — байт-в-байт как в подписи.
-		// Через q.Set его перекодировал бы q.Encode() (двойное кодирование %20→%2520
-		// и пробел "+" вместо "%20") → подпись бы не сошлась.
-		u += "&Receipt=" + encReceipt
-	}
-	return u, nil
+	return c.payURL + "?" + q.Encode(), nil
 }
 
 // VerifyResult проверяет подпись уведомления ResultURL.
@@ -189,14 +187,14 @@ type RecurringParams struct {
 // ResultURL (как обычная оплата). Возвращает ошибку, если Робокасса не приняла.
 func (c *Client) ChargeRecurring(ctx context.Context, p RecurringParams) error {
 	invID := strconv.FormatInt(p.InvID, 10)
-	encReceipt, err := c.receiptEncoded(p.Receipt)
+	receipt, err := c.receiptJSON(p.Receipt)
 	if err != nil {
 		return fmt.Errorf("robokassa: marshal receipt: %w", err)
 	}
 
 	sigParts := []string{c.login, p.OutSum, invID}
-	if encReceipt != "" {
-		sigParts = append(sigParts, encReceipt)
+	if receipt != "" {
+		sigParts = append(sigParts, receipt) // сырой JSON, без URL-кодирования
 	}
 	sigParts = append(sigParts, c.password1)
 	sig := c.hashHex(strings.Join(sigParts, ":"))
@@ -209,19 +207,15 @@ func (c *Client) ChargeRecurring(ctx context.Context, p RecurringParams) error {
 	if p.Description != "" {
 		form.Set("Description", p.Description)
 	}
+	if receipt != "" {
+		form.Set("Receipt", receipt) // form.Encode() закодирует; декодируется в тот же JSON
+	}
 	form.Set("SignatureValue", sig)
 	if c.isTest {
 		form.Set("IsTest", "1")
 	}
 
-	// Receipt дописываем уже закодированным (тем же видом, что и в подписи) —
-	// form.Encode() закодировал бы пробел как "+" и сломал подпись (см. BuildPaymentURL).
-	body := form.Encode()
-	if encReceipt != "" {
-		body += "&Receipt=" + encReceipt
-	}
-
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.recurringURL, strings.NewReader(body))
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.recurringURL, strings.NewReader(form.Encode()))
 	if err != nil {
 		return err
 	}

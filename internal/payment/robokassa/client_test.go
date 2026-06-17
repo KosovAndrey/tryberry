@@ -13,18 +13,6 @@ func md5hex(s string) string {
 	return hex.EncodeToString(sum[:])
 }
 
-// rawQueryParam достаёт значение параметра из query-строки БЕЗ декодирования
-// (нужно, чтобы сверить Receipt в URL с тем, что ушло в подпись).
-func rawQueryParam(rawURL, key string) string {
-	_, q, _ := strings.Cut(rawURL, "?")
-	for _, kv := range strings.Split(q, "&") {
-		if k, v, ok := strings.Cut(kv, "="); ok && k == key {
-			return v
-		}
-	}
-	return ""
-}
-
 func newTestClient() *Client {
 	return NewClient(Config{Login: "shop", Password1: "pw1", Password2: "pw2"})
 }
@@ -51,7 +39,7 @@ func TestBuildPaymentURL_SignatureNoReceipt(t *testing.T) {
 	}
 }
 
-func TestBuildPaymentURL_SignatureWithReceiptMatchesURL(t *testing.T) {
+func TestBuildPaymentURL_SignatureWithReceiptUsesRawJSON(t *testing.T) {
 	c := newTestClient()
 	// Самозанятый: sno в чеке НЕ задаём (у Робокассы нет кода НПД).
 	rcpt := &Receipt{
@@ -65,48 +53,51 @@ func TestBuildPaymentURL_SignatureWithReceiptMatchesURL(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// Receipt в URL (закодированный q.Encode) должен совпадать с тем, что в подписи.
-	encInURL := rawQueryParam(rawURL, "Receipt")
-	want := md5hex("shop:189.00:7:" + encInURL + ":pw1")
-
 	u, _ := url.Parse(rawURL)
+	// Робокасса подписывает СЫРОЙ (декодированный) JSON чека — url.Values.Get
+	// возвращает именно декодированное значение параметра Receipt.
+	rawReceipt := u.Query().Get("Receipt")
+	if !strings.HasPrefix(rawReceipt, `{"items":`) {
+		t.Fatalf("Receipt в URL должен декодироваться в сырой JSON, got %q", rawReceipt)
+	}
+	want := md5hex("shop:189.00:7:" + rawReceipt + ":pw1")
 	if got := u.Query().Get("SignatureValue"); got != want {
-		t.Fatalf("signature with receipt = %q, want %q (encReceipt=%q)", got, want, encInURL)
+		t.Fatalf("signature with receipt = %q, want %q (rawReceipt=%q)", got, want, rawReceipt)
 	}
 
 	// sno не должен попасть в чек: невалидный sno=npd → ошибка 29 у Робокассы.
-	if rcptJSON := u.Query().Get("Receipt"); strings.Contains(rcptJSON, "sno") {
-		t.Fatalf("receipt must not contain sno for self-employed, got %q", rcptJSON)
+	if strings.Contains(rawReceipt, "sno") {
+		t.Fatalf("receipt must not contain sno for self-employed, got %q", rawReceipt)
 	}
 }
 
 // Явное значение sno (не самозанятый) должно прокидываться в чек как есть.
 func TestReceipt_ExplicitSNOPassesThrough(t *testing.T) {
 	c := NewClient(Config{Login: "shop", Password1: "pw1", Password2: "pw2", SNO: "usn_income"})
-	enc, err := c.receiptEncoded(&Receipt{Items: []ReceiptItem{{Name: "x", Quantity: 1, Sum: 1}}})
+	raw, err := c.receiptJSON(&Receipt{Items: []ReceiptItem{{Name: "x", Quantity: 1, Sum: 1}}})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(enc, "usn_income") {
-		t.Fatalf("explicit sno not in receipt: %q", enc)
+	if !strings.Contains(raw, `"sno":"usn_income"`) {
+		t.Fatalf("explicit sno not in receipt: %q", raw)
 	}
 }
 
-// Регресс ошибки 29: пробел в чеке должен кодироваться как %20 (RFC 3986), а не
-// "+" — иначе .NET-бэкенд Робокассы не сойдётся по подписи.
-func TestReceipt_SpaceEncodedAsPercent20(t *testing.T) {
+// Регресс ошибки 29: в подпись идёт СЫРОЙ JSON, без URL-кодирования (пробелы и
+// двоеточия остаются как есть, а не %20/%3A).
+func TestReceipt_SignedAsRawJSON(t *testing.T) {
 	c := newTestClient()
-	enc, err := c.receiptEncoded(&Receipt{Items: []ReceiptItem{{
+	raw, err := c.receiptJSON(&Receipt{Items: []ReceiptItem{{
 		Name: "Тариф Lite 30 дней", Quantity: 1, Sum: 199, Tax: "none",
 	}}})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if strings.Contains(enc, "+") {
-		t.Fatalf("receipt must not use + for space, got %q", enc)
+	if strings.ContainsAny(raw, "%+") {
+		t.Fatalf("raw receipt JSON must not be URL-encoded, got %q", raw)
 	}
-	if !strings.Contains(enc, "%20") {
-		t.Fatalf("expected %%20 for spaces in receipt, got %q", enc)
+	if !strings.Contains(raw, "Тариф Lite 30 дней") {
+		t.Fatalf("expected literal name with spaces, got %q", raw)
 	}
 }
 
