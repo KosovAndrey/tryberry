@@ -33,7 +33,7 @@ type Client struct {
 	password1 string
 	password2 string
 	isTest    bool
-	sno       string // система налогообложения для чека (самозанятый → "npd")
+	sno       string // система налогообложения для чека; "" → не передаём (самозанятый)
 	hashType  string // md5 | sha256 | sha512 (как настроено в ЛК)
 
 	payURL       string
@@ -47,7 +47,7 @@ type Config struct {
 	Password1 string
 	Password2 string
 	IsTest    bool
-	SNO       string // "npd" для самозанятого
+	SNO       string // "npd"/"" для самозанятого (sno в чек не кладём); иначе osn/usn_income/...
 	HashType  string // пусто → md5
 }
 
@@ -57,9 +57,13 @@ func NewClient(cfg Config) *Client {
 	if ht == "" {
 		ht = "md5"
 	}
-	sno := cfg.SNO
-	if sno == "" {
-		sno = "npd"
+	// У Робокассы НЕТ кода sno для НПД (только osn/usn_income/usn_income_outcome/
+	// esn/patent). Для самозанятого sno в чек не кладём — Робокасса берёт систему
+	// налогообложения из ЛК. Поэтому "npd" (и пустое) → "" = sno опускаем; иначе
+	// валидное значение прокидываем как есть. Невалидный sno даёт ошибку 29.
+	sno := strings.ToLower(strings.TrimSpace(cfg.SNO))
+	if sno == "npd" {
+		sno = ""
 	}
 	return &Client{
 		login:        cfg.Login,
@@ -100,35 +104,39 @@ type PaymentParams struct {
 	Receipt     *Receipt // nil → без чека
 }
 
-// receiptEncoded — компактный JSON чека в URL-encoded виде (в этом виде он идёт
-// и в подпись, и в URL — url.Values.Encode применит то же QueryEscape). Если у
-// чека не задана система налогообложения, подставляем sno клиента (npd).
-func (c *Client) receiptEncoded(r *Receipt) (raw, encoded string, err error) {
+// receiptJSON — чек как компактный JSON. ВАЖНО про подпись: Робокасса считает
+// SignatureValue от СЫРОГО JSON чека (MerchantLogin:OutSum:InvId:Receipt:Пароль1),
+// а в URL/тело тот же JSON идёт уже URL-кодированным (это делает url.Values.Encode
+// и декодируется обратно в тот же JSON). Кодировать чек ПЕРЕД подписью НЕ нужно —
+// именно это давало ошибку 29 («Неверный параметр Signature»). Если у чека не
+// задана система налогообложения, подставляем sno клиента (пустой → sno в JSON не
+// попадёт благодаря omitempty: самозанятый sno не передаёт).
+func (c *Client) receiptJSON(r *Receipt) (string, error) {
 	if r == nil {
-		return "", "", nil
+		return "", nil
 	}
 	if r.SNO == "" {
 		r.SNO = c.sno
 	}
 	b, err := json.Marshal(r)
 	if err != nil {
-		return "", "", err
+		return "", err
 	}
-	return string(b), url.QueryEscape(string(b)), nil
+	return string(b), nil
 }
 
 // BuildPaymentURL — подписанная ссылка на оплату.
-// Подпись: MerchantLogin:OutSum:InvId[:Receipt]:Password1 (Receipt — URL-encoded).
+// Подпись: MerchantLogin:OutSum:InvId[:Receipt]:Password1 (Receipt — СЫРОЙ JSON).
 func (c *Client) BuildPaymentURL(p PaymentParams) (string, error) {
 	invID := strconv.FormatInt(p.InvID, 10)
-	rawReceipt, encReceipt, err := c.receiptEncoded(p.Receipt)
+	receipt, err := c.receiptJSON(p.Receipt)
 	if err != nil {
 		return "", fmt.Errorf("robokassa: marshal receipt: %w", err)
 	}
 
 	sigParts := []string{c.login, p.OutSum, invID}
-	if encReceipt != "" {
-		sigParts = append(sigParts, encReceipt)
+	if receipt != "" {
+		sigParts = append(sigParts, receipt) // сырой JSON, без URL-кодирования
 	}
 	sigParts = append(sigParts, c.password1)
 	sig := c.hashHex(strings.Join(sigParts, ":"))
@@ -140,9 +148,10 @@ func (c *Client) BuildPaymentURL(p PaymentParams) (string, error) {
 	if p.Description != "" {
 		q.Set("Description", p.Description)
 	}
-	if rawReceipt != "" {
-		// Сырой JSON: q.Encode() применит QueryEscape — совпадёт с encReceipt в подписи.
-		q.Set("Receipt", rawReceipt)
+	if receipt != "" {
+		// В URL чек кодируется q.Encode(); Робокасса декодирует его обратно в тот
+		// же JSON и сверит подпись (которая по сырому JSON).
+		q.Set("Receipt", receipt)
 	}
 	q.Set("SignatureValue", sig)
 	if p.Email != "" {
@@ -178,14 +187,14 @@ type RecurringParams struct {
 // ResultURL (как обычная оплата). Возвращает ошибку, если Робокасса не приняла.
 func (c *Client) ChargeRecurring(ctx context.Context, p RecurringParams) error {
 	invID := strconv.FormatInt(p.InvID, 10)
-	rawReceipt, encReceipt, err := c.receiptEncoded(p.Receipt)
+	receipt, err := c.receiptJSON(p.Receipt)
 	if err != nil {
 		return fmt.Errorf("robokassa: marshal receipt: %w", err)
 	}
 
 	sigParts := []string{c.login, p.OutSum, invID}
-	if encReceipt != "" {
-		sigParts = append(sigParts, encReceipt)
+	if receipt != "" {
+		sigParts = append(sigParts, receipt) // сырой JSON, без URL-кодирования
 	}
 	sigParts = append(sigParts, c.password1)
 	sig := c.hashHex(strings.Join(sigParts, ":"))
@@ -198,8 +207,8 @@ func (c *Client) ChargeRecurring(ctx context.Context, p RecurringParams) error {
 	if p.Description != "" {
 		form.Set("Description", p.Description)
 	}
-	if rawReceipt != "" {
-		form.Set("Receipt", rawReceipt)
+	if receipt != "" {
+		form.Set("Receipt", receipt) // form.Encode() закодирует; декодируется в тот же JSON
 	}
 	form.Set("SignatureValue", sig)
 	if c.isTest {
@@ -217,13 +226,13 @@ func (c *Client) ChargeRecurring(ctx context.Context, p RecurringParams) error {
 		return err
 	}
 	defer resp.Body.Close()
-	body, _ := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
+	respBody, _ := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return fmt.Errorf("robokassa recurring: %s: %s", resp.Status, strings.TrimSpace(string(body)))
+		return fmt.Errorf("robokassa recurring: %s: %s", resp.Status, strings.TrimSpace(string(respBody)))
 	}
 	// Успех — ответ начинается с "OK" (далее номер счёта). Иначе — текст ошибки.
-	if !strings.HasPrefix(strings.TrimSpace(string(body)), "OK") {
-		return fmt.Errorf("robokassa recurring rejected: %s", strings.TrimSpace(string(body)))
+	if !strings.HasPrefix(strings.TrimSpace(string(respBody)), "OK") {
+		return fmt.Errorf("robokassa recurring rejected: %s", strings.TrimSpace(string(respBody)))
 	}
 	return nil
 }
