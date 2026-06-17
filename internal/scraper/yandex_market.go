@@ -160,7 +160,9 @@ func (s *YandexMarketScraper) Scrape(ctx context.Context, url string) (*Result, 
 		"ld_types", ymLDTypes(string(body)),
 		"price_ctx", ymPriceContext(body),
 		"cur_ctx", ymCurrencyContext(body))
-	return nil, ErrProductNotFound
+	// status="parse_error" (а не not_found): антибот пройден, но цены нет —
+	// видно на дашборде как отдельный сигнал дрейфа вёрстки.
+	return nil, ErrParseFailed
 }
 
 // ymCurrencyContext возвращает фрагмент вокруг первого вхождения кода валюты
