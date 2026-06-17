@@ -12,6 +12,7 @@ import (
 	tgbotapi "github.com/go-telegram-bot-api/telegram-bot-api/v5"
 
 	"gitlab.com/KosovAndrey/tryberrybot/internal/domain"
+	"gitlab.com/KosovAndrey/tryberrybot/internal/scraper"
 )
 
 // fsmTTL — сколько ждём ввод порога/процента, прежде чем состояние протухнет.
@@ -103,7 +104,14 @@ func (b *Bot) startSearchTrack(ctx context.Context, chatID int64, rawURL string,
 
 	ss, err := b.registry.FindSearchByURL(rawURL)
 	if err != nil {
-		b.reply(chatID, "Это не похоже на поисковую ссылку Wildberries. Нужна ссылка с параметром поиска.")
+		b.reply(chatID, "Это не похоже на поисковую ссылку. Нужна ссылка на поисковую выдачу (Wildberries или Яндекс.Маркет) с текстом запроса.")
+		return
+	}
+
+	// Ozon-поиск пока за антиботом FAB + сайдкар без search-маршрута: ссылку
+	// распознаём, но подписку не заводим (иначе она была бы «мёртвой»).
+	if ss.Marketplace() == scraper.MarketplaceOzon {
+		b.reply(chatID, ozonComingSoonMsg)
 		return
 	}
 

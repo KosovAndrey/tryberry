@@ -106,27 +106,28 @@ func run(log *slog.Logger) error {
 	// Боту токен скрейпа не нужен — он зовёт только разбор URL
 	// (FindByURL/NormalizeSearchURL), не ScrapeSearch. Идентично api.
 	wbSearch := scraper.NewWildberriesSearchScraper(scraper.NewWildberriesScraper(5), nil, nil, 5, 0)
+	// Бот при /track скрейпит карточку сразу (показать товар), а поисковые ссылки
+	// только разбирает (NormalizeSearchURL, не ScrapeSearch). Поэтому Ozon/Я.Маркет
+	// заводим как search-обёртки: они встраивают карточный скрейпер (Matches/Scrape)
+	// И добавляют распознавание поисковых ссылок (MatchesSearch/NormalizeSearchURL).
+	ozonCard := scraper.NewOzonScraper(scraper.OzonOptions{
+		ProxyURL:     getEnv("OZON_PROXY_URL", ""),
+		Mode:         getEnv("OZON_API_MODE", "mobile"),
+		AccessToken:  getEnv("OZON_ACCESS_TOKEN", ""),
+		RefreshToken: getEnv("OZON_REFRESH_TOKEN", ""),
+		Cookie:       getEnv("OZON_COOKIE", ""),
+		BrowserURL:   getEnv("OZON_BROWSER_URL", ""),
+		Logger:       log,
+	})
+	yandexCard := scraper.NewYandexMarketScraper(scraper.YandexMarketOptions{
+		ProxyURL: getEnv("YANDEX_PROXY_URL", getEnv("OZON_PROXY_URL", "")),
+		RPS:      2,
+		Logger:   log,
+	})
 	registry := scraper.NewRegistry(
 		wbSearch,
-		// Бот при /track скрейпит сразу (показать товар) → Ozon нужен рабочим:
-		// browser-режим (OZON_BROWSER_URL) идёт через тот же сайдкар-пул, что и
-		// scraper; иначе путь B (OZON_COOKIE + мобильный прокси).
-		scraper.NewOzonScraper(scraper.OzonOptions{
-			ProxyURL:     getEnv("OZON_PROXY_URL", ""),
-			Mode:         getEnv("OZON_API_MODE", "mobile"),
-			AccessToken:  getEnv("OZON_ACCESS_TOKEN", ""),
-			RefreshToken: getEnv("OZON_REFRESH_TOKEN", ""),
-			Cookie:       getEnv("OZON_COOKIE", ""),
-			BrowserURL:   getEnv("OZON_BROWSER_URL", ""),
-			Logger:       log,
-		}),
-		// Бот при /track скрейпит сразу → Я.Маркет тоже рабочим: без аккаунта,
-		// хороший TLS + RU-прокси (по умолчанию тот же мобильный прокси Ozon).
-		scraper.NewYandexMarketScraper(scraper.YandexMarketOptions{
-			ProxyURL: getEnv("YANDEX_PROXY_URL", getEnv("OZON_PROXY_URL", "")),
-			RPS:      2,
-			Logger:   log,
-		}),
+		scraper.NewOzonSearchScraper(ozonCard),
+		scraper.NewYandexMarketSearchScraper(yandexCard, 60),
 	)
 
 	// getMe ходит наружу (через HTTPS_PROXY). Ретраим старт.
