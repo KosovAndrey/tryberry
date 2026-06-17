@@ -40,6 +40,45 @@ func TestParseYandexMarketHTML_StringImage(t *testing.T) {
 	}
 }
 
+func TestParseYandexMarketHTML_NumericPrice(t *testing.T) {
+	// Цена числом (не строкой) — раньше роняла Unmarshal блока.
+	html := `<script type="application/ld+json">{"@type":"Product","name":"X","offers":{"price":12990}}</script>`
+	r, err := parseYandexMarketHTML(html)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if r.Price != 12990 {
+		t.Errorf("price = %v, want 12990", r.Price)
+	}
+}
+
+func TestParseYandexMarketHTML_AggregateOfferGraph(t *testing.T) {
+	// @graph-обёртка + AggregateOffer с lowPrice + @type массивом.
+	html := `<script type="application/ld+json">{"@context":"https://schema.org","@graph":[
+		{"@type":"BreadcrumbList"},
+		{"@type":["Product","IndividualProduct"],"name":"Y","image":"https://im.jpg",
+		 "offers":{"@type":"AggregateOffer","lowPrice":3499,"priceCurrency":"RUR"}}
+	]}</script>`
+	r, err := parseYandexMarketHTML(html)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if r.Price != 3499 || r.Name != "Y" {
+		t.Errorf("got %+v, want price 3499 name Y", r)
+	}
+}
+
+func TestParseYandexMarketHTML_OffersArray(t *testing.T) {
+	html := `<script type="application/ld+json">{"@type":"Product","name":"Z","offers":[{"price":"550"},{"price":"600"}]}</script>`
+	r, err := parseYandexMarketHTML(html)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if r.Price != 550 {
+		t.Errorf("price = %v, want 550 (first offer)", r.Price)
+	}
+}
+
 func TestParseYandexMarketHTML_NoProduct(t *testing.T) {
 	html := `<script type="application/ld+json">{"@type":"WebSite","name":"Я.Маркет"}</script>`
 	if _, err := parseYandexMarketHTML(html); !errors.Is(err, ErrProductNotFound) {

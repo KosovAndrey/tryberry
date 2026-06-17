@@ -157,8 +157,31 @@ func (s *YandexMarketScraper) Scrape(ctx context.Context, url string) (*Result, 
 	s.log.Warn("yandex market: product not parsed (no JSON-LD price?)",
 		"url", url, "len", len(body),
 		"ld_json", strings.Count(string(body), "application/ld+json"),
-		"price_ctx", ymPriceContext(body))
+		"ld_types", ymLDTypes(string(body)),
+		"price_ctx", ymPriceContext(body),
+		"cur_ctx", ymCurrencyContext(body))
 	return nil, ErrProductNotFound
+}
+
+// ymCurrencyContext возвращает фрагмент вокруг первого вхождения кода валюты
+// (RUR/RUB) — обычно рядом лежит реальное значение цены в embedded-стейте.
+// Для диагностики, если JSON-LD не содержит цены и придётся парсить стейт.
+func ymCurrencyContext(body []byte) string {
+	s := string(body)
+	for _, marker := range []string{"RUR", "RUB"} {
+		if i := strings.Index(s, marker); i >= 0 {
+			start := i - 90
+			if start < 0 {
+				start = 0
+			}
+			end := i + 40
+			if end > len(s) {
+				end = len(s)
+			}
+			return s[start:end]
+		}
+	}
+	return ""
 }
 
 // isYandexCaptcha распознаёт страницу SmartCaptcha. Вызывается ТОЛЬКО когда товар
@@ -201,31 +224,45 @@ func parseYandexMarketHTML(html string) (*Result, error) {
 	}
 
 	for _, m := range matches {
-		var product ymJSONLDProduct
-		if err := json.Unmarshal([]byte(m[1]), &product); err != nil {
-			continue
+		// Блок JSON-LD бывает: объект Product, массив объектов, либо обёртка
+		// {"@graph":[...]} — разбираем все варианты (ymJSONLDNodes).
+		for _, node := range ymJSONLDNodes(strings.TrimSpace(m[1])) {
+			if !node.isProduct() {
+				continue
+			}
+			price := node.bestPrice()
+			if price <= 0 {
+				continue
+			}
+			name := strings.TrimSpace(node.Name)
+			if name == "" {
+				name = "Товар Я.Маркета"
+			}
+			return &Result{
+				Name:     name,
+				Price:    price,
+				ImageURL: ymFirstImage(node.Image),
+			}, nil
 		}
-		if product.Type != "Product" || product.Offers.Price == "" {
-			continue
-		}
-
-		price, err := parsePriceString(product.Offers.Price)
-		if err != nil {
-			continue
-		}
-
-		name := strings.TrimSpace(product.Name)
-		if name == "" {
-			name = "Товар Я.Маркета"
-		}
-		return &Result{
-			Name:     name,
-			Price:    price,
-			ImageURL: ymFirstImage(product.Image),
-		}, nil
 	}
 
 	return nil, ErrProductNotFound
+}
+
+// ymLDTypes перечисляет @type всех JSON-LD блоков — диагностика на случай, когда
+// цену не нашли: видно, есть ли вообще Product-блок на странице.
+func ymLDTypes(html string) string {
+	var types []string
+	for _, m := range ymJSONLDRe.FindAllStringSubmatch(html, -1) {
+		for _, n := range ymJSONLDNodes(strings.TrimSpace(m[1])) {
+			t := strings.Join(n.Type, "|")
+			if t == "" {
+				t = "?"
+			}
+			types = append(types, t)
+		}
+	}
+	return strings.Join(types, ",")
 }
 
 // parsePriceString парсит цену из строки в float64.
@@ -273,11 +310,100 @@ func ymFirstImage(img ymImage) string {
 	return ""
 }
 
+// ymNum принимает цену и строкой ("12990"/"12990.00"), и числом (12990) —
+// Я.Маркет отдаёт по-разному в зависимости от вёрстки. Раньше числовая цена
+// роняла Unmarshal всего блока → товар «не найден».
+type ymNum string
+
+func (n *ymNum) UnmarshalJSON(b []byte) error {
+	*n = ymNum(strings.Trim(string(b), `"`))
+	return nil
+}
+
+// ymType — @type строкой ИЛИ массивом строк.
+type ymType []string
+
+func (t *ymType) UnmarshalJSON(b []byte) error {
+	var one string
+	if err := json.Unmarshal(b, &one); err == nil {
+		*t = ymType{one}
+		return nil
+	}
+	var many []string
+	if err := json.Unmarshal(b, &many); err != nil {
+		return err
+	}
+	*t = many
+	return nil
+}
+
+type ymOffer struct {
+	Price    ymNum `json:"price"`
+	LowPrice ymNum `json:"lowPrice"` // AggregateOffer кладёт минимальную цену сюда
+}
+
+// ymOffers — offers объектом ИЛИ массилом офферов.
+type ymOffers []ymOffer
+
+func (o *ymOffers) UnmarshalJSON(b []byte) error {
+	var one ymOffer
+	if err := json.Unmarshal(b, &one); err == nil {
+		*o = ymOffers{one}
+		return nil
+	}
+	var many []ymOffer
+	if err := json.Unmarshal(b, &many); err != nil {
+		return err
+	}
+	*o = many
+	return nil
+}
+
 type ymJSONLDProduct struct {
-	Type   string  `json:"@type"`
-	Name   string  `json:"name"`
-	Image  ymImage `json:"image"`
-	Offers struct {
-		Price string `json:"price"`
-	} `json:"offers"`
+	Type   ymType            `json:"@type"`
+	Name   string            `json:"name"`
+	Image  ymImage           `json:"image"`
+	Offers ymOffers          `json:"offers"`
+	Graph  []ymJSONLDProduct `json:"@graph"` // обёртка {"@graph":[...]}
+}
+
+func (p ymJSONLDProduct) isProduct() bool {
+	for _, t := range p.Type {
+		if strings.EqualFold(t, "Product") {
+			return true
+		}
+	}
+	return false
+}
+
+func (p ymJSONLDProduct) bestPrice() float64 {
+	for _, o := range p.Offers {
+		if v, err := parsePriceString(string(o.Price)); err == nil && v > 0 {
+			return v
+		}
+		if v, err := parsePriceString(string(o.LowPrice)); err == nil && v > 0 {
+			return v
+		}
+	}
+	return 0
+}
+
+// ymJSONLDNodes разбирает блок JSON-LD в список узлов: объект, массив объектов
+// или обёртку {"@graph":[...]}.
+func ymJSONLDNodes(raw string) []ymJSONLDProduct {
+	if strings.HasPrefix(raw, "[") {
+		var arr []ymJSONLDProduct
+		if json.Unmarshal([]byte(raw), &arr) == nil {
+			return arr
+		}
+		return nil
+	}
+	var one ymJSONLDProduct
+	if json.Unmarshal([]byte(raw), &one) != nil {
+		return nil
+	}
+	if len(one.Graph) > 0 {
+		return append([]ymJSONLDProduct{one}, one.Graph...)
+	}
+	return []ymJSONLDProduct{one}
 }
