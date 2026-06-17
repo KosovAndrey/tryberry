@@ -19,6 +19,10 @@ type Result struct {
 	Name     string
 	Price    float64
 	ImageURL string
+	// InStock — есть ли активный оффер/цена. false + Price==0 означает «карточка
+	// товара валидна, но сейчас не продаётся» (нет buy-box). Скрейперы с ценой
+	// всегда ставят true; ситуацию «нет оффера» пока отдаёт только Я.Маркет.
+	InStock bool
 }
 
 // MarketplaceScraper — интерфейс который реализует каждый маркетплейс.

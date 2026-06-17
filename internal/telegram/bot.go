@@ -615,6 +615,39 @@ func (b *Bot) doTrack(ctx context.Context, chatID int64, rawURL string, user *do
 		return
 	}
 
+	// Карточка без активного оффера («нет в продаже»): цены нет, обычное «слежу за
+	// снижением» неприменимо. Заводим подписку с триггером back_in_stock и
+	// предлагаем выбор — ждать наличие или указать целевую цену. in_stock=false
+	// фиксируем явно, чтобы последующий скрейп с ценой дал переход false→true.
+	if !result.InStock {
+		if err := b.prodRepo.SetInStock(ctx, product.ID, false); err != nil {
+			b.log.Warn("set product out of stock", "product_id", product.ID, "err", err)
+		}
+		sub, _, err := b.subRepo.UpsertOutOfStock(ctx, user.ID, product.ID)
+		if err != nil {
+			span.RecordError(err)
+			metrics.TrackCommands.WithLabelValues("error").Inc()
+			b.log.Error("upsert oos subscription", "err", err)
+			b.reply(chatID, "Произошла ошибка, попробуй позже.")
+			return
+		}
+		metrics.TrackCommands.WithLabelValues("success").Inc()
+		text := fmt.Sprintf(
+			"✅ <b>Добавил в отслеживание!</b>\n\n"+
+				"<b>%s</b>\n"+
+				"🚫 Сейчас товара <b>нет в наличии</b> (нет активного предложения).\n\n"+
+				"По умолчанию уведомлю, как только он <b>появится в наличии</b>. "+
+				"Или выбери уведомление по цене 👇",
+			result.Name,
+		)
+		kb := trackOOSKeyboard(sub.ID)
+		edit := tgbotapi.NewEditMessageText(chatID, sent.MessageID, text)
+		edit.ParseMode = "HTML"
+		edit.ReplyMarkup = &kb
+		b.api.Send(edit) //nolint:errcheck
+		return
+	}
+
 	sub, created, err := b.subRepo.Upsert(ctx, user.ID, product.ID, result.Price)
 	if err != nil {
 		span.RecordError(err)

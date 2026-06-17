@@ -66,6 +66,8 @@ func TriggerDescription(t TriggerType, target *float64, pct *int16) string {
 			return fmt.Sprintf("％ уведомлю при скидке от %d%%", *pct)
 		}
 		return "％ уведомлю при заметной скидке"
+	case TriggerBackInStock:
+		return "🔔 уведомлю, когда товар снова появится в наличии"
 	default:
 		return ""
 	}

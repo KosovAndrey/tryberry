@@ -79,6 +79,65 @@ func TestParseYandexMarketHTML_OffersArray(t *testing.T) {
 	}
 }
 
+func TestParseYandexMarketHTML_StatePriceFallback(t *testing.T) {
+	// Карточка модели с пустым buy-box: JSON-LD Product БЕЗ offers, цена —
+	// только в стейте marketfront. Должны подхватить её фолбэком.
+	html := `<script type="application/ld+json">{"@type":"BreadcrumbList"}</script>` +
+		`<script type="application/ld+json">{"@type":"Product","name":"Кофемашина Jura E8","image":"https://im.jpg"}</script>` +
+		`<script>window.__state={"img":"/orig","price":{"value":"128931","currency":"RUR"},"size":24}</script>`
+	r, err := parseYandexMarketHTML(html)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if r.Price != 128931 || r.Name != "Кофемашина Jura E8" || r.ImageURL != "https://im.jpg" {
+		t.Errorf("got %+v, want price 128931 / name Jura E8 / image im.jpg", r)
+	}
+}
+
+func TestParseYandexMarketHTML_OutOfStock(t *testing.T) {
+	// Карточка модели без активного оффера: JSON-LD Product есть, но цены нет
+	// нигде (ни offers, ни стейт). Это УСПЕХ с InStock=false (не ошибка) —
+	// товар можно добавить с триггером back_in_stock.
+	html := `<script type="application/ld+json">{"@type":"Product","name":"Кофемашина Jura","image":"https://im.jpg"}</script>` +
+		`<script>window.__state={"foo":"bar"}</script>`
+	r, err := parseYandexMarketHTML(html)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if r.InStock {
+		t.Error("InStock should be false for card without offer")
+	}
+	if r.Price != 0 {
+		t.Errorf("price = %v, want 0", r.Price)
+	}
+	if r.Name != "Кофемашина Jura" || r.ImageURL != "https://im.jpg" {
+		t.Errorf("got %+v, want name/image from Product node", r)
+	}
+}
+
+func TestParseYandexMarketHTML_InStockFlag(t *testing.T) {
+	// Обычная карточка с ценой → InStock=true.
+	html := `<script type="application/ld+json">{"@type":"Product","name":"X","offers":{"price":"100"}}</script>`
+	r, err := parseYandexMarketHTML(html)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !r.InStock {
+		t.Error("InStock should be true when price found")
+	}
+}
+
+func TestParseYandexMarketHTML_StatePriceNeedsProduct(t *testing.T) {
+	// Страница поиска: цена в стейте есть, но JSON-LD Product НЕТ → не трекаем
+	// (цена принадлежит чужому сниппету выдачи, а не отслеживаемому товару).
+	html := `<script type="application/ld+json">{"@type":"WebSite"}</script>` +
+		`<script type="application/ld+json">{"@type":"BreadcrumbList"}</script>` +
+		`<script>window.__state={"price":{"value":"25997","currency":"RUR"}}</script>`
+	if _, err := parseYandexMarketHTML(html); !errors.Is(err, ErrProductNotFound) {
+		t.Errorf("want ErrProductNotFound (no Product node), got %v", err)
+	}
+}
+
 func TestParseYandexMarketHTML_NoProduct(t *testing.T) {
 	html := `<script type="application/ld+json">{"@type":"WebSite","name":"Я.Маркет"}</script>`
 	if _, err := parseYandexMarketHTML(html); !errors.Is(err, ErrProductNotFound) {

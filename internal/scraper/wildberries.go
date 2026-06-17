@@ -91,7 +91,7 @@ func (s *WildberriesScraper) fetchFromBasket(ctx context.Context, articleID stri
 	// Имя и картинка — желательны, но не критичны (best-effort)
 	name, imageURL := s.fetchBasketCard(ctx, base, articleID, basket, vol, part)
 
-	return &Result{Name: name, Price: price, ImageURL: imageURL}, nil
+	return &Result{Name: name, Price: price, ImageURL: imageURL, InStock: true}, nil
 }
 
 func (s *WildberriesScraper) fetchBasketCard(ctx context.Context, base, articleID string, basket, vol, part int64) (string, string) {

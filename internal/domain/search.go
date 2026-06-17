@@ -16,12 +16,16 @@ const (
 	TriggerAnyDrop TriggerType = "any_drop"
 	// TriggerDiscountPct — уведомить когда скидка от first_seen_price >= discount_pct.
 	TriggerDiscountPct TriggerType = "discount_pct"
+	// TriggerBackInStock — уведомить, когда товар снова появится в наличии
+	// (переход «нет оффера» → «есть цена»). Только для товарных подписок,
+	// заводится на карточках, добавленных без активного оффера.
+	TriggerBackInStock TriggerType = "back_in_stock"
 )
 
 // Valid проверяет что значение триггера допустимо.
 func (t TriggerType) Valid() bool {
 	switch t {
-	case TriggerBelowTarget, TriggerAnyDrop, TriggerDiscountPct:
+	case TriggerBelowTarget, TriggerAnyDrop, TriggerDiscountPct, TriggerBackInStock:
 		return true
 	default:
 		return false

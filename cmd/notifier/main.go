@@ -482,6 +482,11 @@ func makeHandler(
 			}
 		}
 
+		// Наличие: дополнительно страхуемся ценой (>0 ⇒ в наличии) на случай старых
+		// событий без полей InStock/WasInStock во время rolling-деплоя scraper.
+		inStock := event.InStock || event.NewPrice > 0
+		wasInStock := event.WasInStock || event.OldPrice > 0
+
 		now := time.Now()
 		for _, sub := range subs {
 			// Throttle: оцениваем подписку не чаще интервала её тарифа. PriceEvent
@@ -502,21 +507,37 @@ func makeHandler(
 				}
 			}
 
-			// Решение о срабатывании — общий движок поиск-подписок:
-			//   first_seen_price  — база первого срабатывания (any_drop/discount_pct),
-			//   baseline_price    — цена последнего уведомления (повторные срабатывания),
-			//   notified          — фаза (первое vs повторное).
-			rule := searchsub.RuleFromProductSub(sub)
-			state := searchsub.ProductState{
-				ProductID:           sub.ProductID,
-				CurrentKopecks:      searchsub.Kopecks(currentPrice),
-				BaselineKopecks:     searchsub.Kopecks(sub.FirstSeenPrice),
-				LastNotifiedKopecks: searchsub.Kopecks(sub.BaselinePrice),
-				HasNotified:         sub.Notified,
-			}
-			if !searchsub.Decide(rule, state) {
-				markEval() // чек-поинт пройден, триггер не сработал
-				continue
+			// back_in_stock: срабатываем при переходе «нет в наличии»→«появилось».
+			// Ценовой движок тут неприменим (подписка заведена без цены).
+			backInStock := sub.TriggerType == domain.TriggerBackInStock
+			if backInStock {
+				if wasInStock || !inStock {
+					markEval() // ещё не появился (или уже был в наличии) — чек-поинт пройден
+					continue
+				}
+			} else {
+				// Ценовые триггеры оцениваем ТОЛЬКО когда товар в наличии: при OOS
+				// currentPrice=0 дал бы ложное срабатывание below_target (0 <= target).
+				if !inStock {
+					markEval()
+					continue
+				}
+				// Решение о срабатывании — общий движок поиск-подписок:
+				//   first_seen_price  — база первого срабатывания (any_drop/discount_pct),
+				//   baseline_price    — цена последнего уведомления (повторные срабатывания),
+				//   notified          — фаза (первое vs повторное).
+				rule := searchsub.RuleFromProductSub(sub)
+				state := searchsub.ProductState{
+					ProductID:           sub.ProductID,
+					CurrentKopecks:      searchsub.Kopecks(currentPrice),
+					BaselineKopecks:     searchsub.Kopecks(sub.FirstSeenPrice),
+					LastNotifiedKopecks: searchsub.Kopecks(sub.BaselinePrice),
+					HasNotified:         sub.Notified,
+				}
+				if !searchsub.Decide(rule, state) {
+					markEval() // чек-поинт пройден, триггер не сработал
+					continue
+				}
 			}
 
 			// Проверяем idempotency
@@ -543,6 +564,7 @@ func makeHandler(
 				OldPrice:       sub.BaselinePrice,
 				NewPrice:       event.NewPrice,
 				ImageURL:       sub.ProductImageURL,
+				BackInStock:    backInStock,
 			})
 			if err != nil {
 				return fmt.Errorf("send telegram notification: %w", err)

@@ -195,8 +195,10 @@ func makeHandler(
 		}
 		log.Info("scraped", "marketplace", marketplace, "name", result.Name, "price", result.Price)
 
-		// Обновляем product с маркетплейсом
-		if err := productRepo.UpdateScrapedData(ctx, task.ProductID, result.Name, result.ImageURL); err != nil {
+		// Обновляем product (имя/картинка/наличие); получаем ПРЕДЫДУЩЕЕ наличие для
+		// детекта перехода «нет в наличии»→«появилось» (триггер back_in_stock).
+		wasInStock, err := productRepo.UpdateScrapedData(ctx, task.ProductID, result.Name, result.ImageURL, result.InStock)
+		if err != nil {
 			return fmt.Errorf("update product: %w", err)
 		}
 
@@ -206,15 +208,17 @@ func makeHandler(
 			log.Warn("could not get prev price, skipping event", "err", err)
 		}
 
-		// Сохраняем новую цену в историю
-		if err := priceHistoryRepo.Insert(ctx, task.ProductID, result.Price); err != nil {
-			return fmt.Errorf("insert price history: %w", err)
-		}
-
-		// Обновляем Redis кэш
-		if priceCache != nil {
-			if err := priceCache.Set(ctx, task.ProductID, result.Price); err != nil {
-				log.Warn("redis set failed", "err", err)
+		// price_history/кэш обновляем ТОЛЬКО когда товар в наличии: запись нулевой
+		// цены для OOS засорила бы аналитику и дала ложный price drop. Событие шлём
+		// всегда — notifier обрабатывает и появление в наличии, и снижение цены.
+		if result.InStock {
+			if err := priceHistoryRepo.Insert(ctx, task.ProductID, result.Price); err != nil {
+				return fmt.Errorf("insert price history: %w", err)
+			}
+			if priceCache != nil {
+				if err := priceCache.Set(ctx, task.ProductID, result.Price); err != nil {
+					log.Warn("redis set failed", "err", err)
+				}
 			}
 		}
 
@@ -229,12 +233,14 @@ func makeHandler(
 			OldPrice:    prevPrice,
 			NewPrice:    result.Price,
 			RecordedAt:  time.Now(),
+			InStock:     result.InStock,
+			WasInStock:  wasInStock,
 		}
 		key := strconv.FormatInt(task.ProductID, 10)
 		if err := producer.Send(ctx, key, event); err != nil {
 			return fmt.Errorf("send price event: %w", err)
 		}
-		if prevPrice > 0 && result.Price < prevPrice {
+		if result.InStock && prevPrice > 0 && result.Price < prevPrice {
 			metrics.PriceDrops.WithLabelValues(string(marketplace)).Inc()
 			log.Info("price dropped",
 				"marketplace", marketplace, "old_price", prevPrice, "new_price", result.Price)

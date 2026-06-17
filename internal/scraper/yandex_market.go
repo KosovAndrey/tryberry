@@ -225,12 +225,22 @@ func parseYandexMarketHTML(html string) (*Result, error) {
 		return nil, ErrProductNotFound
 	}
 
+	// Запоминаем первый Product-узел (имя/картинка), даже если в нём нет цены:
+	// у карточек модели с пустым buy-box (showOriginalKmEmptyOffer=1) JSON-LD
+	// содержит Product без offers, а реальную цену продавца кладут в стейт
+	// marketfront — подхватим её фолбэком ниже.
+	var product *ymJSONLDProduct
+
 	for _, m := range matches {
 		// Блок JSON-LD бывает: объект Product, массив объектов, либо обёртка
 		// {"@graph":[...]} — разбираем все варианты (ymJSONLDNodes).
 		for _, node := range ymJSONLDNodes(strings.TrimSpace(m[1])) {
 			if !node.isProduct() {
 				continue
+			}
+			if product == nil {
+				n := node
+				product = &n
 			}
 			price := node.bestPrice()
 			if price <= 0 {
@@ -244,11 +254,59 @@ func parseYandexMarketHTML(html string) (*Result, error) {
 				Name:     name,
 				Price:    price,
 				ImageURL: ymFirstImage(node.Image),
+				InStock:  true,
 			}, nil
 		}
 	}
 
+	// JSON-LD-цены нет, но есть Product-узел → это настоящая карточка товара
+	// (а не поиск/каталог). Берём цену из встроенного стейта marketfront:
+	// "price":{"value":"128931","currency":"RUR"}. Гейт на наличие Product
+	// важен — на странице поиска цены из стейта принадлежат чужим сниппетам.
+	if product != nil {
+		name := strings.TrimSpace(product.Name)
+		if name == "" {
+			name = "Товар Я.Маркета"
+		}
+		if price := ymStatePrice(html); price > 0 {
+			return &Result{
+				Name:     name,
+				Price:    price,
+				ImageURL: ymFirstImage(product.Image),
+				InStock:  true,
+			}, nil
+		}
+		// Product есть, но цены нет НИГДЕ (ни JSON-LD, ни стейт) → карточка без
+		// активного оффера («нет в продаже»). Это УСПЕХ, не ошибка: товар можно
+		// добавить в отслеживание с триггером back_in_stock (см. doTrack).
+		return &Result{
+			Name:     name,
+			ImageURL: ymFirstImage(product.Image),
+			Price:    0,
+			InStock:  false,
+		}, nil
+	}
+
 	return nil, ErrProductNotFound
+}
+
+// ymStatePriceRe вытаскивает цену из стейта marketfront для карточек, где JSON-LD
+// отдаёт Product без offers (карточка модели с пустым buy-box). Формат стейта:
+// "price":{"value":"128931","currency":"RUR"}. Берём первое вхождение — на
+// карточке товара это цена основного предложения (вызывается только когда на
+// странице есть JSON-LD Product, см. parseYandexMarketHTML).
+var ymStatePriceRe = regexp.MustCompile(`"price":\{"value":"(\d+(?:\.\d+)?)","currency":"(?:RUR|RUB)"`)
+
+func ymStatePrice(html string) float64 {
+	m := ymStatePriceRe.FindStringSubmatch(html)
+	if m == nil {
+		return 0
+	}
+	price, err := parsePriceString(m[1])
+	if err != nil {
+		return 0
+	}
+	return price
 }
 
 // ymLDTypes перечисляет @type всех JSON-LD блоков — диагностика на случай, когда

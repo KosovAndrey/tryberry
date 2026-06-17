@@ -440,6 +440,7 @@ func parseOzonWidgets(body []byte) (*Result, error) {
 		Price:    extractOzonPrice(env.WidgetStates),
 		Name:     extractOzonName(env.WidgetStates),
 		ImageURL: extractOzonImage(env.WidgetStates),
+		InStock:  true,
 	}
 
 	if res.Price == 0 {

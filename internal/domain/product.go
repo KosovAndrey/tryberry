@@ -85,13 +85,18 @@ type Notification struct {
 	IdempotencyKey string
 }
 
-// PriceEvent — сообщение в Kafka топике price-events
+// PriceEvent — сообщение в Kafka топике price-events.
+// InStock/WasInStock — для триггера back_in_stock. Поля аддитивны: старые
+// сообщения без них дают false, что лишь подавляет срабатывания (не шлёт
+// ложные), поэтому порядок rolling-деплоя scraper/notifier некритичен.
 type PriceEvent struct {
 	ProductID   int64     `json:"product_id"`
 	Marketplace string    `json:"marketplace"`
 	OldPrice    float64   `json:"old_price"`
 	NewPrice    float64   `json:"new_price"`
 	RecordedAt  time.Time `json:"recorded_at"`
+	InStock     bool      `json:"in_stock"`     // товар в наличии на этом скрейпе
+	WasInStock  bool      `json:"was_in_stock"` // был ли в наличии на прошлом
 }
 
 // ScrapeTask — сообщение в Kafka топике scrape-tasks

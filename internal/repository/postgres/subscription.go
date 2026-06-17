@@ -55,6 +55,42 @@ func (r *SubscriptionRepo) Upsert(ctx context.Context, userID, productID int64, 
 	return s, inserted, nil
 }
 
+// UpsertOutOfStock — подписать на товар БЕЗ активного оффера: baseline/first_seen
+// = 0, стратегия по умолчанию back_in_stock («уведомить, когда появится в
+// наличии»). В остальном как Upsert (реактивация существующей строки). Цена 0
+// корректна: ценовые триггеры всё равно не оцениваются, пока товара нет в наличии.
+func (r *SubscriptionRepo) UpsertOutOfStock(ctx context.Context, userID, productID int64) (*domain.Subscription, bool, error) {
+	const q = `
+		INSERT INTO subscriptions (user_id, product_id, baseline_price, first_seen_price, trigger_type)
+		VALUES ($1, $2, 0, 0, 'back_in_stock')
+		ON CONFLICT (user_id, product_id) DO UPDATE
+			SET active           = TRUE,
+			    baseline_price   = 0,
+			    first_seen_price = 0,
+			    trigger_type     = 'back_in_stock',
+			    target_price     = NULL,
+			    discount_pct     = NULL,
+			    notified         = FALSE,
+			    updated_at       = NOW()
+		RETURNING id, user_id, product_id, baseline_price, first_seen_price,
+		          trigger_type, target_price, discount_pct, notified,
+		          active, created_at, updated_at,
+		          (xmax = 0) AS inserted`
+
+	s := &domain.Subscription{}
+	var inserted bool
+	err := withSpan(ctx, "upsert_subscription_oos", func(ctx context.Context) error {
+		return r.db.QueryRow(ctx, q, userID, productID).
+			Scan(&s.ID, &s.UserID, &s.ProductID, &s.BaselinePrice, &s.FirstSeenPrice,
+				&s.TriggerType, &s.TargetPrice, &s.DiscountPct, &s.Notified,
+				&s.Active, &s.CreatedAt, &s.UpdatedAt, &inserted)
+	})
+	if err != nil {
+		return nil, false, err
+	}
+	return s, inserted, nil
+}
+
 func (r *SubscriptionRepo) GetByID(ctx context.Context, id int64) (*domain.Subscription, error) {
 	const q = `
 		SELECT id, user_id, product_id, baseline_price, first_seen_price,
