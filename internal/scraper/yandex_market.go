@@ -131,32 +131,65 @@ func (s *YandexMarketScraper) Scrape(ctx context.Context, url string) (*Result, 
 	// HTML карточки тяжёлый (~2.5 МБ) — ограничиваем разумным потолком.
 	body, _ := io.ReadAll(io.LimitReader(resp.Body, 6<<20))
 
-	// SmartCaptcha: вместо карточки приходит страница капчи (часто статус 200 или
-	// 403). Отдельный сигнал, чтобы алерт отличал блокировку от «товар не найден».
+	if resp.StatusCode == 404 {
+		return nil, ErrProductNotFound
+	}
+
+	// Парсим В ПЕРВУЮ ОЧЕРЕДЬ. SmartCaptcha отдаёт капчу со статусом 200, а на
+	// настоящей странице товара в JS-бандле всё равно встречается слово "captcha"
+	// — поэтому блок/успех решаем ПО СОДЕРЖИМОМУ (достали ли товар), а не по
+	// наличию подстроки (раньше это давало ложный «blocked» на живой странице).
+	if res, perr := parseYandexMarketHTML(string(body)); perr == nil {
+		return res, nil
+	}
+
+	// Товар не распарсился — различаем блок антибота и «нет данных».
 	if isYandexCaptcha(body) {
 		s.log.Warn("yandex market: SmartCaptcha block",
 			"status", resp.StatusCode, "url", url, "body", snippet(body, 200))
 		return nil, ErrMarketplaceBlocked
 	}
-	if resp.StatusCode == 404 {
-		return nil, ErrProductNotFound
-	}
 	if resp.StatusCode != 200 {
 		return nil, fmt.Errorf("yandex market status %d", resp.StatusCode)
 	}
-
-	return parseYandexMarketHTML(string(body))
+	// 200 + реальная страница, но цены не нашли: диагностика структуры (есть ли
+	// JSON-LD, где лежит price) — чтобы поправить парсер под актуальную вёрстку.
+	s.log.Warn("yandex market: product not parsed (no JSON-LD price?)",
+		"url", url, "len", len(body),
+		"ld_json", strings.Count(string(body), "application/ld+json"),
+		"price_ctx", ymPriceContext(body))
+	return nil, ErrProductNotFound
 }
 
-// isYandexCaptcha распознаёт страницу SmartCaptcha по маркерам (best-effort).
+// isYandexCaptcha распознаёт страницу SmartCaptcha. Вызывается ТОЛЬКО когда товар
+// не распарсился, и сперва отсекает реальную страницу приложения Я.Маркета
+// (@marketfront / data-baobab-name="$page") — на ней слово "captcha" живёт в
+// JS-бандле и не означает блок. Маркеры самой капчи — узкие.
 func isYandexCaptcha(body []byte) bool {
-	s := strings.ToLower(string(body))
-	return strings.Contains(s, "smartcaptcha") ||
-		strings.Contains(s, "checkcaptcha") ||
-		strings.Contains(s, "showcaptcha") ||
-		strings.Contains(s, "/captcha") ||
-		strings.Contains(s, "подтвердите, что запросы отправляли вы") ||
-		strings.Contains(s, "captcha.yandex")
+	s := string(body)
+	if strings.Contains(s, "@marketfront/") || strings.Contains(s, `data-baobab-name="$page"`) {
+		return false
+	}
+	ls := strings.ToLower(s)
+	return strings.Contains(ls, "smartcaptcha") ||
+		strings.Contains(ls, "checkbox-captcha") ||
+		strings.Contains(ls, "showcaptcha") ||
+		strings.Contains(ls, "подтвердите, что запросы отправляли вы")
+}
+
+// ymPriceContext возвращает фрагмент вокруг первого вхождения "price" — для
+// диагностики, где Я.Маркет прячет цену, если JSON-LD не сработал.
+func ymPriceContext(body []byte) string {
+	s := string(body)
+	i := strings.Index(s, `"price"`)
+	if i < 0 {
+		return ""
+	}
+	end := i + 200
+	if end > len(s) {
+		end = len(s)
+	}
+	return s[i:end]
 }
 
 var ymJSONLDRe = regexp.MustCompile(`(?s)<script type="application/ld\+json"[^>]*>(.*?)</script>`)

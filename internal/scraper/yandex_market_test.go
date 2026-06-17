@@ -48,11 +48,18 @@ func TestParseYandexMarketHTML_NoProduct(t *testing.T) {
 }
 
 func TestIsYandexCaptcha(t *testing.T) {
-	if !isYandexCaptcha([]byte(`<div class="SmartCaptcha">...`)) {
-		t.Error("should detect SmartCaptcha")
+	if !isYandexCaptcha([]byte(`<div class="SmartCaptcha">подтвердите, что запросы отправляли вы`)) {
+		t.Error("should detect SmartCaptcha challenge page")
 	}
 	if isYandexCaptcha([]byte(`<script type="application/ld+json">{"@type":"Product"}</script>`)) {
 		t.Error("false positive on product page")
+	}
+	// Реальная страница приложения Я.Маркета со словом captcha в бандле — НЕ блок
+	// (это и был баг ложного "blocked").
+	real := `<!DOCTYPE html><!--BEGIN [@marketfront/Root]--><html data-baobab-name="$page">` +
+		`<script src="https://yastatic.net/captcha/captcha.js"></script>`
+	if isYandexCaptcha([]byte(real)) {
+		t.Error("false positive on real @marketfront page with captcha.js in bundle")
 	}
 }
 
