@@ -83,12 +83,30 @@ func TestBuildPaymentURL_SignatureWithReceiptMatchesURL(t *testing.T) {
 // Явное значение sno (не самозанятый) должно прокидываться в чек как есть.
 func TestReceipt_ExplicitSNOPassesThrough(t *testing.T) {
 	c := NewClient(Config{Login: "shop", Password1: "pw1", Password2: "pw2", SNO: "usn_income"})
-	raw, _, err := c.receiptEncoded(&Receipt{Items: []ReceiptItem{{Name: "x", Quantity: 1, Sum: 1}}})
+	enc, err := c.receiptEncoded(&Receipt{Items: []ReceiptItem{{Name: "x", Quantity: 1, Sum: 1}}})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(raw, `"sno":"usn_income"`) {
-		t.Fatalf("explicit sno not in receipt: %q", raw)
+	if !strings.Contains(enc, "usn_income") {
+		t.Fatalf("explicit sno not in receipt: %q", enc)
+	}
+}
+
+// Регресс ошибки 29: пробел в чеке должен кодироваться как %20 (RFC 3986), а не
+// "+" — иначе .NET-бэкенд Робокассы не сойдётся по подписи.
+func TestReceipt_SpaceEncodedAsPercent20(t *testing.T) {
+	c := newTestClient()
+	enc, err := c.receiptEncoded(&Receipt{Items: []ReceiptItem{{
+		Name: "Тариф Lite 30 дней", Quantity: 1, Sum: 199, Tax: "none",
+	}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(enc, "+") {
+		t.Fatalf("receipt must not use + for space, got %q", enc)
+	}
+	if !strings.Contains(enc, "%20") {
+		t.Fatalf("expected %%20 for spaces in receipt, got %q", enc)
 	}
 }
 

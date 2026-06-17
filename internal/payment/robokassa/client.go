@@ -104,29 +104,31 @@ type PaymentParams struct {
 	Receipt     *Receipt // nil → без чека
 }
 
-// receiptEncoded — компактный JSON чека в URL-encoded виде (в этом виде он идёт
-// и в подпись, и в URL — url.Values.Encode применит то же QueryEscape). Если у
+// receiptEncoded — чек как URL-encoded JSON. В ЭТОМ ЖЕ виде он идёт и в подпись,
+// и в URL. Кодируем в стиле encodeURIComponent / RFC 3986 (пробел → "%20", не
+// "+"): .NET-бэкенд Робокассы при сверке подписи перекодирует чек именно так, и
+// расхождение "+"/"%20" даёт ошибку 29 («Неверный параметр Signature»). Если у
 // чека не задана система налогообложения, подставляем sno клиента (пустой → sno
 // в JSON не попадёт благодаря omitempty: самозанятый sno не передаёт).
-func (c *Client) receiptEncoded(r *Receipt) (raw, encoded string, err error) {
+func (c *Client) receiptEncoded(r *Receipt) (string, error) {
 	if r == nil {
-		return "", "", nil
+		return "", nil
 	}
 	if r.SNO == "" {
 		r.SNO = c.sno
 	}
 	b, err := json.Marshal(r)
 	if err != nil {
-		return "", "", err
+		return "", err
 	}
-	return string(b), url.QueryEscape(string(b)), nil
+	return strings.ReplaceAll(url.QueryEscape(string(b)), "+", "%20"), nil
 }
 
 // BuildPaymentURL — подписанная ссылка на оплату.
 // Подпись: MerchantLogin:OutSum:InvId[:Receipt]:Password1 (Receipt — URL-encoded).
 func (c *Client) BuildPaymentURL(p PaymentParams) (string, error) {
 	invID := strconv.FormatInt(p.InvID, 10)
-	rawReceipt, encReceipt, err := c.receiptEncoded(p.Receipt)
+	encReceipt, err := c.receiptEncoded(p.Receipt)
 	if err != nil {
 		return "", fmt.Errorf("robokassa: marshal receipt: %w", err)
 	}
@@ -145,10 +147,6 @@ func (c *Client) BuildPaymentURL(p PaymentParams) (string, error) {
 	if p.Description != "" {
 		q.Set("Description", p.Description)
 	}
-	if rawReceipt != "" {
-		// Сырой JSON: q.Encode() применит QueryEscape — совпадёт с encReceipt в подписи.
-		q.Set("Receipt", rawReceipt)
-	}
 	q.Set("SignatureValue", sig)
 	if p.Email != "" {
 		q.Set("Email", p.Email)
@@ -159,7 +157,15 @@ func (c *Client) BuildPaymentURL(p PaymentParams) (string, error) {
 	if c.isTest {
 		q.Set("IsTest", "1")
 	}
-	return c.payURL + "?" + q.Encode(), nil
+
+	u := c.payURL + "?" + q.Encode()
+	if encReceipt != "" {
+		// Receipt дописываем уже закодированным — байт-в-байт как в подписи.
+		// Через q.Set его перекодировал бы q.Encode() (двойное кодирование %20→%2520
+		// и пробел "+" вместо "%20") → подпись бы не сошлась.
+		u += "&Receipt=" + encReceipt
+	}
+	return u, nil
 }
 
 // VerifyResult проверяет подпись уведомления ResultURL.
@@ -183,7 +189,7 @@ type RecurringParams struct {
 // ResultURL (как обычная оплата). Возвращает ошибку, если Робокасса не приняла.
 func (c *Client) ChargeRecurring(ctx context.Context, p RecurringParams) error {
 	invID := strconv.FormatInt(p.InvID, 10)
-	rawReceipt, encReceipt, err := c.receiptEncoded(p.Receipt)
+	encReceipt, err := c.receiptEncoded(p.Receipt)
 	if err != nil {
 		return fmt.Errorf("robokassa: marshal receipt: %w", err)
 	}
@@ -203,15 +209,19 @@ func (c *Client) ChargeRecurring(ctx context.Context, p RecurringParams) error {
 	if p.Description != "" {
 		form.Set("Description", p.Description)
 	}
-	if rawReceipt != "" {
-		form.Set("Receipt", rawReceipt)
-	}
 	form.Set("SignatureValue", sig)
 	if c.isTest {
 		form.Set("IsTest", "1")
 	}
 
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.recurringURL, strings.NewReader(form.Encode()))
+	// Receipt дописываем уже закодированным (тем же видом, что и в подписи) —
+	// form.Encode() закодировал бы пробел как "+" и сломал подпись (см. BuildPaymentURL).
+	body := form.Encode()
+	if encReceipt != "" {
+		body += "&Receipt=" + encReceipt
+	}
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.recurringURL, strings.NewReader(body))
 	if err != nil {
 		return err
 	}
@@ -222,13 +232,13 @@ func (c *Client) ChargeRecurring(ctx context.Context, p RecurringParams) error {
 		return err
 	}
 	defer resp.Body.Close()
-	body, _ := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
+	respBody, _ := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return fmt.Errorf("robokassa recurring: %s: %s", resp.Status, strings.TrimSpace(string(body)))
+		return fmt.Errorf("robokassa recurring: %s: %s", resp.Status, strings.TrimSpace(string(respBody)))
 	}
 	// Успех — ответ начинается с "OK" (далее номер счёта). Иначе — текст ошибки.
-	if !strings.HasPrefix(strings.TrimSpace(string(body)), "OK") {
-		return fmt.Errorf("robokassa recurring rejected: %s", strings.TrimSpace(string(body)))
+	if !strings.HasPrefix(strings.TrimSpace(string(respBody)), "OK") {
+		return fmt.Errorf("robokassa recurring rejected: %s", strings.TrimSpace(string(respBody)))
 	}
 	return nil
 }
