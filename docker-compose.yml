@@ -212,6 +212,10 @@ services:
       OZON_REFRESH_TOKEN: "${OZON_REFRESH_TOKEN:-}"
       # Готовая cookie-строка из приложения (HTTP Toolkit) — приоритетнее токенов.
       OZON_COOKIE: "${OZON_COOKIE:-}"
+      # Я.Маркет: без аккаунта (цена публичная), хороший TLS + RU-прокси. Пусто →
+      # код фолбэчит на OZON_PROXY_URL (тот же мобильный IP). Дележ IP ускоряет
+      # его выгорание (см. OZON-STATUS) — при росте нагрузки задать отдельный.
+      YANDEX_PROXY_URL: "${YANDEX_PROXY_URL:-}"
     depends_on:
       postgres:
         condition: service_healthy
@@ -257,6 +261,10 @@ services:
       OZON_REFRESH_TOKEN: "${OZON_REFRESH_TOKEN:-}"
       # Готовая cookie-строка из приложения (HTTP Toolkit) — приоритетнее токенов.
       OZON_COOKIE: "${OZON_COOKIE:-}"
+      SCRAPER_RATE_LIMIT_RPS_YANDEX: "${SCRAPER_RATE_LIMIT_RPS_YANDEX:-2}"
+      # Я.Маркет: без аккаунта, хороший TLS + RU-прокси. Пусто → код фолбэчит на
+      # OZON_PROXY_URL. При росте нагрузки задать отдельный (дележ IP жжёт его).
+      YANDEX_PROXY_URL: "${YANDEX_PROXY_URL:-}"
       SCRAPER_HEALTH_PORT: "8090"
       OTLP_ENDPOINT: "jaeger:4317"
     depends_on:

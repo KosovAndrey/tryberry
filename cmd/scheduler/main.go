@@ -187,16 +187,20 @@ func productSchedulerTick(
 			a = &agg{url: r.URL, lastEn: r.LastEnqueuedAt}
 			byProduct[r.ProductID] = a
 		}
-		isOzon := strings.Contains(strings.ToLower(r.URL), "ozon.ru")
+		lurl := strings.ToLower(r.URL)
+		// Антибот-маркетплейсы за общим мобильным IP (Ozon FAB + Я.Маркет
+		// SmartCaptcha, по умолчанию делят OZON_PROXY_URL) троттлятся одинаково:
+		// минутный каданс губителен для антибота и быстро жжёт единственный IP.
+		isAntibot := strings.Contains(lurl, "ozon.ru") || strings.Contains(lurl, "market.yandex.ru")
 		plan := domain.EffectivePlanFor(r.OwnerPlan, r.PlanExpiresAt, now)
-		// Reseller-планы Ozon не тянут (минутный каданс губителен для антибота):
-		// такой подписчик не вносит вклад в Ozon-товар. На WB он работает как обычно.
-		if isOzon && domain.IsResellerPlan(plan.Name) {
+		// Reseller-планы на таких маркетплейсах не тянут: такой подписчик не
+		// вносит вклад в товар. На WB он работает как обычно.
+		if isAntibot && domain.IsResellerPlan(plan.Name) {
 			continue
 		}
 		iv := plan.EffectiveInterval(defaultInterval)
-		if isOzon {
-			// Ozon = тарифный каданс WB, но в ozonMult раз реже, с полом ozonMinInterval.
+		if isAntibot {
+			// Тарифный каданс WB, но в ozonMult раз реже, с полом ozonMinInterval.
 			iv *= time.Duration(ozonMult)
 			if ozonMinInterval > 0 && iv < ozonMinInterval {
 				iv = ozonMinInterval

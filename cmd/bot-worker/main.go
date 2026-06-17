@@ -120,7 +120,13 @@ func run(log *slog.Logger) error {
 			BrowserURL:   getEnv("OZON_BROWSER_URL", ""),
 			Logger:       log,
 		}),
-		scraper.NewYandexMarketScraper(2),
+		// Бот при /track скрейпит сразу → Я.Маркет тоже рабочим: без аккаунта,
+		// хороший TLS + RU-прокси (по умолчанию тот же мобильный прокси Ozon).
+		scraper.NewYandexMarketScraper(scraper.YandexMarketOptions{
+			ProxyURL: getEnv("YANDEX_PROXY_URL", getEnv("OZON_PROXY_URL", "")),
+			RPS:      2,
+			Logger:   log,
+		}),
 	)
 
 	// getMe ходит наружу (через HTTPS_PROXY). Ретраим старт.

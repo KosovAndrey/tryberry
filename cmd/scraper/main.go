@@ -133,7 +133,14 @@ func run(log *slog.Logger) error {
 			BrowserURL:   getEnv("OZON_BROWSER_URL", ""),
 			Logger:       log,
 		}),
-		scraper.NewYandexMarketScraper(rpsYandex),
+		scraper.NewYandexMarketScraper(scraper.YandexMarketOptions{
+			// Без аккаунта: хороший TLS + RU-прокси. По умолчанию переиспользуем
+			// мобильный прокси Ozon (один IP). ВНИМАНИЕ: дележ IP ускоряет его
+			// выгорание (см. OZON-STATUS) — при росте нагрузки задать отдельный.
+			ProxyURL: getEnv("YANDEX_PROXY_URL", getEnv("OZON_PROXY_URL", "")),
+			RPS:      rpsYandex,
+			Logger:   log,
+		}),
 	)
 
 	// ── Обработчик сообщений (цены) — блокирующий основной цикл ────────────────
