@@ -278,6 +278,8 @@ func (b *Bot) handleCommand(ctx context.Context, msg *tgbotapi.Message) {
 		b.handleMyPlan(ctx, msg.Chat.ID, 0, user)
 	case "grant":
 		b.handleGrant(ctx, msg)
+	case "extend":
+		b.handleExtend(ctx, msg)
 	case "revoke":
 		b.handleRevoke(ctx, msg)
 	case "users":
