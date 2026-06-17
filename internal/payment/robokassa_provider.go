@@ -13,18 +13,22 @@ import (
 // наш payments.id (InvId числовой). Чек НПД прикладываем, если включена
 // фискализация (режим самозанятого), — на каждую оплату и автосписание.
 type rkProvider struct {
-	rk     *robokassa.Client
-	fiscal bool // ROBOKASSA_NPD: формировать чек НПД
+	rk        *robokassa.Client
+	fiscal    bool // ROBOKASSA_NPD: формировать чек НПД
+	recurring bool // ROBOKASSA_RECURRING: рекуррент активирован менеджером Робокассы в ЛК
 }
 
-// NewRobokassaProvider — провайдер Робокассы.
-func NewRobokassaProvider(rk *robokassa.Client, fiscal bool) Provider {
-	return &rkProvider{rk: rk, fiscal: fiscal}
+// NewRobokassaProvider — провайдер Робокассы. recurring=false, пока Робокасса не
+// активировала рекуррент в ЛК: иначе ссылка подписки (Recurring=true) даёт
+// ошибку 34 «рекуррентные платежи для магазина недоступны». До активации
+// показываем только разовую оплату.
+func NewRobokassaProvider(rk *robokassa.Client, fiscal, recurring bool) Provider {
+	return &rkProvider{rk: rk, fiscal: fiscal, recurring: recurring}
 }
 
 func (p *rkProvider) Name() string { return domain.ProviderRobokassa }
 
-func (p *rkProvider) SupportsRecurring() bool { return true }
+func (p *rkProvider) SupportsRecurring() bool { return p.recurring }
 
 func (p *rkProvider) Checkout(ctx context.Context, c CheckoutParams) (CheckoutResult, error) {
 	url, err := p.rk.BuildPaymentURL(robokassa.PaymentParams{

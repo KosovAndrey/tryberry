@@ -103,7 +103,10 @@ func setupProvider(log *slog.Logger) payment.Provider {
 			HashType:  getEnv("ROBOKASSA_HASH_TYPE", ""),
 		})
 		fiscal := getEnv("ROBOKASSA_NPD", "1") == "1"
-		return payment.NewRobokassaProvider(rk, fiscal)
+		// Рекуррент включаем только после активации менеджером Робокассы — иначе
+		// ссылка подписки даёт ошибку 34. До этого доступна лишь разовая оплата.
+		recurring := getEnv("ROBOKASSA_RECURRING", "0") == "1"
+		return payment.NewRobokassaProvider(rk, fiscal, recurring)
 	default:
 		shopID := getEnv("YOOKASSA_SHOP_ID", "")
 		secret := getEnv("YOOKASSA_SECRET_KEY", "")
