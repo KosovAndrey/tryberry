@@ -241,6 +241,72 @@ func (b *Bot) handleRevoke(ctx context.Context, msg *tgbotapi.Message) {
 	b.reply(msg.Chat.ID, fmt.Sprintf("✅ Тариф пользователя <code>%d</code> сброшен на <b>Free</b>.%s", tgID, subNote))
 }
 
+// /extend <telegram_id> <дней> — продлить ТЕКУЩИЙ платный тариф на N дней
+// относительно текущего срока (если истёк/без срока — от «сейчас»). План не
+// меняется. Отрицательное N — сократить срок. Для выдачи нового тарифа — /grant.
+func (b *Bot) handleExtend(ctx context.Context, msg *tgbotapi.Message) {
+	if !b.isAdmin(msg.From.ID) {
+		b.reply(msg.Chat.ID, "Неизвестная команда. Напиши /menu")
+		return
+	}
+	args := strings.Fields(msg.CommandArguments())
+	if len(args) < 2 {
+		b.reply(msg.Chat.ID, "Использование: <code>/extend &lt;telegram_id&gt; &lt;дней&gt;</code>\nПродлевает текущий тариф на N дней (можно отрицательное — сократить). Новый тариф — через /grant.")
+		return
+	}
+	tgID, err := strconv.ParseInt(args[0], 10, 64)
+	if err != nil {
+		b.reply(msg.Chat.ID, "telegram_id должен быть числом.")
+		return
+	}
+	days, err := strconv.Atoi(args[1])
+	if err != nil || days == 0 {
+		b.reply(msg.Chat.ID, "Число дней должно быть ненулевым целым.")
+		return
+	}
+
+	u, err := b.userRepo.GetByTelegramID(ctx, tgID)
+	if err != nil {
+		if errors.Is(err, domain.ErrNotFound) {
+			b.reply(msg.Chat.ID, "Пользователь не найден.")
+			return
+		}
+		b.log.Error("extend: get user", "err", err)
+		b.reply(msg.Chat.ID, "Произошла ошибка, попробуй позже.")
+		return
+	}
+	if u.Plan == "free" {
+		b.reply(msg.Chat.ID, "У пользователя нет платного тарифа — продлевать нечего. Выдай тариф через /grant.")
+		return
+	}
+
+	now := time.Now()
+	base := now
+	if u.PlanExpiresAt != nil && u.PlanExpiresAt.After(now) {
+		base = *u.PlanExpiresAt
+	}
+	newExp := base.Add(time.Duration(days) * 24 * time.Hour)
+	if !newExp.After(now) {
+		b.reply(msg.Chat.ID, "После сокращения срок оказался бы в прошлом. Чтобы снять тариф — /revoke.")
+		return
+	}
+
+	if err := b.userRepo.SetPlan(ctx, tgID, u.Plan, &newExp); err != nil {
+		b.log.Error("extend plan", "err", err)
+		b.reply(msg.Chat.ID, "Произошла ошибка, попробуй позже.")
+		return
+	}
+	b.restorePausedAfterUpgrade(ctx, tgID)
+
+	plan, _ := domain.PlanByName(u.Plan)
+	verb, d := "продлён на", days
+	if days < 0 {
+		verb, d = "сокращён на", -days
+	}
+	b.reply(msg.Chat.ID, fmt.Sprintf("✅ Тариф <b>%s</b> пользователя <code>%d</code> %s %d %s — теперь до <b>%s</b>.",
+		plan.Title, tgID, verb, d, domain.DaysWord(d), newExp.Format(dateLayout)))
+}
+
 // /users — список с занятостью лимитов
 func (b *Bot) handleUsers(ctx context.Context, msg *tgbotapi.Message) {
 	if !b.isAdmin(msg.From.ID) {
@@ -328,5 +394,28 @@ func (b *Bot) handleWhois(ctx context.Context, msg *tgbotapi.Message) {
 		}
 		fmt.Fprintf(&sb, "Срок: %s (%s)\n", u.PlanExpiresAt.Format(dateLayout), status)
 	}
+
+	// Автоподписка (рекуррент): показываем активную/просроченную, если есть.
+	if b.billing != nil {
+		sub, err := b.billing.GetActiveByUserID(ctx, u.ID)
+		switch {
+		case err == nil:
+			sp, _ := domain.PlanByName(sub.Plan)
+			st := "активна"
+			if sub.Status == domain.SubStatusPastDue {
+				st = "просрочено списание"
+			}
+			fmt.Fprintf(&sb, "\n🔁 Автоподписка: <b>%s</b> — %s, %s ₽, след. списание %s\n",
+				st, sp.Title, domain.KopecksToRubString(sub.AmountKopecks), sub.NextChargeAt.Format(dateLayout))
+			if sub.FailCount > 0 {
+				fmt.Fprintf(&sb, "Неудачных списаний подряд: %d\n", sub.FailCount)
+			}
+		case errors.Is(err, domain.ErrNotFound):
+			sb.WriteString("\n🔁 Автоподписка: нет активной\n")
+		default:
+			b.log.Error("whois: billing sub", "err", err)
+		}
+	}
+
 	b.reply(msg.Chat.ID, sb.String())
 }
