@@ -224,7 +224,21 @@ func (b *Bot) handleRevoke(ctx context.Context, msg *tgbotapi.Message) {
 		b.reply(msg.Chat.ID, "Произошла ошибка, попробуй позже.")
 		return
 	}
-	b.reply(msg.Chat.ID, fmt.Sprintf("✅ Тариф пользователя <code>%d</code> сброшен на <b>Free</b>.", tgID))
+
+	// Снимаем и автопродление: иначе после возврата/отзыва доступа подписка
+	// продолжит списывать деньги. Возвраты Робокасса нам не вебхучит, поэтому
+	// /revoke — ручная точка, где гасится и доступ, и будущие списания.
+	subNote := ""
+	if b.billing != nil {
+		if u, err := b.userRepo.GetByTelegramID(ctx, tgID); err == nil {
+			if canceled, err := b.billing.Cancel(ctx, u.ID); err != nil {
+				b.log.Error("revoke: cancel subscription", "err", err)
+			} else if canceled {
+				subNote = " Автопродление подписки отменено."
+			}
+		}
+	}
+	b.reply(msg.Chat.ID, fmt.Sprintf("✅ Тариф пользователя <code>%d</code> сброшен на <b>Free</b>.%s", tgID, subNote))
 }
 
 // /users — список с занятостью лимитов

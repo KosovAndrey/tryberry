@@ -196,6 +196,9 @@ services:
       ROBOKASSA_HASH_TYPE: "${ROBOKASSA_HASH_TYPE:-md5}"
       ROBOKASSA_SNO: "${ROBOKASSA_SNO:-npd}"
       ROBOKASSA_NPD: "${ROBOKASSA_NPD:-1}"
+      # Рекуррент (подписка) — включать "1" только после активации менеджером Робокассы,
+      # иначе ссылка подписки = ошибка 34. До этого в боте видна только разовая оплата.
+      ROBOKASSA_RECURRING: "${ROBOKASSA_RECURRING:-0}"
       BILLING_CHARGE_INTERVAL_MINUTES: "${BILLING_CHARGE_INTERVAL_MINUTES:-60}"
       # Ozon: бот при /track скрейпит сразу → нужен тот же мобильный РФ-прокси,
       # что у scraper (tls-client ходит через него напрямую, мимо HTTPS_PROXY).
