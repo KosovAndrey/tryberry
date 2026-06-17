@@ -42,7 +42,7 @@ const SubChargeRetryInterval = 24 * time.Hour
 
 // SubTermsVersion — версия текста условий подписки, под которой логируем
 // согласие. Менять при изменении формулировок условий автопродления.
-const SubTermsVersion = "v1-2026-06"
+const SubTermsVersion = "v2-2026-06"
 
 // BillingSubscription — рекуррентная подписка пользователя (строка таблицы
 // billing_subscriptions). Не путать с domain.Subscription — та про товарные
