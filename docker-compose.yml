@@ -347,6 +347,13 @@ services:
       SEARCH_PROXY_URLS: "${RESELLER_SEARCH_PROXY_URLS:-}"
       SEARCH_WORKER_HEALTH_PORT: "8094"
       OTLP_ENDPOINT: "jaeger:4317"
+      # Я.Маркет-поиск на быстрых тарифах (interval ≤ resellerLaneCutoff)
+      # попадает на ЭТУ дорожку — нужны те же RU-прокси, что у scraper, иначе
+      # SmartCaptcha. Пусто → фолбэк на OZON_PROXY_URL (cmd/search-worker/main.go).
+      OZON_PROXY_URL: "${OZON_PROXY_URL:-}"
+      YANDEX_PROXY_URL: "${YANDEX_PROXY_URL:-}"
+      # Диагностика: дамп сырого HTML выдачи Я.Маркета (по умолчанию выкл).
+      YM_SEARCH_DUMP: "${YM_SEARCH_DUMP:-}"
     depends_on:
       postgres:
         condition: service_healthy
