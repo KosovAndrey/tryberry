@@ -300,6 +300,8 @@ services:
       SEARCH_MAX_PAGES: "5"
       SEARCH_PAGE_DELAY_MS: "700"
       SEARCH_MAX_ITEMS_OZON: "${SEARCH_MAX_ITEMS_OZON:-60}"
+      # Анти-спам below_target на широких/ротирующихся выдачах: не чаще раза в N мин.
+      SEARCH_BELOW_TARGET_COOLDOWN_MINUTES: "${SEARCH_BELOW_TARGET_COOLDOWN_MINUTES:-360}"
       SEARCH_WORKER_HEALTH_PORT: "8094"
       OTLP_ENDPOINT: "jaeger:4317"
       # Я.Маркет-поиск ходит тем же tls-client + RU-прокси, что и карточный
@@ -346,6 +348,7 @@ services:
       SEARCH_MAX_PAGES: "2"
       SEARCH_PAGE_DELAY_MS: "400"
       SEARCH_MAX_ITEMS_OZON: "${SEARCH_MAX_ITEMS_OZON:-60}"
+      SEARCH_BELOW_TARGET_COOLDOWN_MINUTES: "${SEARCH_BELOW_TARGET_COOLDOWN_MINUTES:-360}"
       SEARCH_PROXY_URLS: "${RESELLER_SEARCH_PROXY_URLS:-}"
       SEARCH_WORKER_HEALTH_PORT: "8094"
       OTLP_ENDPOINT: "jaeger:4317"
@@ -528,6 +531,9 @@ services:
         # Ozon идёт кадансом тарифа × этот множитель (free 60→120 мин и т.д.);
         # reseller-планы Ozon не тянут. Антибот не любит частоту.
         OZON_INTERVAL_MULTIPLIER: "${OZON_INTERVAL_MULTIPLIER:-2}"
+        # Пол интервала Ozon-ПОИСКА (выдача ротируется, одна прогретая дорожка):
+        # не чаще этого даже на быстрых тарифах → уводит Ozon с reseller-дорожки.
+        OZON_SEARCH_MIN_INTERVAL_MINUTES: "${OZON_SEARCH_MIN_INTERVAL_MINUTES:-30}"
         SCHEDULER_TICK_SECONDS: "20"
         SCHEDULER_HEALTH_PORT: "8092"
         OTLP_ENDPOINT: "jaeger:4317"

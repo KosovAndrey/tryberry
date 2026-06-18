@@ -146,6 +146,9 @@ func run(log *slog.Logger) error {
 		products:        productRepo,
 		events:          searchEvents,
 		defaultInterval: defaultInterval,
+		// Анти-спам below_target на широких/ротирующихся выдачах (Ozon отдаёт
+		// ~8 ротирующихся позиций → каждый скрейп новые дешёвые SKU). 0 — выкл.
+		belowTargetCooldown: time.Duration(getEnvInt("SEARCH_BELOW_TARGET_COOLDOWN_MINUTES", 360)) * time.Minute,
 	}
 
 	log.Info("search-worker started",

@@ -68,6 +68,9 @@ func run(log *slog.Logger) error {
 	// Ozon идёт тарифным кадансом как WB, но в N раз реже (антибот не любит
 	// частоту): эффективный интервал Ozon-товара = интервал плана × этот множитель,
 	// с полом ozonMinInterval. Reseller-планы Ozon не тянут вовсе (см. ниже).
+	// Пол интервала для Ozon-ПОИСКА (отдельно от товарного): выдача ротируется
+	// и тянется через одну прогретую дорожку сайдкара — частить нельзя. 0 — выкл.
+	ozonSearchMin := time.Duration(getEnvInt("OZON_SEARCH_MIN_INTERVAL_MINUTES", 30)) * time.Minute
 	ozonMult := getEnvInt("OZON_INTERVAL_MULTIPLIER", 2)
 	if ozonMult < 1 {
 		ozonMult = 1
@@ -116,7 +119,7 @@ func run(log *slog.Logger) error {
 		"tick", tick.String())
 
 	go runProductScheduler(ctx, log, productRepo, productProducer, tick, defaultInterval, ozonMinInterval, ozonMult)
-	go runSearchScheduler(ctx, log, searchQueryRepo, searchProducer, resellerProducer, tick, defaultInterval)
+	go runSearchScheduler(ctx, log, searchQueryRepo, searchProducer, resellerProducer, tick, defaultInterval, ozonSearchMin)
 
 	<-ctx.Done()
 	return nil
@@ -273,10 +276,10 @@ func runSearchScheduler(
 	log *slog.Logger,
 	queryRepo *postgres.SearchQueryRepo,
 	searchProducer, resellerProducer *kafka.Producer,
-	tickInterval, defaultInterval time.Duration,
+	tickInterval, defaultInterval, ozonSearchMin time.Duration,
 ) {
 	tick := func() {
-		if err := searchSchedulerTick(ctx, log, queryRepo, searchProducer, resellerProducer, defaultInterval); err != nil {
+		if err := searchSchedulerTick(ctx, log, queryRepo, searchProducer, resellerProducer, defaultInterval, ozonSearchMin); err != nil {
 			log.Error("search scheduler tick failed", "err", err)
 		}
 	}
@@ -311,7 +314,7 @@ func searchSchedulerTick(
 	log *slog.Logger,
 	queryRepo *postgres.SearchQueryRepo,
 	searchProducer, resellerProducer *kafka.Producer,
-	defaultInterval time.Duration,
+	defaultInterval, ozonSearchMin time.Duration,
 ) error {
 	rows, err := queryRepo.GetSchedulable(ctx)
 	if err != nil {
@@ -325,6 +328,7 @@ func searchSchedulerTick(
 
 	// Группируем по запросу: эффективный интервал = MIN по подписчикам.
 	type agg struct {
+		mp     string
 		url    string
 		text   string
 		eff    time.Duration
@@ -335,11 +339,23 @@ func searchSchedulerTick(
 		iv := domain.EffectivePlanFor(r.OwnerPlan, r.PlanExpiresAt, now).EffectiveInterval(defaultInterval)
 		a, ok := byQuery[r.QueryID]
 		if !ok {
-			byQuery[r.QueryID] = &agg{url: r.NormalizedURL, text: r.QueryText, eff: iv, lastEn: r.LastEnqueuedAt}
+			byQuery[r.QueryID] = &agg{mp: r.Marketplace, url: r.NormalizedURL, text: r.QueryText, eff: iv, lastEn: r.LastEnqueuedAt}
 			continue
 		}
 		if iv < a.eff {
 			a.eff = iv
+		}
+	}
+
+	// Пол интервала для Ozon-поиска: живая выдача достаётся через одну прогретую
+	// дорожку сайдкара и сильно ротируется — частый скрейп жжёт сессию и спамит
+	// below_target новыми позициями. Поэтому Ozon не чаще ozonSearchMin даже на
+	// быстрых тарифах (заодно уводит Ozon с reseller-дорожки на нормальную).
+	if ozonSearchMin > 0 {
+		for _, a := range byQuery {
+			if a.mp == "ozon" && a.eff < ozonSearchMin {
+				a.eff = ozonSearchMin
+			}
 		}
 	}
 
