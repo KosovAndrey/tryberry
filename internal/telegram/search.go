@@ -69,9 +69,11 @@ func (b *Bot) isSearchURL(text string) bool {
 
 func (b *Bot) sendSearchMenu(chatID int64, messageID int) {
 	text := "🔎 <b>Поиск по ссылке</b>\n\n" +
-		"Отправь ссылку на <b>поисковую выдачу</b> Wildberries прямо в чат — я буду следить за всей выдачей и пришлю, когда товары подешевеют.\n\n" +
-		"Как получить ссылку: на сайте WB введи запрос в поиск, скопируй ссылку из адресной строки.\n\n" +
-		"Пример:\n<code>https://www.wildberries.ru/catalog/0/search.aspx?search=наушники</code>\n\n" +
+		"Отправь ссылку на <b>поисковую выдачу</b> Wildberries или Яндекс.Маркета прямо в чат — я буду следить за всей выдачей и пришлю, когда товары подешевеют.\n\n" +
+		"Как получить ссылку: на сайте маркетплейса введи запрос в поиск, скопируй ссылку из адресной строки.\n\n" +
+		"Примеры:\n" +
+		"<code>https://www.wildberries.ru/catalog/0/search.aspx?search=наушники</code>\n" +
+		"<code>https://market.yandex.ru/search?text=наушники</code>\n\n" +
 		"Совет: чем точнее запрос, тем меньше лишнего в уведомлениях."
 
 	keyboard := tgbotapi.NewInlineKeyboardMarkup(
@@ -272,7 +274,7 @@ func (b *Bot) handleListSearch(ctx context.Context, chatID int64, user *domain.U
 	}
 	if len(subs) == 0 {
 		m := tgbotapi.NewMessage(chatID,
-			"🔎 У тебя пока нет поиск-подписок.\n\nОтправь ссылку на поисковую выдачу Wildberries прямо в чат.")
+			"🔎 У тебя пока нет поиск-подписок.\n\nОтправь ссылку на поисковую выдачу Wildberries или Яндекс.Маркета прямо в чат.")
 		m.ParseMode = "HTML"
 		m.ReplyMarkup = tgbotapi.NewInlineKeyboardMarkup(
 			tgbotapi.NewInlineKeyboardRow(
