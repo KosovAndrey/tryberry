@@ -85,6 +85,37 @@ func trackTriggerKeyboard(subID int64, current domain.TriggerType) tgbotapi.Inli
 	)
 }
 
+// trackOOSKeyboard — клавиатура для товара БЕЗ активного оффера. Три стратегии,
+// как у обычного товара, но вместо «любое снижение» — «в наличии»
+// (back_in_stock, выбран по умолчанию → галочка). below_target/discount_pct
+// показываем только при известной last-цене (hasPrice): без опорной цены
+// процент скидки считать не от чего.
+func trackOOSKeyboard(subID int64, hasPrice bool) tgbotapi.InlineKeyboardMarkup {
+	rows := [][]tgbotapi.InlineKeyboardButton{
+		{tgbotapi.NewInlineKeyboardButtonData(
+			"✅ 🔔 Когда появится в наличии",
+			fmt.Sprintf("ptrack:%d:stock", subID))},
+	}
+	if hasPrice {
+		rows = append(rows, []tgbotapi.InlineKeyboardButton{
+			tgbotapi.NewInlineKeyboardButtonData(
+				"📉 Ниже цены", fmt.Sprintf("ptrack:%d:below", subID)),
+			tgbotapi.NewInlineKeyboardButtonData(
+				"％ Скидка %", fmt.Sprintf("ptrack:%d:disc", subID)),
+		})
+	} else {
+		rows = append(rows, []tgbotapi.InlineKeyboardButton{
+			tgbotapi.NewInlineKeyboardButtonData(
+				"📉 Ниже цены", fmt.Sprintf("ptrack:%d:below", subID)),
+		})
+	}
+	rows = append(rows, []tgbotapi.InlineKeyboardButton{
+		tgbotapi.NewInlineKeyboardButtonData("📋 Мои подписки", "menu:list"),
+		tgbotapi.NewInlineKeyboardButtonData("◀️ В меню", "menu:main"),
+	})
+	return tgbotapi.NewInlineKeyboardMarkup(rows...)
+}
+
 // handleTrackTriggerCallback — обработка нажатия ptrack:<subID>:<kind>.
 func (b *Bot) handleTrackTriggerCallback(ctx context.Context, cb *tgbotapi.CallbackQuery) {
 	parts := strings.Split(strings.TrimPrefix(cb.Data, "ptrack:"), ":")
@@ -119,6 +150,24 @@ func (b *Bot) handleTrackTriggerCallback(ctx context.Context, cb *tgbotapi.Callb
 		b.editMenu(chatID, cb.Message.MessageID,
 			"🔔 Тип уведомления: "+domain.TriggerDescription(domain.TriggerAnyDrop, nil, nil),
 			trackTriggerKeyboard(subID, domain.TriggerAnyDrop))
+		b.answerCallback(cb.ID, "Готово")
+
+	case "stock":
+		// Товар без оффера: ждать появления в наличии (back_in_stock).
+		b.clearTrackFSM(ctx, cb.From.ID)
+		if err := b.subRepo.SetTrigger(ctx, subID, user.ID, string(domain.TriggerBackInStock), nil, nil); err != nil {
+			b.log.Error("set trigger stock", "sub_id", subID, "err", err)
+			b.answerCallback(cb.ID, "Ошибка, попробуй позже")
+			return
+		}
+		// hasPrice — есть ли опорная last-цена (для below/disc в клавиатуре).
+		hasPrice := false
+		if s, err := b.subRepo.GetByID(ctx, subID); err == nil {
+			hasPrice = s.FirstSeenPrice > 0
+		}
+		b.editMenu(chatID, cb.Message.MessageID,
+			"🔔 Тип уведомления: "+domain.TriggerDescription(domain.TriggerBackInStock, nil, nil),
+			trackOOSKeyboard(subID, hasPrice))
 		b.answerCallback(cb.ID, "Готово")
 
 	case "below":

@@ -55,6 +55,43 @@ func (r *SubscriptionRepo) Upsert(ctx context.Context, userID, productID int64, 
 	return s, inserted, nil
 }
 
+// UpsertOutOfStock — подписать на товар БЕЗ активного оффера. Стратегия по
+// умолчанию back_in_stock («уведомить, когда появится в наличии»). lastPrice —
+// последняя известная цена из стейта (0, если неизвестна): фиксируем её в
+// baseline/first_seen, чтобы при выборе below_target/discount_pct была опорная
+// цена, и пользователь видел «последняя цена X». В остальном как Upsert.
+func (r *SubscriptionRepo) UpsertOutOfStock(ctx context.Context, userID, productID int64, lastPrice float64) (*domain.Subscription, bool, error) {
+	const q = `
+		INSERT INTO subscriptions (user_id, product_id, baseline_price, first_seen_price, trigger_type)
+		VALUES ($1, $2, $3, $3, 'back_in_stock')
+		ON CONFLICT (user_id, product_id) DO UPDATE
+			SET active           = TRUE,
+			    baseline_price   = EXCLUDED.baseline_price,
+			    first_seen_price = EXCLUDED.first_seen_price,
+			    trigger_type     = 'back_in_stock',
+			    target_price     = NULL,
+			    discount_pct     = NULL,
+			    notified         = FALSE,
+			    updated_at       = NOW()
+		RETURNING id, user_id, product_id, baseline_price, first_seen_price,
+		          trigger_type, target_price, discount_pct, notified,
+		          active, created_at, updated_at,
+		          (xmax = 0) AS inserted`
+
+	s := &domain.Subscription{}
+	var inserted bool
+	err := withSpan(ctx, "upsert_subscription_oos", func(ctx context.Context) error {
+		return r.db.QueryRow(ctx, q, userID, productID, lastPrice).
+			Scan(&s.ID, &s.UserID, &s.ProductID, &s.BaselinePrice, &s.FirstSeenPrice,
+				&s.TriggerType, &s.TargetPrice, &s.DiscountPct, &s.Notified,
+				&s.Active, &s.CreatedAt, &s.UpdatedAt, &inserted)
+	})
+	if err != nil {
+		return nil, false, err
+	}
+	return s, inserted, nil
+}
+
 func (r *SubscriptionRepo) GetByID(ctx context.Context, id int64) (*domain.Subscription, error) {
 	const q = `
 		SELECT id, user_id, product_id, baseline_price, first_seen_price,

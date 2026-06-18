@@ -121,6 +121,7 @@ func (r *SearchQueryRepo) UpdateLastScraped(ctx context.Context, id int64) error
 // domain.Plans), чтобы выбрать дорожку и проверить, пора ли скрейпить.
 type SchedulableRow struct {
 	QueryID        int64
+	Marketplace    string
 	NormalizedURL  string
 	QueryText      string
 	LastEnqueuedAt *time.Time
@@ -133,7 +134,7 @@ type SchedulableRow struct {
 // планировщик считает в Go (см. cmd/scheduler), а не в SQL.
 func (r *SearchQueryRepo) GetSchedulable(ctx context.Context) ([]SchedulableRow, error) {
 	const q = `
-		SELECT sq.id, sq.normalized_url, sq.query_text, sq.last_enqueued_at,
+		SELECT sq.id, sq.marketplace, sq.normalized_url, sq.query_text, sq.last_enqueued_at,
 		       u.plan, u.plan_expires_at
 		FROM search_queries sq
 		JOIN search_subscriptions ss ON ss.search_query_id = sq.id AND ss.active = TRUE
@@ -148,7 +149,7 @@ func (r *SearchQueryRepo) GetSchedulable(ctx context.Context) ([]SchedulableRow,
 	var out []SchedulableRow
 	for rows.Next() {
 		var row SchedulableRow
-		if err := rows.Scan(&row.QueryID, &row.NormalizedURL, &row.QueryText,
+		if err := rows.Scan(&row.QueryID, &row.Marketplace, &row.NormalizedURL, &row.QueryText,
 			&row.LastEnqueuedAt, &row.OwnerPlan, &row.PlanExpiresAt); err != nil {
 			return nil, err
 		}

@@ -44,6 +44,11 @@ type searchWorker struct {
 
 	// defaultInterval — интервал оценки для тарифов без своего Interval (фолбэк).
 	defaultInterval time.Duration
+
+	// belowTargetCooldown — анти-спам: не слать below_target-уведомления подписке
+	// чаще этого окна. Широкая выдача (особ. Ozon, ~8 ротирующихся позиций) иначе
+	// сыплет новыми дешёвыми SKU каждый скрейп. 0 — троттлинг выключен.
+	belowTargetCooldown time.Duration
 }
 
 // makeHandler — обработчик одной задачи из топика поисковых задач.
@@ -195,6 +200,21 @@ func (w *searchWorker) evaluateSubscription(ctx context.Context, q *domain.Searc
 	hits := searchsub.Evaluate(rule, states)
 	if len(hits) == 0 {
 		return nil
+	}
+
+	// Троттлинг below_target: широкая ротирующаяся выдача (особенно Ozon, ~8
+	// ротирующихся позиций) иначе сыплет новыми дешёвыми SKU каждый скрейп. Если
+	// этой подписке слали недавно — пропускаем (хиты никуда не денутся, всплывут
+	// после окна). any_drop/discount не троттлим — там событие = реальная просадка.
+	if w.belowTargetCooldown > 0 && sub.TriggerType == domain.TriggerBelowTarget {
+		if last, ok, err := w.notifs.GetLastNotifiedAt(ctx, sub.ID); err != nil {
+			w.log.Warn("get last notified at", "sub_id", sub.ID, "err", err)
+		} else if ok && time.Since(last) < w.belowTargetCooldown {
+			w.log.Info("below_target throttled", "sub_id", sub.ID,
+				"since", time.Since(last).Round(time.Minute).String(),
+				"cooldown", w.belowTargetCooldown.String())
+			return nil
+		}
 	}
 
 	// Формируем событие. Отправку в Telegram и запись search_notifications

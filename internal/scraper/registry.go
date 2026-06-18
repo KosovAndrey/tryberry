@@ -69,6 +69,9 @@ func (r *Registry) Scrape(ctx context.Context, url string) (*Result, Marketplace
 		status = "auth"
 	case errors.Is(err, ErrNotImplemented):
 		status = "disabled"
+	case errors.Is(err, ErrParseFailed):
+		// антибот пройден (200), но цену не достали — дрейф вёрстки / нет офферов.
+		status = "parse_error"
 	case isProxyError(err):
 		// прокси отверг/недоступен (407/502 и т.п.) — НЕ антибот: отдельный статус,
 		// чтобы алерт отличал «истёк/сломался прокси» от блокировки маркетплейсом.

@@ -33,21 +33,31 @@ type PriceAlert struct {
 	ImageURL       string
 	OldPrice       float64
 	NewPrice       float64
+	// BackInStock — алерт о появлении товара в наличии (триггер back_in_stock),
+	// а не о снижении цены. OldPrice не используется (товара не было в продаже).
+	BackInStock bool
 }
 
 func (n *Notifier) SendPriceAlert(ctx context.Context, a PriceAlert) error {
-	diff := a.OldPrice - a.NewPrice
-	percent := math.Round(diff / a.OldPrice * 100)
-
-	caption := fmt.Sprintf(
-		"📉 Цена снизилась!\n\n%s\n\nБыло: %.0f ₽ → Стало: %.0f ₽\nСкидка: %.0f ₽ (%.0f%%)\n\n%s",
-		a.ProductName,
-		a.OldPrice,
-		a.NewPrice,
-		diff,
-		percent,
-		a.ProductURL,
-	)
+	var caption string
+	if a.BackInStock {
+		caption = fmt.Sprintf(
+			"🔔 Снова в наличии!\n\n%s\n\nЦена: %.0f ₽\n\n%s",
+			a.ProductName, a.NewPrice, a.ProductURL,
+		)
+	} else {
+		diff := a.OldPrice - a.NewPrice
+		percent := math.Round(diff / a.OldPrice * 100)
+		caption = fmt.Sprintf(
+			"📉 Цена снизилась!\n\n%s\n\nБыло: %.0f ₽ → Стало: %.0f ₽\nСкидка: %.0f ₽ (%.0f%%)\n\n%s",
+			a.ProductName,
+			a.OldPrice,
+			a.NewPrice,
+			diff,
+			percent,
+			a.ProductURL,
+		)
+	}
 
 	keyboard := map[string]any{
 		"inline_keyboard": [][]map[string]any{

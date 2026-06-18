@@ -3,6 +3,7 @@ package postgres
 import (
 	"context"
 	"errors"
+	"time"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -54,6 +55,28 @@ func (r *SearchNotificationRepo) GetLastNotifiedPrice(ctx context.Context, subID
 		return 0, false, err
 	}
 	return price, true, nil
+}
+
+// GetLastNotifiedAt — время последнего отправленного уведомления подписки (любого
+// товара). Для троттлинга below_target на широких/ротирующихся выдачах. false —
+// если уведомлений ещё не было.
+func (r *SearchNotificationRepo) GetLastNotifiedAt(ctx context.Context, subID int64) (time.Time, bool, error) {
+	const q = `
+		SELECT sent_at
+		FROM search_notifications
+		WHERE subscription_id = $1
+		ORDER BY sent_at DESC
+		LIMIT 1`
+
+	var t time.Time
+	err := r.db.QueryRow(ctx, q, subID).Scan(&t)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return time.Time{}, false, nil
+	}
+	if err != nil {
+		return time.Time{}, false, err
+	}
+	return t, true, nil
 }
 
 // GetBySubscription — история уведомлений подписки (для UI/отладки).

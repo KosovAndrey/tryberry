@@ -68,9 +68,12 @@ func (b *Bot) isSearchURL(text string) bool {
 
 func (b *Bot) sendSearchMenu(chatID int64, messageID int) {
 	text := "🔎 <b>Поиск по ссылке</b>\n\n" +
-		"Отправь ссылку на <b>поисковую выдачу</b> Wildberries прямо в чат — я буду следить за всей выдачей и пришлю, когда товары подешевеют.\n\n" +
-		"Как получить ссылку: на сайте WB введи запрос в поиск, скопируй ссылку из адресной строки.\n\n" +
-		"Пример:\n<code>https://www.wildberries.ru/catalog/0/search.aspx?search=наушники</code>\n\n" +
+		"Отправь ссылку на <b>поисковую выдачу</b> Wildberries, Яндекс.Маркета или Ozon прямо в чат — я буду следить за всей выдачей и пришлю, когда товары подешевеют.\n\n" +
+		"Как получить ссылку: на сайте маркетплейса введи запрос в поиск, скопируй ссылку из адресной строки.\n\n" +
+		"Примеры:\n" +
+		"<code>https://www.wildberries.ru/catalog/0/search.aspx?search=наушники</code>\n" +
+		"<code>https://market.yandex.ru/search?text=наушники</code>\n" +
+		"<code>https://www.ozon.ru/search/?text=наушники</code>\n\n" +
 		"Совет: чем точнее запрос, тем меньше лишнего в уведомлениях."
 
 	keyboard := tgbotapi.NewInlineKeyboardMarkup(
@@ -103,7 +106,7 @@ func (b *Bot) startSearchTrack(ctx context.Context, chatID int64, rawURL string,
 
 	ss, err := b.registry.FindSearchByURL(rawURL)
 	if err != nil {
-		b.reply(chatID, "Это не похоже на поисковую ссылку Wildberries. Нужна ссылка с параметром поиска.")
+		b.reply(chatID, "Это не похоже на поисковую ссылку. Нужна ссылка на поисковую выдачу (Wildberries, Яндекс.Маркет или Ozon) с текстом запроса.")
 		return
 	}
 
@@ -264,7 +267,7 @@ func (b *Bot) handleListSearch(ctx context.Context, chatID int64, user *domain.U
 	}
 	if len(subs) == 0 {
 		m := tgbotapi.NewMessage(chatID,
-			"🔎 У тебя пока нет поиск-подписок.\n\nОтправь ссылку на поисковую выдачу Wildberries прямо в чат.")
+			"🔎 У тебя пока нет поиск-подписок.\n\nОтправь ссылку на поисковую выдачу Wildberries, Яндекс.Маркета или Ozon прямо в чат.")
 		m.ParseMode = "HTML"
 		m.ReplyMarkup = tgbotapi.NewInlineKeyboardMarkup(
 			tgbotapi.NewInlineKeyboardRow(
@@ -285,8 +288,9 @@ func (b *Bot) buildSearchListView(subs []*domain.SearchSubscription) (string, tg
 	var sb strings.Builder
 	fmt.Fprintf(&sb, "🔎 <b>Поиск-подписки — %d активных</b>\n\n", len(subs))
 	for i, s := range subs {
-		fmt.Fprintf(&sb, "%d. <b>%s</b>\n   %s\n\n",
-			i+1, htmlEscape(s.QueryText), domain.TriggerDescription(s.TriggerType, s.TargetPrice, s.DiscountPct))
+		fmt.Fprintf(&sb, "%d. %s <b>%s</b>\n   %s\n\n",
+			i+1, marketplaceIcon(s.Marketplace), htmlEscape(s.QueryText),
+			domain.TriggerDescription(s.TriggerType, s.TargetPrice, s.DiscountPct))
 	}
 
 	var rows [][]tgbotapi.InlineKeyboardButton

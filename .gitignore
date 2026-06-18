@@ -55,3 +55,6 @@ tryberrybot-HANDOFF.md
 oztest-linux
 oztest*
 graphify-out/
+
+# локальные дампы/срезы для отладки
+tmp/

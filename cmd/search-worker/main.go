@@ -111,7 +111,24 @@ func run(log *slog.Logger) error {
 		getEnvInt("SEARCH_MAX_PAGES", 5),
 		time.Duration(getEnvInt("SEARCH_PAGE_DELAY_MS", 700))*time.Millisecond,
 	)
-	registry := scraper.NewRegistry(wbSearch)
+	// Я.Маркет-поиск: тот же транспорт, что у карточки (tls-client + RU-прокси).
+	yandexSearch := scraper.NewYandexMarketSearchScraper(
+		scraper.NewYandexMarketScraper(scraper.YandexMarketOptions{
+			ProxyURL: getEnv("YANDEX_PROXY_URL", getEnv("OZON_PROXY_URL", "")),
+			RPS:      2,
+			Logger:   log,
+		}),
+		getEnvInt("SEARCH_MAX_ITEMS_YANDEX", 60),
+	)
+	// Ozon-поиск: только через сайдкар ozon-miner (browser-пул) — прямой API за
+	// FAB. Маршрут /search в сайдкаре есть; парсер searchResultsV2 best-effort,
+	// доводим по прод-логам. Без OZON_BROWSER_URL ScrapeSearch вернёт blocked.
+	ozonSearch := scraper.NewOzonSearchScraper(scraper.NewOzonScraper(scraper.OzonOptions{
+		Mode:       "browser", // поиск Ozon доступен только через сайдкар-пул
+		BrowserURL: getEnv("OZON_BROWSER_URL", ""),
+		Logger:     log,
+	}), getEnvInt("SEARCH_MAX_ITEMS_OZON", 60))
+	registry := scraper.NewRegistry(wbSearch, yandexSearch, ozonSearch)
 
 	// ── Kafka ─────────────────────────────────────────────────────────────────
 	consumer := kafka.NewConsumer(kafkaBrokers, tasksTopic, kafkaGroupID)
@@ -129,6 +146,9 @@ func run(log *slog.Logger) error {
 		products:        productRepo,
 		events:          searchEvents,
 		defaultInterval: defaultInterval,
+		// Анти-спам below_target на широких/ротирующихся выдачах (Ozon отдаёт
+		// ~8 ротирующихся позиций → каждый скрейп новые дешёвые SKU). 0 — выкл.
+		belowTargetCooldown: time.Duration(getEnvInt("SEARCH_BELOW_TARGET_COOLDOWN_MINUTES", 360)) * time.Minute,
 	}
 
 	log.Info("search-worker started",

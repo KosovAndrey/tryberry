@@ -179,6 +179,10 @@ func (d *deliverer) SendReferralRewardNotice(ctx context.Context, userID int64, 
 // ── Plain-text рендер для VK (HTML там не работает) ──────────────────────────
 
 func vkPriceText(a telegram.PriceAlert) string {
+	if a.BackInStock {
+		return fmt.Sprintf("🔔 Снова в наличии!\n\n%s\n\nЦена: %.0f ₽\n\n%s",
+			a.ProductName, a.NewPrice, a.ProductURL)
+	}
 	diff := a.OldPrice - a.NewPrice
 	percent := math.Round(diff / a.OldPrice * 100)
 	return fmt.Sprintf(

@@ -58,13 +58,27 @@ func (r *ProductRepo) GetByID(ctx context.Context, id int64) (*domain.Product, e
 	return p, nil
 }
 
-func (r *ProductRepo) UpdateScrapedData(ctx context.Context, id int64, name, imageURL string) error {
+// UpdateScrapedData обновляет имя/картинку/наличие товара и возвращает ПРЕДЫДУЩЕЕ
+// значение in_stock — notifier по переходу wasInStock(false)→inStock(true) шлёт
+// уведомление «снова в наличии» (триггер back_in_stock).
+func (r *ProductRepo) UpdateScrapedData(ctx context.Context, id int64, name, imageURL string, inStock bool) (wasInStock bool, err error) {
 	const q = `
+		WITH prev AS (SELECT in_stock FROM products WHERE id = $1)
 		UPDATE products
-		SET name = $2, image_url = $3, updated_at = NOW()
-		WHERE id = $1`
+		SET name = $2, image_url = $3, in_stock = $4, updated_at = NOW()
+		WHERE id = $1
+		RETURNING (SELECT in_stock FROM prev)`
 
-	_, err := r.db.Exec(ctx, q, id, name, imageURL)
+	err = r.db.QueryRow(ctx, q, id, name, imageURL, inStock).Scan(&wasInStock)
+	return wasInStock, err
+}
+
+// SetInStock проставляет наличие товара. Используется ботом при добавлении
+// карточки без оффера: фиксируем in_stock=false, чтобы последующий скрейп с ценой
+// дал переход false→true и сработал триггер back_in_stock.
+func (r *ProductRepo) SetInStock(ctx context.Context, id int64, inStock bool) error {
+	const q = `UPDATE products SET in_stock = $2, updated_at = NOW() WHERE id = $1`
+	_, err := r.db.Exec(ctx, q, id, inStock)
 	return err
 }
 

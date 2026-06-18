@@ -208,7 +208,7 @@ var (
 			Name:      "scrape_requests_total",
 			Help:      "Total scrape requests by marketplace and status",
 		},
-		[]string{"marketplace", "status"}, // success | not_found | blocked | error
+		[]string{"marketplace", "status"}, // success | not_found | blocked | proxy | auth | disabled | parse_error | error
 	)
 )
 
