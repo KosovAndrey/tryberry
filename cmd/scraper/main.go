@@ -227,11 +227,19 @@ func makeHandler(
 		// её чек-поинте по текущей цене. Иначе free-подписчик (60 мин) пропустит
 		// устойчивое падение, случившееся между событиями «по изменению». Частоту
 		// доставки режет throttle (last_evaluated_at) в notifier.
+		// При OOS result.Price может быть «последней» ценой из стейта — в событие её
+		// НЕ кладём (NewPrice=0): notifier выводит наличие в т.ч. из NewPrice>0
+		// (страховка для старых событий), и ненулевая last-цена ложно пометила бы
+		// товар «в наличии», сломав триггер back_in_stock.
+		newPrice := result.Price
+		if !result.InStock {
+			newPrice = 0
+		}
 		event := domain.PriceEvent{
 			ProductID:   task.ProductID,
 			Marketplace: string(marketplace),
 			OldPrice:    prevPrice,
-			NewPrice:    result.Price,
+			NewPrice:    newPrice,
 			RecordedAt:  time.Now(),
 			InStock:     result.InStock,
 			WasInStock:  wasInStock,

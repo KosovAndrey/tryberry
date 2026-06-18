@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"net/url"
 	"regexp"
 	"strings"
 
@@ -139,7 +140,15 @@ func (s *YandexMarketScraper) Scrape(ctx context.Context, url string) (*Result, 
 	// настоящей странице товара в JS-бандле всё равно встречается слово "captcha"
 	// — поэтому блок/успех решаем ПО СОДЕРЖИМОМУ (достали ли товар), а не по
 	// наличию подстроки (раньше это давало ложный «blocked» на живой странице).
-	if res, perr := parseYandexMarketHTML(string(body)); perr == nil {
+	if res, perr := parseYandexMarketHTML(string(body), url); perr == nil {
+		if !res.InStock {
+			// Диагностика «последней цены» при OOS: сколько ценовых сниппетов в
+			// стейте и какую выбрали (по близости к SKU). Если last_price скачет —
+			// видно, сколько кандидатов и подхватился ли SKU-якорь.
+			s.log.Info("yandex market: out of stock, last price from state",
+				"url", url, "sku", ymExtractSKU(url), "last_price", res.Price,
+				"price_candidates", len(ymStatePriceRe.FindAllStringIndex(string(body), -1)))
+		}
 		return res, nil
 	}
 
@@ -219,7 +228,7 @@ func ymPriceContext(body []byte) string {
 
 var ymJSONLDRe = regexp.MustCompile(`(?s)<script type="application/ld\+json"[^>]*>(.*?)</script>`)
 
-func parseYandexMarketHTML(html string) (*Result, error) {
+func parseYandexMarketHTML(html, productURL string) (*Result, error) {
 	matches := ymJSONLDRe.FindAllStringSubmatch(html, -1)
 	if len(matches) == 0 {
 		return nil, ErrProductNotFound
@@ -259,30 +268,22 @@ func parseYandexMarketHTML(html string) (*Result, error) {
 		}
 	}
 
-	// JSON-LD-цены нет, но есть Product-узел → это настоящая карточка товара
-	// (а не поиск/каталог). Берём цену из встроенного стейта marketfront:
-	// "price":{"value":"128931","currency":"RUR"}. Гейт на наличие Product
-	// важен — на странице поиска цены из стейта принадлежат чужим сниппетам.
+	// Есть Product-узел, но в JSON-LD НЕТ offers.price → активного buy-box нет,
+	// то есть товара НЕТ В НАЛИЧИИ. При этом в стейте marketfront может лежать
+	// цена ("price":{"value":"128931","currency":"RUR"}) — это «последняя/
+	// справочная» цена, НЕ признак наличия. Поэтому InStock=false, а Price несём
+	// как last-known (0, если стейт-цены тоже нет). Наличие определяется
+	// наличием offers, а не присутствием цены где-либо. Гейт на Product важен —
+	// на странице поиска цены из стейта принадлежат чужим сниппетам.
 	if product != nil {
 		name := strings.TrimSpace(product.Name)
 		if name == "" {
 			name = "Товар Я.Маркета"
 		}
-		if price := ymStatePrice(html); price > 0 {
-			return &Result{
-				Name:     name,
-				Price:    price,
-				ImageURL: ymFirstImage(product.Image),
-				InStock:  true,
-			}, nil
-		}
-		// Product есть, но цены нет НИГДЕ (ни JSON-LD, ни стейт) → карточка без
-		// активного оффера («нет в продаже»). Это УСПЕХ, не ошибка: товар можно
-		// добавить в отслеживание с триггером back_in_stock (см. doTrack).
 		return &Result{
 			Name:     name,
 			ImageURL: ymFirstImage(product.Image),
-			Price:    0,
+			Price:    ymStatePrice(html, ymExtractSKU(productURL)), // последняя известная цена (0, если нет)
 			InStock:  false,
 		}, nil
 	}
@@ -292,21 +293,91 @@ func parseYandexMarketHTML(html string) (*Result, error) {
 
 // ymStatePriceRe вытаскивает цену из стейта marketfront для карточек, где JSON-LD
 // отдаёт Product без offers (карточка модели с пустым buy-box). Формат стейта:
-// "price":{"value":"128931","currency":"RUR"}. Берём первое вхождение — на
-// карточке товара это цена основного предложения (вызывается только когда на
-// странице есть JSON-LD Product, см. parseYandexMarketHTML).
+// "price":{"value":"128931","currency":"RUR"}.
 var ymStatePriceRe = regexp.MustCompile(`"price":\{"value":"(\d+(?:\.\d+)?)","currency":"(?:RUR|RUB)"`)
 
-func ymStatePrice(html string) float64 {
-	m := ymStatePriceRe.FindStringSubmatch(html)
-	if m == nil {
+// ymStatePrice — «последняя известная» цена основного товара из стейта.
+//
+// На карточке таких сниппетов МНОГО (сам товар + рекомендации + аксессуары +
+// предложения разных продавцов), и Яндекс тасует блоки между загрузками — поэтому
+// «первое вхождение» давало скачущую цену (то 128k, то 50k). Привязываемся к SKU
+// из URL: берём ценовой сниппет, ближайший к вхождению SKU в стейте (данные товара
+// держат его цену рядом со своим id). Без SKU — фолбэк на первое вхождение.
+func ymStatePrice(html, sku string) float64 {
+	locs := ymStatePriceRe.FindAllStringSubmatchIndex(html, -1)
+	if len(locs) == 0 {
 		return 0
 	}
-	price, err := parsePriceString(m[1])
+	pick := locs[0] // фолбэк: первое вхождение
+	if sku != "" {
+		if skuIdxs := allIndexes(html, sku); len(skuIdxs) > 0 {
+			bestDist := int(^uint(0) >> 1)
+			for _, loc := range locs {
+				for _, si := range skuIdxs {
+					d := loc[0] - si
+					if d < 0 {
+						d = -d
+					}
+					if d < bestDist {
+						bestDist = d
+						pick = loc
+					}
+				}
+			}
+		}
+	}
+	price, err := parsePriceString(html[pick[2]:pick[3]])
 	if err != nil {
 		return 0
 	}
 	return price
+}
+
+// ymExtractSKU — SKU товара из URL карточки: последний числовой сегмент пути
+// (market.yandex.ru/card/<slug>-15584/5193397317 → "5193397317";
+// /product--<slug>/123 → "123"). Пусто, если не нашли.
+func ymExtractSKU(productURL string) string {
+	u, err := url.Parse(productURL)
+	if err != nil {
+		return ""
+	}
+	for _, seg := range reverseSplit(u.Path, "/") {
+		if len(seg) >= 4 && isAllDigits(seg) {
+			return seg
+		}
+	}
+	return ""
+}
+
+func isAllDigits(s string) bool {
+	for _, r := range s {
+		if r < '0' || r > '9' {
+			return false
+		}
+	}
+	return s != ""
+}
+
+func reverseSplit(s, sep string) []string {
+	parts := strings.Split(s, sep)
+	for i, j := 0, len(parts)-1; i < j; i, j = i+1, j-1 {
+		parts[i], parts[j] = parts[j], parts[i]
+	}
+	return parts
+}
+
+// allIndexes — все позиции вхождений substr в s (для поиска ближайшей цены к SKU).
+func allIndexes(s, substr string) []int {
+	var idxs []int
+	for off := 0; ; {
+		i := strings.Index(s[off:], substr)
+		if i < 0 {
+			break
+		}
+		idxs = append(idxs, off+i)
+		off += i + len(substr)
+	}
+	return idxs
 }
 
 // ymLDTypes перечисляет @type всех JSON-LD блоков — диагностика на случай, когда
