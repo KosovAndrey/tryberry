@@ -89,20 +89,18 @@ func DaysWord(n int) string {
 // QueryTextFromNormalized — человекочитаемый запрос из нормализованного
 // поискового URL (...search.aspx?search=...&sort=...) для отображения.
 func QueryTextFromNormalized(normalized string) string {
-	const marker = "search="
-	i := strings.Index(normalized, marker)
-	if i < 0 {
-		return normalized
+	// Текст запроса лежит в query-параметре: у WB это search=, у Я.Маркета text=.
+	// Парсим URL и берём первый непустой — так не зависим от формата конкретного
+	// маркетплейса и порядка параметров.
+	if u, err := url.Parse(normalized); err == nil {
+		q := u.Query()
+		for _, key := range []string{"search", "text"} {
+			if v := strings.TrimSpace(q.Get(key)); v != "" {
+				return v
+			}
+		}
 	}
-	rest := normalized[i+len(marker):]
-	if amp := strings.IndexByte(rest, '&'); amp >= 0 {
-		rest = rest[:amp]
-	}
-	rest = strings.ReplaceAll(rest, "+", " ")
-	if dec, err := url.QueryUnescape(rest); err == nil {
-		return dec
-	}
-	return rest
+	return normalized
 }
 
 // ParsePrice — цена из пользовательского ввода («59 990», «59990,50», «100 ₽»).
