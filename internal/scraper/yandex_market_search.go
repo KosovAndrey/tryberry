@@ -149,29 +149,19 @@ func (s *YandexMarketSearchScraper) ScrapeSearch(ctx context.Context, rawURL str
 	return out, nil
 }
 
-// parseSearch — FIRST-PASS извлечение позиций выдачи из SSR-стейта. Пока умеет
-// только цены из сниппетов (имя/URL/артикул — TODO по прод-структуре). Возвращает
-// частичный результат; пустой Items сигналит вызывающему включить диагностику.
+// parseSearch — FIRST-PASS извлечение позиций выдачи из SSR-стейта.
+//
+// ВАЖНО: пока парсер НЕ извлекает идентичность товара (URL/артикул) — только
+// цены. Эмитить такие позиции в пайплайн НЕЛЬЗЯ: products апсертится по URL
+// (ON CONFLICT (url)), и все позиции с пустым URL схлопываются в один товар →
+// baseline/last_notified считаются по одному фантому, current «прыгает» между
+// циклами и Decide бесконечно шлёт спам (наблюдали на проде 18-Jun: уведомление
+// каждую минуту). Поэтому до доводки возвращаем ПУСТОЙ набор: вызывающий получит
+// ErrParseFailed (товары не идут в пайплайн), а сырой HTML всё равно дампится в
+// ScrapeSearch для вскрытия структуры стейта. Снять гейт, как только ниже будет
+// извлекаться per-item URL/Name/ArticleID/ImageURL.
 func (s *YandexMarketSearchScraper) parseSearch(html string) *SearchResultSet {
-	out := &SearchResultSet{}
-	matches := ymSearchPriceRe.FindAllStringSubmatch(html, -1)
-	pos := 0
-	for _, m := range matches {
-		price, err := parsePriceString(m[1])
-		if err != nil || price <= 0 {
-			continue
-		}
-		pos++
-		if pos > s.maxItems {
-			break
-		}
-		out.Items = append(out.Items, SearchItem{
-			Position:     pos,
-			PriceKopecks: int64(price * 100),
-			// TODO(prod-logs): достать Name/URL/ArticleID/ImageURL из стейта
-			// marketfront — структура сниппета не подтверждена на живой странице.
-		})
-	}
-	out.TotalFound = len(out.Items)
-	return out
+	// TODO(prod-logs): извлечь Name/URL/ArticleID/ImageURL из стейта marketfront
+	// и собрать out.Items, только когда у позиции есть непустой URL.
+	return &SearchResultSet{}
 }
