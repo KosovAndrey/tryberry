@@ -14,11 +14,12 @@
   Я.Маркет. Ветка `feat/search-by-url-ozon-yandex` слита с `feat/yandex-market-scraper`
   (полный суперсет, +migration 019). **Мерж в main** ждёт накатки migration 019 на
   прод (`make migrate`).
-- **Ozon-поиск — каркас**: сайдкар `ozon-miner` получил маршрут `/search?text=`
-  (in-page fetch выдачи из прогретой дорожки, виджет searchResultsV2);
-  `OzonSearchScraper.ScrapeSearch` + best-effort парсер тайлов. Парсер доводится
-  по прод-дампу `curl ozon-miner:8080/search?text=...`. Бот пока: «Ozon скоро
-  будет» — гейт снять после подтверждения парсера.
+- **Ozon-поиск — ГОТОВ**: сайдкар `ozon-miner` получил маршрут `/search?text=`
+  (in-page fetch выдачи из прогретой дорожки); `OzonSearchScraper.ScrapeSearch`
+  парсит виджет `tileGridDesktop`. Структуру тайла подтвердил прод-дампом
+  (text=iphone, 8/8 позиций: SKU/цена/old/name/image/url). Гейт «Ozon скоро
+  будет» снят — поиск-подписки Ozon заводятся как WB/Я.Маркет. Осталось:
+  редеплой bot-worker+search-worker и проверка end-to-end через бота.
 - Подробности: `docs/features/search-by-url-ozon-yandex.md`.
 
 ## TL;DR

@@ -9,6 +9,7 @@ import (
 	"net/url"
 	"regexp"
 	"sort"
+	"strconv"
 	"strings"
 )
 
@@ -19,14 +20,13 @@ import (
 // закрыт антиботом FAB (см. docs/OZON-STATUS.md); живая выдача достаётся in-page
 // fetch'ем из прогретой дорожки сайдкара (GET /search?text=...), который ходит к
 // тому же универсальному entrypoint-api, что и карточка, и отдаёт сырой
-// widgetStates с виджетом searchResultsV2. Если базовый OzonScraper НЕ в
-// browser-режиме (нет OZON_BROWSER_URL) — ScrapeSearch вернёт ErrMarketplaceBlocked.
+// widgetStates. Позиции выдачи лежат в виджете tileGridDesktop. Если базовый
+// OzonScraper НЕ в browser-режиме (нет OZON_BROWSER_URL) — ScrapeSearch вернёт
+// ErrMarketplaceBlocked.
 //
-// ПАРСЕР best-effort: точная JSON-структура searchResultsV2 на живой странице не
-// зафиксирована (локально FAB + прогрев недоступны). Поэтому извлечение полей
-// item'а — эвристическое + насыщенный диаг-лог `ozon search: no items parsed`;
-// доводим по прод-логам / прямому дампу `curl ozon-miner:8080/search?text=...`
-// (как доводили Я.Маркет). Цены — в КОПЕЙКАХ (контракт SearchItem).
+// Структура тайла подтверждена прод-дампом (см. parseSearch/buildOzonSearchItem).
+// Диаг-лог `ozon search: no items parsed` (widgets+sample) остаётся на случай
+// дрейфа разметки. Цены — в КОПЕЙКАХ (контракт SearchItem).
 type OzonSearchScraper struct {
 	*OzonScraper
 	maxItems int
@@ -142,18 +142,21 @@ func (s *OzonSearchScraper) fetchSearchViaBrowser(ctx context.Context, text stri
 	return resp.StatusCode, body, nil
 }
 
-// ── Парсинг searchResultsV2 ────────────────────────────────────────────────────
+// ── Парсинг выдачи (tileGridDesktop) ───────────────────────────────────────────
 
 // ozonSearchLinkRe — ссылка на карточку из тайла выдачи: /product/<slug>-<id>/ .
 // Числовой хвост — SKU (стабильный ключ дедупликации, products апсертится по URL).
 var ozonSearchLinkRe = regexp.MustCompile(`/product/(?:[^"/?#]*-)?(\d+)/?`)
 
-// parseSearch — позиции выдачи из widgetStates (виджеты searchResultsV2 / tileGrid).
+// ozonDigitsRe — строка целиком из цифр (валидация строкового SKU).
+var ozonDigitsRe = regexp.MustCompile(`^\d+$`)
+
+// parseSearch — позиции выдачи из widgetStates. Тайлы лежат в tileGridDesktop;
+// обход ранжируем (searchResults/tileGrid сперва) на случай дрейфа имён виджетов.
 //
-// Каждый тайл — объект с product-ссылкой (action/link → /product/...-<id>/), ценой
-// (атомы price[] со знаком ₽, как в карточке) и заголовком. Структура атомов между
-// версиями дрейфует, поэтому поля достаём эвристически (reused findPriceTexts/
-// findOzonImageURL/findFirstString из ozon.go). Берём только тайлы с id и ценой.
+// Каждый тайл — объект с id/sku (SKU), action.link (карточка), mainState (атомы
+// priceV2 и textDS-название) и tileImage. Цену/картинку достаём общими хелперами
+// карточки (findPriceTexts/findOzonImageURL). Берём только тайлы с SKU и ценой.
 func (s *OzonSearchScraper) parseSearch(body []byte) *SearchResultSet {
 	out := &SearchResultSet{}
 	var env ozonEnvelope
@@ -234,15 +237,21 @@ func collectOzonSearchItems(v any, seen map[string]bool, out *[]SearchItem, max 
 	}
 }
 
-// buildOzonSearchItem собирает SearchItem из объекта-тайла. false — если нет
-// product-ссылки или цены (тайл-баннер/реклама/«нет в наличии»).
+// buildOzonSearchItem собирает SearchItem из объекта-тайла tileGridDesktop. false —
+// если нет SKU или цены (тайл-баннер/реклама/«нет в наличии»).
+//
+// Структура тайла (снято с прода, text=iphone): id/sku — SKU; action.link —
+// ссылка на карточку; mainState[] — атомы: priceV2.price[] (text+textStyle
+// PRICE/ORIGINAL_PRICE) и textDS с id=="name" (название); tileImage — галерея.
 func buildOzonSearchItem(m map[string]any) (SearchItem, bool) {
+	sku := ozonTileSKU(m)
 	link := findOzonProductLink(m)
-	if link == "" {
-		return SearchItem{}, false
+	if sku == "" && link != "" {
+		if mm := ozonSearchLinkRe.FindStringSubmatch(link); len(mm) >= 2 {
+			sku = mm[1]
+		}
 	}
-	id := ozonSearchLinkRe.FindStringSubmatch(link)
-	if len(id) < 2 {
+	if sku == "" {
 		return SearchItem{}, false
 	}
 
@@ -259,10 +268,14 @@ func buildOzonSearchItem(m map[string]any) (SearchItem, bool) {
 		return SearchItem{}, false
 	}
 
+	itemURL := ozonAbsoluteURL(link)
+	if itemURL == "" || itemURL == "https://www.ozon.ru" {
+		itemURL = "https://www.ozon.ru/product/" + sku + "/"
+	}
 	item := SearchItem{
-		ArticleID:    id[1],
-		Name:         strings.TrimSpace(findOzonTileTitle(m)),
-		URL:          ozonAbsoluteURL(link),
+		ArticleID:    sku,
+		Name:         strings.TrimSpace(findOzonTileName(m)),
+		URL:          itemURL,
 		PriceKopecks: int64(price * 100),
 		ImageURL:     findOzonImageURL(m),
 	}
@@ -270,6 +283,61 @@ func buildOzonSearchItem(m map[string]any) (SearchItem, bool) {
 		item.OldPriceKopecks = int64(old * 100)
 	}
 	return item, true
+}
+
+// ozonTileSKU — SKU тайла: поле id (строка) или sku (число). "" — если нет.
+func ozonTileSKU(m map[string]any) string {
+	for _, k := range []string{"id", "sku"} {
+		switch v := m[k].(type) {
+		case string:
+			if ozonDigitsRe.MatchString(v) {
+				return v
+			}
+		case json.Number:
+			return v.String()
+		case float64:
+			return strconv.FormatInt(int64(v), 10)
+		}
+	}
+	return ""
+}
+
+// findOzonTileName — название тайла из mainState: атом помечен id=="name" с текстом
+// в textDS.text. Fallback — первый textDS-атом mainState (имя — единственный textDS,
+// цены лежат в priceV2). Best-effort на случай дрейфа разметки.
+func findOzonTileName(m map[string]any) string {
+	ms, ok := m["mainState"].([]any)
+	if !ok {
+		return findFirstString(m, "title")
+	}
+	var fallback string
+	for _, a := range ms {
+		am, ok := a.(map[string]any)
+		if !ok {
+			continue
+		}
+		text := ozonTextDSText(am)
+		if text == "" {
+			continue
+		}
+		if am["id"] == "name" {
+			return text
+		}
+		if fallback == "" {
+			fallback = text
+		}
+	}
+	return fallback
+}
+
+// ozonTextDSText — текст из атома textDS ({"textDS":{"text":"..."}}). "" если нет.
+func ozonTextDSText(atom map[string]any) string {
+	if td, ok := atom["textDS"].(map[string]any); ok {
+		if s, ok := td["text"].(string); ok {
+			return s
+		}
+	}
+	return ""
 }
 
 // findOzonProductLink рекурсивно возвращает первую строку-ссылку на карточку.
@@ -296,17 +364,6 @@ func findOzonProductLink(v any) string {
 			if u := findOzonProductLink(e); u != "" {
 				return u
 			}
-		}
-	}
-	return ""
-}
-
-// findOzonTileTitle — заголовок тайла. Пробуем явные ключи, затем — атом текста с
-// буквами и без ₽ (чтобы не подхватить цену). Best-effort.
-func findOzonTileTitle(m map[string]any) string {
-	for _, key := range []string{"title", "name"} {
-		if s := findFirstString(m, key); s != "" && !strings.Contains(s, "₽") {
-			return s
 		}
 	}
 	return ""

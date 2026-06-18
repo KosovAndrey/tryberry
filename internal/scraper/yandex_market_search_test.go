@@ -1,6 +1,7 @@
 package scraper
 
 import (
+	"encoding/json"
 	"errors"
 	"net/url"
 	"os"
@@ -122,38 +123,56 @@ func TestOzonSearch_URLHandling(t *testing.T) {
 	}
 }
 
-// TestOzonSearch_ParseTiles проверяет плумбинг парсера выдачи на представительном
-// widgetStates: извлечение item'ов, link→SKU, цены по textStyle, абсолютный URL,
-// дедуп и лимит. Точные имена полей searchResultsV2 доводятся по прод-логам —
-// тест фиксирует разбор предполагаемой структуры (items[]/action.link/price[]).
+// TestOzonSearch_ParseTiles проверяет парсер на РЕАЛЬНОЙ структуре тайла
+// tileGridDesktop (снято с прода, text=iphone): id/sku → SKU, action.link → URL,
+// mainState priceV2 (PRICE/ORIGINAL_PRICE), textDS id=="name" → название,
+// tileImage → картинка. Плюс дедуп по SKU и обрезка query из URL.
 func TestOzonSearch_ParseTiles(t *testing.T) {
 	s := NewOzonSearchScraper(NewOzonScraper(OzonOptions{}), 60)
-	body := []byte(`{"widgetStates":{"searchResultsV2-abc":"{\"items\":[` +
-		`{\"action\":{\"link\":\"/product/naushniki-test-456/?asb=1\"},` +
-		`\"title\":\"Наушники Test\",` +
-		`\"price\":{\"price\":[{\"text\":\"1 299 ₽\",\"textStyle\":\"PRICE\"},{\"text\":\"2 000 ₽\",\"textStyle\":\"ORIGINAL_PRICE\"}]},` +
-		`\"image\":\"https://ir.ozone.ru/s3/multimedia-1/foo.jpg\"},` +
-		`{\"action\":{\"link\":\"/product/naushniki-test-456/\"},\"price\":{\"price\":[{\"text\":\"1 299 ₽\",\"textStyle\":\"PRICE\"}]}}` +
-		`]}"}}`)
+	// Тайл со скидкой (PRICE+ORIGINAL_PRICE) + дубль того же SKU (должен схлопнуться).
+	tile := `{"items":[
+		{"id":"3592847546","sku":3592847546,
+		 "action":{"link":"/product/apple-iphone-17e-3592847546/?at=BrtzXYZ"},
+		 "mainState":[
+		   {"type":"priceV2","priceV2":{"price":[
+		     {"text":"45 961 ₽","textStyle":"PRICE"},
+		     {"text":"66 280 ₽","textStyle":"ORIGINAL_PRICE"}]}},
+		   {"type":"labelListV2","labelListV2":{"items":[{"type":"text","text":{"text":"1043 и 1 ₽"}}]}},
+		   {"type":"textDS","id":"name","textDS":{"text":"Apple Смартфон iPhone 17e"}}],
+		 "tileImage":{"items":[{"type":"image","image":{"link":"https://ir.ozone.ru/s3/multimedia-1-0/10351985688.jpg"}}]}},
+		{"id":"3592847546","sku":3592847546,
+		 "action":{"link":"/product/apple-iphone-17e-3592847546/"},
+		 "mainState":[{"type":"priceV2","priceV2":{"price":[{"text":"45 961 ₽","textStyle":"PRICE"}]}}]}
+	]}`
+	body, err := json.Marshal(map[string]any{
+		"widgetStates": map[string]string{"tileGridDesktop-3669724-default-1": tile},
+	})
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+
 	out := s.parseSearch(body)
-	if len(out.Items) != 1 { // второй тайл — дубль того же SKU
-		t.Fatalf("items = %d, want 1 (dedup by SKU)", len(out.Items))
+	if len(out.Items) != 1 {
+		t.Fatalf("items = %d, want 1 (дедуп по SKU)", len(out.Items))
 	}
 	it := out.Items[0]
-	if it.ArticleID != "456" {
-		t.Errorf("id = %q, want 456", it.ArticleID)
+	if it.ArticleID != "3592847546" {
+		t.Errorf("id = %q, want 3592847546", it.ArticleID)
 	}
-	if it.URL != "https://www.ozon.ru/product/naushniki-test-456/" {
+	if it.URL != "https://www.ozon.ru/product/apple-iphone-17e-3592847546/" {
 		t.Errorf("url = %q (query должен отрезаться)", it.URL)
 	}
-	if it.PriceKopecks != 129900 {
-		t.Errorf("price = %d, want 129900", it.PriceKopecks)
+	if it.PriceKopecks != 4596100 {
+		t.Errorf("price = %d, want 4596100", it.PriceKopecks)
 	}
-	if it.OldPriceKopecks != 200000 {
-		t.Errorf("old = %d, want 200000", it.OldPriceKopecks)
+	if it.OldPriceKopecks != 6628000 {
+		t.Errorf("old = %d, want 6628000", it.OldPriceKopecks)
 	}
-	if it.Name != "Наушники Test" {
+	if it.Name != "Apple Смартфон iPhone 17e" {
 		t.Errorf("name = %q", it.Name)
+	}
+	if it.ImageURL != "https://ir.ozone.ru/s3/multimedia-1-0/10351985688.jpg" {
+		t.Errorf("image = %q", it.ImageURL)
 	}
 	if it.Position != 1 {
 		t.Errorf("position = %d, want 1", it.Position)
