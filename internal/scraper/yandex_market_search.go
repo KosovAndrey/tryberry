@@ -2,10 +2,10 @@ package scraper
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"io"
 	"net/url"
-	"os"
 	"regexp"
 	"strings"
 
@@ -122,19 +122,6 @@ func (s *YandexMarketSearchScraper) ScrapeSearch(ctx context.Context, rawURL str
 		return nil, ErrMarketplaceBlocked
 	}
 
-	// Диагностический дамп сырого HTML: путь задаётся env YM_SEARCH_DUMP (по
-	// умолчанию выкл). Нужен, чтобы один раз снять реальную страницу выдачи с
-	// прод-прокси и вскрыть структуру стейта marketfront (имя/URL/артикул/
-	// картинка) — локально страница недоступна (антибот рубит датацентровый IP).
-	// Перезаписывает файл, держим только последний захват. Удалить после доводки.
-	if dump := strings.TrimSpace(os.Getenv("YM_SEARCH_DUMP")); dump != "" {
-		if err := os.WriteFile(dump, body, 0o644); err != nil {
-			s.log.Warn("yandex search: dump write failed", "path", dump, "err", err)
-		} else {
-			s.log.Info("yandex search: raw html dumped", "path", dump, "len", len(body))
-		}
-	}
-
 	out := s.parseSearch(string(body))
 	if len(out.Items) == 0 {
 		// Диагностика для доводки парсера по прод-логам (как у карточки).
@@ -149,19 +136,128 @@ func (s *YandexMarketSearchScraper) ScrapeSearch(ctx context.Context, rawURL str
 	return out, nil
 }
 
-// parseSearch — FIRST-PASS извлечение позиций выдачи из SSR-стейта.
+// ymProductStartRe — начало объекта товарной модели в стейте marketfront:
+// {"id":<число>,"entity":"product"... . id у модели — ЧИСЛО (у картинок/прочих
+// сущностей — строка), поэтому якорь по `:\d+,` надёжно отбирает только модели.
+var ymProductStartRe = regexp.MustCompile(`\{"id":\d+,"entity":"product"`)
+
+// ymPictureRe — сущность картинки: {"id":"<hash>","entity":"avatars_picture",
+// "origUrl":"https://avatars.mds.yandex.net/..."}. pictures у модели — массив
+// этих хэшей; резолвим их в полный URL по этой карте.
+var ymPictureRe = regexp.MustCompile(`\{"id":"([0-9a-f]{6,16})","entity":"avatars_picture","origUrl":"([^"]+)"`)
+
+// ymSearchModel — нужные поля товарной модели из стейта marketfront. Цены —
+// строки в рублях ("31990"); pictures — хэши, резолвятся через ymPictureRe.
+type ymSearchModel struct {
+	ID     json.Number `json:"id"`
+	Entity string      `json:"entity"`
+	Slug   string      `json:"slug"`
+	Prices struct {
+		Min string `json:"min"`
+		Max string `json:"max"`
+	} `json:"prices"`
+	Titles struct {
+		Raw string `json:"raw"`
+	} `json:"titles"`
+	Pictures []string `json:"pictures"`
+}
+
+// parseSearch — позиции выдачи из инлайн-стейта marketfront.
 //
-// ВАЖНО: пока парсер НЕ извлекает идентичность товара (URL/артикул) — только
-// цены. Эмитить такие позиции в пайплайн НЕЛЬЗЯ: products апсертится по URL
-// (ON CONFLICT (url)), и все позиции с пустым URL схлопываются в один товар →
-// baseline/last_notified считаются по одному фантому, current «прыгает» между
-// циклами и Decide бесконечно шлёт спам (наблюдали на проде 18-Jun: уведомление
-// каждую минуту). Поэтому до доводки возвращаем ПУСТОЙ набор: вызывающий получит
-// ErrParseFailed (товары не идут в пайплайн), а сырой HTML всё равно дампится в
-// ScrapeSearch для вскрытия структуры стейта. Снять гейт, как только ниже будет
-// извлекаться per-item URL/Name/ArticleID/ImageURL.
+// Стейт — это schema-сжатый JSON в десятках <script data-apiary="chunks">, но
+// товарные МОДЕЛИ лежат развёрнутыми объектами {"id":N,"entity":"product",...}
+// с id/slug/titles/prices/pictures. Их и разбираем: находим каждый объект-модель
+// (ymProductStartRe), вычитываем по балансу скобок и json-парсим (порядок полей
+// в стейте дрейфует — regex по полям ненадёжен, что и давало мусор).
+//
+// Берём только модели с ценой (prices.min) и slug — это покупаемые офферы;
+// модели без оффера (offersCount=0, кнопка «сообщить о поступлении») пропускаем:
+// цены нет, трекать нечего. URL карточки собираем как /product--<slug>/<id> —
+// это и стабильный ключ дедупликации (products апсертится по URL).
 func (s *YandexMarketSearchScraper) parseSearch(html string) *SearchResultSet {
-	// TODO(prod-logs): извлечь Name/URL/ArticleID/ImageURL из стейта marketfront
-	// и собрать out.Items, только когда у позиции есть непустой URL.
-	return &SearchResultSet{}
+	out := &SearchResultSet{}
+
+	pics := make(map[string]string)
+	for _, m := range ymPictureRe.FindAllStringSubmatch(html, -1) {
+		if _, ok := pics[m[1]]; !ok {
+			pics[m[1]] = m[2]
+		}
+	}
+
+	seen := make(map[string]bool)
+	pos := 0
+	for _, loc := range ymProductStartRe.FindAllStringIndex(html, -1) {
+		obj := ymBalancedObject(html, loc[0])
+		if obj == "" {
+			continue
+		}
+		var m ymSearchModel
+		if err := json.Unmarshal([]byte(obj), &m); err != nil {
+			continue
+		}
+		id := m.ID.String()
+		if m.Entity != "product" || id == "" || m.Slug == "" || m.Prices.Min == "" {
+			continue
+		}
+		price, err := parsePriceString(m.Prices.Min)
+		if err != nil || price <= 0 {
+			continue
+		}
+		if seen[id] {
+			continue // модель может встретиться в стейте повторно
+		}
+		seen[id] = true
+		pos++
+		if pos > s.maxItems {
+			break
+		}
+		item := SearchItem{
+			ArticleID:    id,
+			Name:         m.Titles.Raw,
+			URL:          "https://market.yandex.ru/product--" + m.Slug + "/" + id,
+			Position:     pos,
+			PriceKopecks: int64(price * 100),
+		}
+		if old, err := parsePriceString(m.Prices.Max); err == nil && old > price {
+			item.OldPriceKopecks = int64(old * 100)
+		}
+		if len(m.Pictures) > 0 {
+			item.ImageURL = pics[m.Pictures[0]]
+		}
+		out.Items = append(out.Items, item)
+	}
+	out.TotalFound = len(out.Items)
+	return out
+}
+
+// ymBalancedObject — подстрока сбалансированного JSON-объекта, начинающегося в
+// позиции start (html[start] == '{'). Учитывает строковые литералы и экраны,
+// чтобы скобки внутри строк не ломали баланс. "" — если объект не закрыт.
+func ymBalancedObject(html string, start int) string {
+	depth := 0
+	inStr := false
+	for i := start; i < len(html); i++ {
+		c := html[i]
+		if inStr {
+			switch c {
+			case '\\':
+				i++ // пропускаем экранированный символ
+			case '"':
+				inStr = false
+			}
+			continue
+		}
+		switch c {
+		case '"':
+			inStr = true
+		case '{':
+			depth++
+		case '}':
+			depth--
+			if depth == 0 {
+				return html[start : i+1]
+			}
+		}
+	}
+	return ""
 }

@@ -306,9 +306,6 @@ services:
       # код фолбэчит на OZON_PROXY_URL (см. cmd/search-worker/main.go).
       OZON_PROXY_URL: "${OZON_PROXY_URL:-}"
       YANDEX_PROXY_URL: "${YANDEX_PROXY_URL:-}"
-      # Диагностика: путь для дампа сырого HTML выдачи Я.Маркета (по умолчанию
-      # выкл). Нужен для разовой доводки парсера по реальной структуре стейта.
-      YM_SEARCH_DUMP: "${YM_SEARCH_DUMP:-}"
     depends_on:
       postgres:
         condition: service_healthy
@@ -352,8 +349,6 @@ services:
       # SmartCaptcha. Пусто → фолбэк на OZON_PROXY_URL (cmd/search-worker/main.go).
       OZON_PROXY_URL: "${OZON_PROXY_URL:-}"
       YANDEX_PROXY_URL: "${YANDEX_PROXY_URL:-}"
-      # Диагностика: дамп сырого HTML выдачи Я.Маркета (по умолчанию выкл).
-      YM_SEARCH_DUMP: "${YM_SEARCH_DUMP:-}"
     depends_on:
       postgres:
         condition: service_healthy
