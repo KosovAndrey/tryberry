@@ -120,14 +120,14 @@ func run(log *slog.Logger) error {
 		}),
 		getEnvInt("SEARCH_MAX_ITEMS_YANDEX", 60),
 	)
-	// Ozon-поиск: пока за FAB-блоком + у сайдкара нет search-маршрута
-	// (ScrapeSearch → ErrMarketplaceBlocked). Регистрируем для распознавания URL.
+	// Ozon-поиск: только через сайдкар ozon-miner (browser-пул) — прямой API за
+	// FAB. Маршрут /search в сайдкаре есть; парсер searchResultsV2 best-effort,
+	// доводим по прод-логам. Без OZON_BROWSER_URL ScrapeSearch вернёт blocked.
 	ozonSearch := scraper.NewOzonSearchScraper(scraper.NewOzonScraper(scraper.OzonOptions{
-		ProxyURL:   getEnv("OZON_PROXY_URL", ""),
-		Mode:       getEnv("OZON_API_MODE", "mobile"),
+		Mode:       "browser", // поиск Ozon доступен только через сайдкар-пул
 		BrowserURL: getEnv("OZON_BROWSER_URL", ""),
 		Logger:     log,
-	}))
+	}), getEnvInt("SEARCH_MAX_ITEMS_OZON", 60))
 	registry := scraper.NewRegistry(wbSearch, yandexSearch, ozonSearch)
 
 	// ── Kafka ─────────────────────────────────────────────────────────────────

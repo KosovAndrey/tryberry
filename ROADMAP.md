@@ -7,6 +7,20 @@
 
 ---
 
+## Журнал (2026-06-18) — поиск по ссылке: Я.Маркет готов, Ozon-каркас
+
+- **Я.Маркет-поиск** доведён и включён пользователям: `parseSearch` достаёт полные
+  позиции из стейта marketfront (name/url/price/image). Меню/список упоминают
+  Я.Маркет. Ветка `feat/search-by-url-ozon-yandex` слита с `feat/yandex-market-scraper`
+  (полный суперсет, +migration 019). **Мерж в main** ждёт накатки migration 019 на
+  прод (`make migrate`).
+- **Ozon-поиск — каркас**: сайдкар `ozon-miner` получил маршрут `/search?text=`
+  (in-page fetch выдачи из прогретой дорожки, виджет searchResultsV2);
+  `OzonSearchScraper.ScrapeSearch` + best-effort парсер тайлов. Парсер доводится
+  по прод-дампу `curl ozon-miner:8080/search?text=...`. Бот пока: «Ozon скоро
+  будет» — гейт снять после подтверждения парсера.
+- Подробности: `docs/features/search-by-url-ozon-yandex.md`.
+
 ## TL;DR
 
 Бот (Telegram @TryBerryBot, отслеживание цен/выдачи Wildberries) — рабочий, в проде,

@@ -126,7 +126,7 @@ func run(log *slog.Logger) error {
 	})
 	registry := scraper.NewRegistry(
 		wbSearch,
-		scraper.NewOzonSearchScraper(ozonCard),
+		scraper.NewOzonSearchScraper(ozonCard, 60),
 		scraper.NewYandexMarketSearchScraper(yandexCard, 60),
 	)
 

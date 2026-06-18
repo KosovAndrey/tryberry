@@ -100,7 +100,7 @@ func TestYandexSearch_parseSearch(t *testing.T) {
 }
 
 func TestOzonSearch_URLHandling(t *testing.T) {
-	s := NewOzonSearchScraper(NewOzonScraper(OzonOptions{}))
+	s := NewOzonSearchScraper(NewOzonScraper(OzonOptions{}), 60)
 	if !s.MatchesSearch("https://www.ozon.ru/search/?text=наушники") {
 		t.Error("should match ozon search URL")
 	}
@@ -115,8 +115,47 @@ func TestOzonSearch_URLHandling(t *testing.T) {
 	if ou.Path != "/search/" || ou.Query().Get("text") != "наушники" || ou.Query().Get("sorting") != "price" {
 		t.Errorf("normalize = %q (query %v)", got, ou.Query())
 	}
-	// ScrapeSearch пока заблокирован (FAB + сайдкар без search).
+	// Без browser-сайдкара (OzonOptions{} → not configured) ScrapeSearch отдаёт
+	// blocked: поиск Ozon работает только через ozon-miner (mode=browser).
 	if _, err := s.ScrapeSearch(nil, "https://www.ozon.ru/search/?text=x"); !errors.Is(err, ErrMarketplaceBlocked) {
 		t.Errorf("want ErrMarketplaceBlocked, got %v", err)
+	}
+}
+
+// TestOzonSearch_ParseTiles проверяет плумбинг парсера выдачи на представительном
+// widgetStates: извлечение item'ов, link→SKU, цены по textStyle, абсолютный URL,
+// дедуп и лимит. Точные имена полей searchResultsV2 доводятся по прод-логам —
+// тест фиксирует разбор предполагаемой структуры (items[]/action.link/price[]).
+func TestOzonSearch_ParseTiles(t *testing.T) {
+	s := NewOzonSearchScraper(NewOzonScraper(OzonOptions{}), 60)
+	body := []byte(`{"widgetStates":{"searchResultsV2-abc":"{\"items\":[` +
+		`{\"action\":{\"link\":\"/product/naushniki-test-456/?asb=1\"},` +
+		`\"title\":\"Наушники Test\",` +
+		`\"price\":{\"price\":[{\"text\":\"1 299 ₽\",\"textStyle\":\"PRICE\"},{\"text\":\"2 000 ₽\",\"textStyle\":\"ORIGINAL_PRICE\"}]},` +
+		`\"image\":\"https://ir.ozone.ru/s3/multimedia-1/foo.jpg\"},` +
+		`{\"action\":{\"link\":\"/product/naushniki-test-456/\"},\"price\":{\"price\":[{\"text\":\"1 299 ₽\",\"textStyle\":\"PRICE\"}]}}` +
+		`]}"}}`)
+	out := s.parseSearch(body)
+	if len(out.Items) != 1 { // второй тайл — дубль того же SKU
+		t.Fatalf("items = %d, want 1 (dedup by SKU)", len(out.Items))
+	}
+	it := out.Items[0]
+	if it.ArticleID != "456" {
+		t.Errorf("id = %q, want 456", it.ArticleID)
+	}
+	if it.URL != "https://www.ozon.ru/product/naushniki-test-456/" {
+		t.Errorf("url = %q (query должен отрезаться)", it.URL)
+	}
+	if it.PriceKopecks != 129900 {
+		t.Errorf("price = %d, want 129900", it.PriceKopecks)
+	}
+	if it.OldPriceKopecks != 200000 {
+		t.Errorf("old = %d, want 200000", it.OldPriceKopecks)
+	}
+	if it.Name != "Наушники Test" {
+		t.Errorf("name = %q", it.Name)
+	}
+	if it.Position != 1 {
+		t.Errorf("position = %d, want 1", it.Position)
 	}
 }

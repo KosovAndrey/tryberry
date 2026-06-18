@@ -9,8 +9,10 @@ server.py — ozon-miner, фаза 2: БРАУЗЕР-КАК-ТРАНСПОРТ �
 Цену достаём «методом друга»: in-page fetch к entrypoint-api ИЗНУТРИ доверенного
 контекста (JA3 + куки + решённый челлендж согласованы) — см. probe.py.
 
-Go-скрейпер (browser-режим) зовёт GET /scrape?id=<id> → дорожка делает in-page
-fetch и отдаёт СЫРОЙ widgetStates, зеркаля upstream-статус (403 при FAB).
+Go-скрейпер (browser-режим) зовёт GET /scrape?id=<id> (карточка) или
+GET /search?text=<запрос> (выдача) → дорожка делает in-page fetch к тому же
+универсальному entrypoint-api и отдаёт СЫРОЙ widgetStates, зеркаля upstream-статус
+(403 при FAB).
 
 ЗАЩИТА ОТ БАНА (живучесть):
   - джиттер интервала между запросами (не ровный паттерн);
@@ -78,9 +80,8 @@ log = logging.getLogger("ozon-miner")
 _FAB_RE = re.compile(r"fab_|incidentId")
 
 _FETCH_JS = """
-async (id) => {
-  const url = '/api/entrypoint-api.bx/page/json/v2?url=' +
-              encodeURIComponent('/product/' + id + '/');
+async (path) => {
+  const url = '/api/entrypoint-api.bx/page/json/v2?url=' + encodeURIComponent(path);
   try {
     const r = await fetch(url, {
       headers: {'accept': 'application/json', 'x-requested-with': 'XMLHttpRequest'},
@@ -91,6 +92,17 @@ async (id) => {
   } catch (e) { return {status: -1, body: '', error: String(e)}; }
 }
 """
+
+
+def _product_path(product_id: str) -> str:
+    """Inner-path карточки для entrypoint-api. JS сам делает encodeURIComponent."""
+    return f"/product/{product_id}/"
+
+
+def _search_path(text: str) -> str:
+    """Inner-path поисковой выдачи. text НЕ кодируем здесь — encodeURIComponent в
+    _FETCH_JS закодирует весь path целиком (как и у карточки)."""
+    return f"/search/?text={text}"
 
 
 def _parse_proxy(url: str):
@@ -210,8 +222,9 @@ class Lane:
         log.info("дорожка %d: навигация ок (egress=%s), жду прохождения FAB…",
                  self.idx, self.egress_ip or "?")
         deadline = time.time() + WARM_WAIT_S
+        warm_path = _product_path(WARM_PRODUCT_ID)
         while time.time() < deadline:
-            status, body = await self._inpage_fetch(WARM_PRODUCT_ID)
+            status, body = await self._inpage_fetch(warm_path)
             if status == 200 and not _looks_blocked(status, body):
                 self.healthy = True
                 self._warm_fails = 0
@@ -244,9 +257,10 @@ class Lane:
         self._last_rotate = time.monotonic()
         await self.warm()
 
-    async def scrape(self, product_id: str):
-        """In-page fetch карточки с ретраями + джиттер интервала. На стойкий FAB
-        метит дорожку нездоровой. Возвращает (status, body_bytes)."""
+    async def fetch_path(self, path: str, label: str):
+        """In-page fetch произвольного entrypoint-path (карточка ИЛИ выдача) с
+        ретраями + джиттер интервала. На стойкий FAB метит дорожку нездоровой.
+        Возвращает (status, body_bytes)."""
         async with self.lock:
             spacing = max(0.1, LANE_MIN_INTERVAL_S * (1.0 + LANE_JITTER * (2 * random.random() - 1)))
             wait = spacing - (time.monotonic() - self._last_at)
@@ -255,21 +269,21 @@ class Lane:
             status, body = 0, ""
             for attempt in range(1, SCRAPE_RETRIES + 1):
                 self._last_at = time.monotonic()
-                status, body = await self._inpage_fetch(product_id)
+                status, body = await self._inpage_fetch(path)
                 if status == 200 and not _looks_blocked(status, body):
                     return 200, body.encode("utf-8")
                 if attempt < SCRAPE_RETRIES:
                     await self._nudge()
                     await self._page.wait_for_timeout(2000)
             self.healthy = False
-            log.warning("дорожка %d: FAB/блок на id=%s (status=%s) — пометил нездоровой",
-                        self.idx, product_id, status)
+            log.warning("дорожка %d: FAB/блок на %s (status=%s) — пометил нездоровой",
+                        self.idx, label, status)
             return 403, (body or "").encode("utf-8")
 
-    async def _inpage_fetch(self, product_id: str):
+    async def _inpage_fetch(self, path: str):
         try:
             res = await asyncio.wait_for(
-                self._page.evaluate(_FETCH_JS, product_id), timeout=SCRAPE_TIMEOUT_S)
+                self._page.evaluate(_FETCH_JS, path), timeout=SCRAPE_TIMEOUT_S)
         except Exception as e:  # noqa: BLE001
             log.warning("дорожка %d: fetch упал: %s", self.idx, str(e).splitlines()[0])
             return 0, ""
@@ -328,6 +342,11 @@ class Pool:
         alive = [l for l in self.lanes if l.healthy]
         return alive[i % len(alive)] if alive else None
 
+    def pick_any(self):
+        """Любая живая дорожка (для поиска — нет product_id для шардирования)."""
+        alive = [l for l in self.lanes if l.healthy]
+        return random.choice(alive) if alive else None
+
     def healthy_count(self) -> int:
         return sum(1 for l in self.lanes if l.healthy)
 
@@ -367,7 +386,26 @@ async def handle_scrape(request: web.Request) -> web.Response:
     lane = pool.pick(product_id)
     if lane is None:
         return web.Response(status=502, text="no healthy lanes")
-    status, body = await lane.scrape(product_id)
+    status, body = await lane.fetch_path(_product_path(product_id), f"product:{product_id}")
+    if status == 0:
+        return web.Response(status=502, text="lane fetch failed")
+    return web.Response(status=status, body=body,
+                        content_type="application/json",
+                        headers={"X-Ozon-Lane": str(lane.idx)})
+
+
+async def handle_search(request: web.Request) -> web.Response:
+    """GET /search?text=<запрос> → выдача Ozon (виджет searchResultsV2) тем же
+    in-page fetch из прогретой дорожки. Возвращает сырой widgetStates, зеркаля
+    upstream-статус (403 при FAB). Go-сторона парсит searchResultsV2."""
+    pool: Pool = request.app["pool"]
+    text = (request.query.get("text") or "").strip()
+    if not text:
+        return web.json_response({"error": "text required"}, status=400)
+    lane = pool.pick_any()
+    if lane is None:
+        return web.Response(status=502, text="no healthy lanes")
+    status, body = await lane.fetch_path(_search_path(text), f"search:{text[:40]}")
     if status == 0:
         return web.Response(status=502, text="lane fetch failed")
     return web.Response(status=status, body=body,
@@ -408,6 +446,7 @@ async def main():
     app = web.Application()
     app["pool"] = pool
     app.router.add_get("/scrape", handle_scrape)
+    app.router.add_get("/search", handle_search)
     app.router.add_get("/healthz", handle_health)
 
     asyncio.ensure_future(pool.maintenance_loop())

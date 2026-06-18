@@ -299,6 +299,7 @@ services:
       SEARCH_SCRAPE_INTERVAL_MINUTES: "20"
       SEARCH_MAX_PAGES: "5"
       SEARCH_PAGE_DELAY_MS: "700"
+      SEARCH_MAX_ITEMS_OZON: "${SEARCH_MAX_ITEMS_OZON:-60}"
       SEARCH_WORKER_HEALTH_PORT: "8094"
       OTLP_ENDPOINT: "jaeger:4317"
       # Я.Маркет-поиск ходит тем же tls-client + RU-прокси, что и карточный
@@ -306,6 +307,9 @@ services:
       # код фолбэчит на OZON_PROXY_URL (см. cmd/search-worker/main.go).
       OZON_PROXY_URL: "${OZON_PROXY_URL:-}"
       YANDEX_PROXY_URL: "${YANDEX_PROXY_URL:-}"
+      # Ozon-поиск идёт ТОЛЬКО через сайдкар ozon-miner (browser-пул): прямой API
+      # за FAB. /search дёргает выдачу из прогретой дорожки (searchResultsV2).
+      OZON_BROWSER_URL: "${OZON_BROWSER_URL:-http://ozon-miner:8080}"
     depends_on:
       postgres:
         condition: service_healthy
