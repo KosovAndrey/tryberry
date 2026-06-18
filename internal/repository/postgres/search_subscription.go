@@ -74,7 +74,7 @@ func (r *SearchSubscriptionRepo) GetActiveByUserID(ctx context.Context, userID i
 	const q = `
 		SELECT s.id, s.user_id, s.search_query_id, s.trigger_type,
 		       s.target_price, s.discount_pct, s.active, s.created_at, s.updated_at,
-		       sq.query_text, sq.normalized_url
+		       sq.query_text, sq.normalized_url, sq.marketplace
 		FROM search_subscriptions s
 		JOIN search_queries sq ON sq.id = s.search_query_id
 		WHERE s.user_id = $1 AND s.active = TRUE
@@ -92,7 +92,7 @@ func (r *SearchSubscriptionRepo) GetActiveByUserID(ctx context.Context, userID i
 		if err := rows.Scan(
 			&s.ID, &s.UserID, &s.SearchQueryID, &s.TriggerType,
 			&s.TargetPrice, &s.DiscountPct, &s.Active, &s.CreatedAt, &s.UpdatedAt,
-			&s.QueryText, &s.NormalizedURL,
+			&s.QueryText, &s.NormalizedURL, &s.Marketplace,
 		); err != nil {
 			return nil, err
 		}

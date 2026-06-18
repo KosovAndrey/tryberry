@@ -293,8 +293,9 @@ func (b *Bot) buildSearchListView(subs []*domain.SearchSubscription) (string, tg
 	var sb strings.Builder
 	fmt.Fprintf(&sb, "🔎 <b>Поиск-подписки — %d активных</b>\n\n", len(subs))
 	for i, s := range subs {
-		fmt.Fprintf(&sb, "%d. <b>%s</b>\n   %s\n\n",
-			i+1, htmlEscape(s.QueryText), domain.TriggerDescription(s.TriggerType, s.TargetPrice, s.DiscountPct))
+		fmt.Fprintf(&sb, "%d. %s <b>%s</b>\n   %s\n\n",
+			i+1, marketplaceIcon(s.Marketplace), htmlEscape(s.QueryText),
+			domain.TriggerDescription(s.TriggerType, s.TargetPrice, s.DiscountPct))
 	}
 
 	var rows [][]tgbotapi.InlineKeyboardButton

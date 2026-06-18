@@ -64,6 +64,7 @@ type SearchSubscription struct {
 	TelegramID    int64
 	QueryText     string
 	NormalizedURL string
+	Marketplace   string // sq.marketplace — для иконки маркетплейса в списке
 
 	// Тариф владельца — для вычисления интервала уведомлений в воркере
 	// (источник истины domain.Plans). Заполняются JOIN users.
