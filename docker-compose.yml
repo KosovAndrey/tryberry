@@ -301,6 +301,14 @@ services:
       SEARCH_PAGE_DELAY_MS: "700"
       SEARCH_WORKER_HEALTH_PORT: "8094"
       OTLP_ENDPOINT: "jaeger:4317"
+      # Я.Маркет-поиск ходит тем же tls-client + RU-прокси, что и карточный
+      # scraper/bot-worker — иначе датацентровый IP ловит SmartCaptcha. Пусто →
+      # код фолбэчит на OZON_PROXY_URL (см. cmd/search-worker/main.go).
+      OZON_PROXY_URL: "${OZON_PROXY_URL:-}"
+      YANDEX_PROXY_URL: "${YANDEX_PROXY_URL:-}"
+      # Диагностика: путь для дампа сырого HTML выдачи Я.Маркета (по умолчанию
+      # выкл). Нужен для разовой доводки парсера по реальной структуре стейта.
+      YM_SEARCH_DUMP: "${YM_SEARCH_DUMP:-}"
     depends_on:
       postgres:
         condition: service_healthy
