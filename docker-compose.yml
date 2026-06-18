@@ -345,6 +345,7 @@ services:
       SEARCH_SCRAPE_INTERVAL_MINUTES: "20"
       SEARCH_MAX_PAGES: "2"
       SEARCH_PAGE_DELAY_MS: "400"
+      SEARCH_MAX_ITEMS_OZON: "${SEARCH_MAX_ITEMS_OZON:-60}"
       SEARCH_PROXY_URLS: "${RESELLER_SEARCH_PROXY_URLS:-}"
       SEARCH_WORKER_HEALTH_PORT: "8094"
       OTLP_ENDPOINT: "jaeger:4317"
@@ -353,6 +354,10 @@ services:
       # SmartCaptcha. Пусто → фолбэк на OZON_PROXY_URL (cmd/search-worker/main.go).
       OZON_PROXY_URL: "${OZON_PROXY_URL:-}"
       YANDEX_PROXY_URL: "${YANDEX_PROXY_URL:-}"
+      # Ozon-поиск на быстрых тарифах идёт ТОЖЕ сюда → нужен сайдкар ozon-miner
+      # (browser-пул), как у search-worker. ВНИМАНИЕ: перекуп-каданс (≤1 мин) для
+      # Ozon агрессивен для одной прогретой дорожки — следить за блокировками.
+      OZON_BROWSER_URL: "${OZON_BROWSER_URL:-http://ozon-miner:8080}"
     depends_on:
       postgres:
         condition: service_healthy
