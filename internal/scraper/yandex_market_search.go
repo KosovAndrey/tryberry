@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io"
 	"net/url"
+	"os"
 	"regexp"
 	"strings"
 
@@ -119,6 +120,19 @@ func (s *YandexMarketSearchScraper) ScrapeSearch(ctx context.Context, rawURL str
 
 	if isYandexCaptcha(body) {
 		return nil, ErrMarketplaceBlocked
+	}
+
+	// Диагностический дамп сырого HTML: путь задаётся env YM_SEARCH_DUMP (по
+	// умолчанию выкл). Нужен, чтобы один раз снять реальную страницу выдачи с
+	// прод-прокси и вскрыть структуру стейта marketfront (имя/URL/артикул/
+	// картинка) — локально страница недоступна (антибот рубит датацентровый IP).
+	// Перезаписывает файл, держим только последний захват. Удалить после доводки.
+	if dump := strings.TrimSpace(os.Getenv("YM_SEARCH_DUMP")); dump != "" {
+		if err := os.WriteFile(dump, body, 0o644); err != nil {
+			s.log.Warn("yandex search: dump write failed", "path", dump, "err", err)
+		} else {
+			s.log.Info("yandex search: raw html dumped", "path", dump, "len", len(body))
+		}
 	}
 
 	out := s.parseSearch(string(body))
