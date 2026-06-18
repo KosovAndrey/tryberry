@@ -623,7 +623,8 @@ func (b *Bot) doTrack(ctx context.Context, chatID int64, rawURL string, user *do
 		if err := b.prodRepo.SetInStock(ctx, product.ID, false); err != nil {
 			b.log.Warn("set product out of stock", "product_id", product.ID, "err", err)
 		}
-		sub, _, err := b.subRepo.UpsertOutOfStock(ctx, user.ID, product.ID)
+		// result.Price для OOS = последняя известная цена (0, если неизвестна).
+		sub, _, err := b.subRepo.UpsertOutOfStock(ctx, user.ID, product.ID, result.Price)
 		if err != nil {
 			span.RecordError(err)
 			metrics.TrackCommands.WithLabelValues("error").Inc()
@@ -632,15 +633,24 @@ func (b *Bot) doTrack(ctx context.Context, chatID int64, rawURL string, user *do
 			return
 		}
 		metrics.TrackCommands.WithLabelValues("success").Inc()
+
+		priceLine := "Цена появится, когда товар вернётся в продажу."
+		if result.Price > 0 {
+			priceLine = fmt.Sprintf("💰 Последняя цена: <b>%.0f ₽</b>", result.Price)
+		}
 		text := fmt.Sprintf(
 			"✅ <b>Добавил в отслеживание!</b>\n\n"+
 				"<b>%s</b>\n"+
-				"🚫 Сейчас товара <b>нет в наличии</b> (нет активного предложения).\n\n"+
+				"🚫 Сейчас товара <b>нет в наличии</b> (нет активного предложения).\n"+
+				"%s\n\n"+
 				"По умолчанию уведомлю, как только он <b>появится в наличии</b>. "+
-				"Или выбери уведомление по цене 👇",
-			result.Name,
+				"Можно сменить тип уведомления кнопками ниже 👇",
+			result.Name, priceLine,
 		)
-		kb := trackOOSKeyboard(sub.ID)
+		// 3 стратегии как у обычного товара, но «любое снижение» → «в наличии».
+		// below_target/discount_pct показываем только при известной last-цене
+		// (есть опора): без неё процент скидки считать не от чего.
+		kb := trackOOSKeyboard(sub.ID, result.Price > 0)
 		edit := tgbotapi.NewEditMessageText(chatID, sent.MessageID, text)
 		edit.ParseMode = "HTML"
 		edit.ReplyMarkup = &kb

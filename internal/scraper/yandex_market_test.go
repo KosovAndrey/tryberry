@@ -79,9 +79,11 @@ func TestParseYandexMarketHTML_OffersArray(t *testing.T) {
 	}
 }
 
-func TestParseYandexMarketHTML_StatePriceFallback(t *testing.T) {
-	// Карточка модели с пустым buy-box: JSON-LD Product БЕЗ offers, цена —
-	// только в стейте marketfront. Должны подхватить её фолбэком.
+func TestParseYandexMarketHTML_StatePriceIsLastKnownOOS(t *testing.T) {
+	// Карточка модели с пустым buy-box: JSON-LD Product БЕЗ offers, цена — только
+	// в стейте marketfront. Это НЕ «в наличии»: offers нет → InStock=false, а
+	// стейт-цена несётся как последняя известная (для «последняя цена X» + опоры
+	// below_target/discount_pct).
 	html := `<script type="application/ld+json">{"@type":"BreadcrumbList"}</script>` +
 		`<script type="application/ld+json">{"@type":"Product","name":"Кофемашина Jura E8","image":"https://im.jpg"}</script>` +
 		`<script>window.__state={"img":"/orig","price":{"value":"128931","currency":"RUR"},"size":24}</script>`
@@ -89,8 +91,11 @@ func TestParseYandexMarketHTML_StatePriceFallback(t *testing.T) {
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
+	if r.InStock {
+		t.Error("InStock should be false — нет offers в JSON-LD (пустой buy-box)")
+	}
 	if r.Price != 128931 || r.Name != "Кофемашина Jura E8" || r.ImageURL != "https://im.jpg" {
-		t.Errorf("got %+v, want price 128931 / name Jura E8 / image im.jpg", r)
+		t.Errorf("got %+v, want last price 128931 / name Jura E8 / image im.jpg", r)
 	}
 }
 

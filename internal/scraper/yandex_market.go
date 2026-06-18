@@ -259,30 +259,22 @@ func parseYandexMarketHTML(html string) (*Result, error) {
 		}
 	}
 
-	// JSON-LD-цены нет, но есть Product-узел → это настоящая карточка товара
-	// (а не поиск/каталог). Берём цену из встроенного стейта marketfront:
-	// "price":{"value":"128931","currency":"RUR"}. Гейт на наличие Product
-	// важен — на странице поиска цены из стейта принадлежат чужим сниппетам.
+	// Есть Product-узел, но в JSON-LD НЕТ offers.price → активного buy-box нет,
+	// то есть товара НЕТ В НАЛИЧИИ. При этом в стейте marketfront может лежать
+	// цена ("price":{"value":"128931","currency":"RUR"}) — это «последняя/
+	// справочная» цена, НЕ признак наличия. Поэтому InStock=false, а Price несём
+	// как last-known (0, если стейт-цены тоже нет). Наличие определяется
+	// наличием offers, а не присутствием цены где-либо. Гейт на Product важен —
+	// на странице поиска цены из стейта принадлежат чужим сниппетам.
 	if product != nil {
 		name := strings.TrimSpace(product.Name)
 		if name == "" {
 			name = "Товар Я.Маркета"
 		}
-		if price := ymStatePrice(html); price > 0 {
-			return &Result{
-				Name:     name,
-				Price:    price,
-				ImageURL: ymFirstImage(product.Image),
-				InStock:  true,
-			}, nil
-		}
-		// Product есть, но цены нет НИГДЕ (ни JSON-LD, ни стейт) → карточка без
-		// активного оффера («нет в продаже»). Это УСПЕХ, не ошибка: товар можно
-		// добавить в отслеживание с триггером back_in_stock (см. doTrack).
 		return &Result{
 			Name:     name,
 			ImageURL: ymFirstImage(product.Image),
-			Price:    0,
+			Price:    ymStatePrice(html), // последняя известная цена (0, если нет)
 			InStock:  false,
 		}, nil
 	}

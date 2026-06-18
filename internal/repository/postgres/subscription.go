@@ -55,18 +55,19 @@ func (r *SubscriptionRepo) Upsert(ctx context.Context, userID, productID int64, 
 	return s, inserted, nil
 }
 
-// UpsertOutOfStock — подписать на товар БЕЗ активного оффера: baseline/first_seen
-// = 0, стратегия по умолчанию back_in_stock («уведомить, когда появится в
-// наличии»). В остальном как Upsert (реактивация существующей строки). Цена 0
-// корректна: ценовые триггеры всё равно не оцениваются, пока товара нет в наличии.
-func (r *SubscriptionRepo) UpsertOutOfStock(ctx context.Context, userID, productID int64) (*domain.Subscription, bool, error) {
+// UpsertOutOfStock — подписать на товар БЕЗ активного оффера. Стратегия по
+// умолчанию back_in_stock («уведомить, когда появится в наличии»). lastPrice —
+// последняя известная цена из стейта (0, если неизвестна): фиксируем её в
+// baseline/first_seen, чтобы при выборе below_target/discount_pct была опорная
+// цена, и пользователь видел «последняя цена X». В остальном как Upsert.
+func (r *SubscriptionRepo) UpsertOutOfStock(ctx context.Context, userID, productID int64, lastPrice float64) (*domain.Subscription, bool, error) {
 	const q = `
 		INSERT INTO subscriptions (user_id, product_id, baseline_price, first_seen_price, trigger_type)
-		VALUES ($1, $2, 0, 0, 'back_in_stock')
+		VALUES ($1, $2, $3, $3, 'back_in_stock')
 		ON CONFLICT (user_id, product_id) DO UPDATE
 			SET active           = TRUE,
-			    baseline_price   = 0,
-			    first_seen_price = 0,
+			    baseline_price   = EXCLUDED.baseline_price,
+			    first_seen_price = EXCLUDED.first_seen_price,
 			    trigger_type     = 'back_in_stock',
 			    target_price     = NULL,
 			    discount_pct     = NULL,
@@ -80,7 +81,7 @@ func (r *SubscriptionRepo) UpsertOutOfStock(ctx context.Context, userID, product
 	s := &domain.Subscription{}
 	var inserted bool
 	err := withSpan(ctx, "upsert_subscription_oos", func(ctx context.Context) error {
-		return r.db.QueryRow(ctx, q, userID, productID).
+		return r.db.QueryRow(ctx, q, userID, productID, lastPrice).
 			Scan(&s.ID, &s.UserID, &s.ProductID, &s.BaselinePrice, &s.FirstSeenPrice,
 				&s.TriggerType, &s.TargetPrice, &s.DiscountPct, &s.Notified,
 				&s.Active, &s.CreatedAt, &s.UpdatedAt, &inserted)
