@@ -444,14 +444,19 @@ func parseOzonWidgets(body []byte) (*Result, error) {
 	}
 
 	if res.Price == 0 {
-		// Протухшая сессия: вместо карточки пришла страница логина (200, но цены нет).
-		// Отдельный сигнал — НЕ путать с «товар не найден».
-		if isOzonLoginGate(env.WidgetStates) {
-			return nil, ErrAuthExpired
-		}
-		// 18+ гейт: цены нет, потому что Ozon прячет товар за подтверждением возраста.
-		if isOzonAgeGated(env.WidgetStates) {
-			return nil, ErrAgeRestricted
+		// Гейты логина/18+ ПОДМЕНЯЮТ карточку отдельной страницей. Если виджеты
+		// карточки (заголовок/SKU) на месте — это НЕ гейт, а реальное отсутствие цены
+		// (OOS или промах парсера); не вешаем на товар ложное «нужен вход»/«18+».
+		if !hasOzonProductCard(env.WidgetStates) {
+			// Протухшая сессия: вместо карточки пришла страница логина (200, но цены нет).
+			// Отдельный сигнал — НЕ путать с «товар не найден».
+			if isOzonLoginGate(env.WidgetStates) {
+				return nil, ErrAuthExpired
+			}
+			// 18+ гейт: цены нет, потому что Ozon прячет товар за подтверждением возраста.
+			if isOzonAgeGated(env.WidgetStates) {
+				return nil, ErrAgeRestricted
+			}
 		}
 		// Диагностика на случай неудачи: имена виджетов + сырой JSON виджета с ₽.
 		keys := make([]string, 0, len(env.WidgetStates))
@@ -472,14 +477,54 @@ func parseOzonWidgets(body []byte) (*Result, error) {
 	return res, nil
 }
 
+// hasOzonProductCard сообщает, что в ответе есть виджеты карточки товара
+// (заголовок/SKU/главный виджет). Гейты логина и 18+ ПОДМЕНЯЮТ карточку отдельной
+// страницей, поэтому наличие карточки = это НЕ гейт.
+func hasOzonProductCard(ws map[string]string) bool {
+	for k := range ws {
+		lk := strings.ToLower(k)
+		if strings.Contains(lk, "productheading") || strings.Contains(lk, "navtitle") ||
+			strings.Contains(lk, "detailsku") || strings.Contains(lk, "productmainwidget") {
+			return true
+		}
+	}
+	return false
+}
+
+// Глобальный «хром» страницы (шапка/меню/навигация) присутствует на ЛЮБОЙ странице
+// Ozon, включая обычную карточку, и несёт слова-ловушки: catalogMenu всегда содержит
+// ссылку на категорию «Товары для взрослых» (adult), horizontalMenu — «Ozon Банк»
+// (/fintech/signin). Маркеры гейтов 18+/login по этим виджетам матчить НЕЛЬЗЯ —
+// иначе ложное срабатывание на каждой странице, где не нашлась цена (проверено на
+// реальном ответе 20.06).
+var ozonChromeWidgetSubs = []string{
+	"catalogmenu", "horizontalmenu", "header", "searchbar", "profilemenu",
+	"profilelogo", "accountlist", "addressbook", "favoritecounter", "orderinfo",
+	"ordertracking", "breadcrumbs", "setemail", "paginator", "taptags",
+}
+
+func isOzonChromeWidget(name string) bool {
+	lk := strings.ToLower(name)
+	for _, s := range ozonChromeWidgetSubs {
+		if strings.Contains(lk, s) {
+			return true
+		}
+	}
+	return false
+}
+
 // isOzonLoginGate эвристически распознаёт страницу/виджет логина — признак
 // протухшей аккаунт-сессии (Ozon отдал 200, но просит авторизоваться вместо
-// карточки товара). Маркеры best-effort.
+// карточки товара). Глобальный «хром» пропускаем (см. isOzonChromeWidget).
+// Маркеры best-effort: реальную сигнатуру логин-гейта вживую не снимали (аккаунт
+// залогинен), поэтому держим только специфичные фразы — против ложных срабатываний.
 func isOzonLoginGate(ws map[string]string) bool {
 	for k, v := range ws {
+		if isOzonChromeWidget(k) {
+			continue
+		}
 		lk := strings.ToLower(k)
-		if strings.Contains(lk, "login") || strings.Contains(lk, "signin") ||
-			strings.Contains(lk, "auth") {
+		if strings.Contains(lk, "login") || strings.Contains(lk, "signin") {
 			return true
 		}
 		lv := strings.ToLower(v)
@@ -493,9 +538,14 @@ func isOzonLoginGate(ws map[string]string) bool {
 
 // isOzonAgeGated эвристически распознаёт возрастной гейт 18+ (нож/алкоголь): когда
 // аккаунт не подтвердил 18+, Ozon вместо цены отдаёт виджет/текст подтверждения
-// возраста. Маркеры best-effort (точную сигнатуру 18+-ответа вживую не снимали).
+// возраста. Глобальный «хром» пропускаем (catalogMenu всегда несёт «Товары для
+// взрослых»), широкое «для взрослых» убрано как ловушка. Маркеры best-effort:
+// точную сигнатуру 18+-гейта вживую не снимали (аккаунт подтвердил 18+ → цена есть).
 func isOzonAgeGated(ws map[string]string) bool {
 	for k, v := range ws {
+		if isOzonChromeWidget(k) {
+			continue
+		}
 		lk := strings.ToLower(k)
 		if strings.Contains(lk, "adult") || strings.Contains(lk, "ageverif") ||
 			strings.Contains(lk, "age_verif") {
@@ -503,7 +553,6 @@ func isOzonAgeGated(ws map[string]string) bool {
 		}
 		lv := strings.ToLower(v)
 		if strings.Contains(lv, "adultmodal") ||
-			strings.Contains(lv, "для взрослых") ||
 			strings.Contains(lv, "вам есть 18") ||
 			strings.Contains(lv, "вам уже есть 18") ||
 			strings.Contains(lv, "подтвердите возраст") {

@@ -122,6 +122,48 @@ func TestExtractOzonNameFallbackTier(t *testing.T) {
 	}
 }
 
+// TestOzonGatesNoFalsePositive: реальная карточка БЕЗ цены не должна классиф-ся как
+// гейт 18+/login из-за слов-ловушек в глобальном меню. На реальном ответе Ozon
+// (20.06) catalogMenu всегда несёт «Товары для взрослых»/adult, horizontalMenu —
+// /fintech/signin; раньше это давало ложный ErrAgeRestricted при любом price==0.
+func TestOzonGatesNoFalsePositive(t *testing.T) {
+	body := []byte(`{"widgetStates":{
+		"catalogMenu-7278490-default-1":"{\"items\":[{\"id\":\"9000\",\"title\":\"Товары для взрослых\",\"url\":\"/category/tovary-dlya-vzroslyh-9000/\",\"image\":\"https://ir.ozone.ru/s3/searchteam-cdn/adult_products_9000.png\",\"icon\":\"ic_m_adult_content_filled\"}]}",
+		"horizontalMenu-7302642-default-1":"{\"items\":[{\"title\":\"Ozon Банк\",\"link\":\"https://ozon.ru/fintech/signin\"}]}",
+		"webProductHeading-3385933-default-1":"{\"title\":\"Бейсболка\"}",
+		"webDetailSKU-3385551-default-1":"{\"sku\":1551884914}"
+	}}`)
+	_, err := parseOzonWidgets(body)
+	if err == ErrAgeRestricted || err == ErrAuthExpired {
+		t.Fatalf("ложный гейт на обычной карточке без цены: %v", err)
+	}
+	if err == nil {
+		t.Fatal("ожидалась ошибка (цены нет), got nil")
+	}
+}
+
+// TestOzonAgeGateReal: настоящий 18+ гейт (карточки нет, есть age-виджет) → ErrAgeRestricted.
+func TestOzonAgeGateReal(t *testing.T) {
+	body := []byte(`{"widgetStates":{
+		"catalogMenu-7278490-default-1":"{\"items\":[{\"title\":\"Товары для взрослых\"}]}",
+		"adultModal-1-default-1":"{\"title\":\"Вам уже есть 18 лет?\",\"text\":\"Подтвердите возраст\"}"
+	}}`)
+	if _, err := parseOzonWidgets(body); err != ErrAgeRestricted {
+		t.Fatalf("ожидался ErrAgeRestricted; got %v", err)
+	}
+}
+
+// TestOzonLoginGateReal: протухшая сессия (карточки нет, страница логина) → ErrAuthExpired.
+func TestOzonLoginGateReal(t *testing.T) {
+	body := []byte(`{"widgetStates":{
+		"catalogMenu-7278490-default-1":"{\"items\":[{\"title\":\"Товары для взрослых\"}]}",
+		"loginForm-1-default-1":"{\"title\":\"Войдите в Ozon\"}"
+	}}`)
+	if _, err := parseOzonWidgets(body); err != ErrAuthExpired {
+		t.Fatalf("ожидался ErrAuthExpired; got %v", err)
+	}
+}
+
 func TestParseOzonWidgetsNoPrice(t *testing.T) {
 	body := []byte(`{"widgetStates":{"webProductHeading-1":"{\"title\":\"X\"}"}}`)
 	if _, err := parseOzonWidgets(body); err == nil {
