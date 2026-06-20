@@ -88,6 +88,40 @@ func TestParseOzonWidgetsMobilePrice(t *testing.T) {
 	}
 }
 
+// TestExtractOzonNameDeterministic проверяет, что заголовок выбирается стабильно:
+//   - всегда выигрывает выделенный заголовочный виджет (navTitle), а не посторонние
+//     title-несущие виджеты (секция «с этим покупают», табы);
+//   - shallowest-first берёт собственный title виджета, а не вложенные хлебные крошки;
+//   - результат не «прыгает» от случайного порядка map (range по map рандомизирован) —
+//     поэтому гоняем много раз и требуем одинаковый ответ.
+func TestExtractOzonNameDeterministic(t *testing.T) {
+	ws := map[string]string{
+		// выделенный заголовок товара + вложенные хлебные крошки (не должны победить)
+		"navTitle-100-pdppage2copy-1": `{"title":"Правильное имя товара",` +
+			`"breadCrumbs":[{"title":"Каталог"},{"title":"Телефоны"}]}`,
+		// посторонние виджеты с title в имени/значении — не должны перебить заголовок
+		"webSectionTitle-200-default-1": `{"title":"С этим товаром покупают"}`,
+		"cellList-300-default-1":        `{"text":"Похожие товары"}`,
+	}
+	const want = "Правильное имя товара"
+	for i := 0; i < 100; i++ {
+		if got := extractOzonName(ws); got != want {
+			t.Fatalf("extractOzonName (итерация %d) = %q; want %q — нестабильный/неверный выбор", i, got, want)
+		}
+	}
+}
+
+// TestExtractOzonNameFallbackTier: если выделенного заголовочного виджета нет, берём
+// фолбэком любой *title*-виджет (детерминированно, по сортировке имени).
+func TestExtractOzonNameFallbackTier(t *testing.T) {
+	ws := map[string]string{
+		"webSomeTitle-9-default-1": `{"title":"Запасной заголовок"}`,
+	}
+	if got := extractOzonName(ws); got != "Запасной заголовок" {
+		t.Errorf("extractOzonName fallback = %q; want %q", got, "Запасной заголовок")
+	}
+}
+
 func TestParseOzonWidgetsNoPrice(t *testing.T) {
 	body := []byte(`{"widgetStates":{"webProductHeading-1":"{\"title\":\"X\"}"}}`)
 	if _, err := parseOzonWidgets(body); err == nil {

@@ -598,13 +598,29 @@ func findPriceTexts(v any, out map[string]string) {
 	}
 }
 
+// extractOzonName достаёт заголовок товара ДЕТЕРМИНИРОВАННО и стабильно между
+// запросами. Прежняя «чехарда» заголовков имела две причины: (1) Ozon A/B-шит
+// заголовки и иногда подмешивает посторонние title-несущие виджеты (секции «с этим
+// покупают», табы, хлебные крошки); (2) сам парсер ходил по map в случайном порядке
+// (range по map в Go рандомизирован), поэтому один и тот же ответ мог дать разный
+// заголовок. Лечим обе:
+//   - виджеты перебираем по ФИКС. приоритету ИМЕНИ — выделенный заголовок товара
+//     (мобильный navTitle* / web webProductHeading*) → общий *heading* → любой *title*;
+//     внутри приоритета ключи отсортированы → выделенный виджет всегда побеждает фолбэк;
+//   - сам title внутри виджета ищем детерминированно (findFirstString теперь
+//     shallowest-first), поэтому одинаковый ответ всегда даёт один и тот же заголовок.
 func extractOzonName(ws map[string]string) string {
-	// web-эндпоинт: webProductHeading*; мобильный composer-api: navTitle* (заголовок
-	// товара). Пробуем оба варианта подстроки имени виджета.
-	for _, sub := range []string{"heading", "title"} {
-		for _, raw := range candidateWidgets(ws, "webProductHeading", sub, false) {
+	for _, sub := range []string{"navtitle", "productheading", "heading", "title"} {
+		keys := make([]string, 0)
+		for k := range ws {
+			if strings.Contains(strings.ToLower(k), sub) {
+				keys = append(keys, k)
+			}
+		}
+		sort.Strings(keys)
+		for _, k := range keys {
 			var data any
-			if json.Unmarshal([]byte(raw), &data) != nil {
+			if json.Unmarshal([]byte(ws[k]), &data) != nil {
 				continue
 			}
 			// title может быть строкой ИЛИ объектом {text:...}; пробуем оба ключа.
@@ -723,29 +739,40 @@ func findStringFields(v any, names map[string]bool, out map[string]string) {
 	}
 }
 
-// findFirstString рекурсивно возвращает первое непустое строковое значение для
-// поля name (lowercase).
-func findFirstString(v any, name string) string {
-	switch t := v.(type) {
-	case map[string]any:
-		for k, val := range t {
-			if strings.ToLower(k) == name {
-				if s, ok := val.(string); ok && s != "" {
-					return s
+// findFirstString ДЕТЕРМИНИРОВАННО возвращает строковое значение поля name
+// (lowercase) на МИНИМАЛЬНОЙ глубине; при равной глубине ключи объектов перебираются
+// в отсортированном порядке. Детерминизм важен: range по map в Go рандомизирован, и
+// прежний рекурсивный обход на одном и том же ответе мог вернуть разный заголовок
+// (вложенный title хлебных крошек/табов вместо собственного title виджета).
+// Shallowest-first выбирает «собственный» заголовок виджета, лежащий выше вложенных.
+func findFirstString(root any, name string) string {
+	name = strings.ToLower(name)
+	queue := []any{root}
+	for len(queue) > 0 {
+		var next []any
+		for _, v := range queue {
+			switch t := v.(type) {
+			case map[string]any:
+				keys := make([]string, 0, len(t))
+				for k := range t {
+					keys = append(keys, k)
 				}
+				sort.Strings(keys)
+				for _, k := range keys {
+					if strings.ToLower(k) == name {
+						if s, ok := t[k].(string); ok && s != "" {
+							return s
+						}
+					}
+				}
+				for _, k := range keys {
+					next = append(next, t[k])
+				}
+			case []any:
+				next = append(next, t...)
 			}
 		}
-		for _, val := range t {
-			if s := findFirstString(val, name); s != "" {
-				return s
-			}
-		}
-	case []any:
-		for _, e := range t {
-			if s := findFirstString(e, name); s != "" {
-				return s
-			}
-		}
+		queue = next
 	}
 	return ""
 }
