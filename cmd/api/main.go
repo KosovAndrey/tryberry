@@ -21,6 +21,7 @@ import (
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp"
 
+	"gitlab.com/KosovAndrey/tryberrybot/internal/config"
 	"gitlab.com/KosovAndrey/tryberrybot/internal/db"
 	"gitlab.com/KosovAndrey/tryberrybot/internal/health"
 	"gitlab.com/KosovAndrey/tryberrybot/internal/kafka"
@@ -59,10 +60,10 @@ func run(log *slog.Logger) error {
 	ctx, cancel := signal.NotifyContext(context.Background(), syscall.SIGTERM, syscall.SIGINT)
 	defer cancel()
 
-	databaseURL := mustEnv("DATABASE_URL")
-	redisURL := mustEnv("REDIS_URL")
-	botToken := mustEnv("TELEGRAM_BOT_TOKEN")
-	kafkaBrokers := strings.Split(mustEnv("KAFKA_BROKERS"), ",")
+	databaseURL := config.MustEnv("DATABASE_URL")
+	redisURL := config.MustEnv("REDIS_URL")
+	botToken := config.MustEnv("TELEGRAM_BOT_TOKEN")
+	kafkaBrokers := strings.Split(config.MustEnv("KAFKA_BROKERS"), ",")
 	webhookURL := getEnv("TELEGRAM_WEBHOOK_URL", "")
 	webhookSecret := getEnv("TELEGRAM_WEBHOOK_SECRET", "")
 	webhookEnabled := getEnv("WEBHOOK_ENABLED", "true") == "true"
@@ -483,14 +484,6 @@ func runMetricsUpdater(ctx context.Context, log *slog.Logger, pool *pgxpool.Pool
 			tick()
 		}
 	}
-}
-
-func mustEnv(key string) string {
-	v := os.Getenv(key)
-	if v == "" {
-		panic(fmt.Sprintf("env %s is required", key))
-	}
-	return v
 }
 
 func getEnv(key, fallback string) string {
