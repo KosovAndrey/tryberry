@@ -47,8 +47,15 @@ WARM_PRODUCT_ID = os.getenv("OZON_WARM_PRODUCT_ID", "1889984997")
 WARM_URL = os.getenv("OZON_WARM_URL", f"https://www.ozon.ru/product/{WARM_PRODUCT_ID}/")
 
 HEADLESS = os.getenv("HEADLESS", "false").lower() in ("1", "true", "yes")
-SCRAPE_TIMEOUT_S = float(os.getenv("OZON_SCRAPE_TIMEOUT_SECONDS", "30"))
-SCRAPE_RETRIES = int(os.getenv("OZON_SCRAPE_RETRIES", "3"))
+# Таймаут ОДНОЙ попытки in-page fetch. Здоровый ответ ~1.7с, поэтому 12с — с большим
+# запасом; держим низким, чтобы залипшая попытка не растягивала latency (старые 30с
+# давали хвост p99=30с). Худший случай вызова ≈ SCRAPE_TIMEOUT_S*RETRIES + паузы.
+SCRAPE_TIMEOUT_S = float(os.getenv("OZON_SCRAPE_TIMEOUT_SECONDS", "12"))
+# Ретраи — только для ТРАНЗИЕНТНЫХ пустышек (таймаут/0). FAB-блок ретраем не лечится
+# (см. fetch_path), поэтому 2 попытки достаточно.
+SCRAPE_RETRIES = int(os.getenv("OZON_SCRAPE_RETRIES", "2"))
+# Пауза между транзиентными попытками (нудж + дать странице осесть).
+RETRY_PAUSE_MS = int(os.getenv("OZON_RETRY_PAUSE_MS", "1200"))
 NAV_TIMEOUT_S = float(os.getenv("OZON_NAV_TIMEOUT_SECONDS", "60"))
 WARM_WAIT_S = float(os.getenv("OZON_WARM_WAIT_SECONDS", "45"))
 
@@ -258,26 +265,38 @@ class Lane:
         await self.warm()
 
     async def fetch_path(self, path: str, label: str):
-        """In-page fetch произвольного entrypoint-path (карточка ИЛИ выдача) с
-        ретраями + джиттер интервала. На стойкий FAB метит дорожку нездоровой.
-        Возвращает (status, body_bytes)."""
+        """In-page fetch произвольного entrypoint-path (карточка ИЛИ выдача).
+        Возвращает (status, body_bytes).
+
+        ЛАТЕНТНОСТЬ: на СТОЙКИЙ FAB (403/тело с fab_) НЕ долбим ретраями — в пределах
+        одного вызова это не помогает (доверие восстанавливает только перепрогрев),
+        зато растягивает latency (источник хвоста p99=30с) и жжёт IP. Поэтому при FAB
+        сразу метим дорожку нездоровой и выходим (перепрогрев сделает maintenance_loop).
+        Ретраим ТОЛЬКО транзиентные пустышки (таймаут/0/иной не-200)."""
         async with self.lock:
+            t0 = time.monotonic()
             spacing = max(0.1, LANE_MIN_INTERVAL_S * (1.0 + LANE_JITTER * (2 * random.random() - 1)))
-            wait = spacing - (time.monotonic() - self._last_at)
+            wait = spacing - (t0 - self._last_at)
             if wait > 0:
                 await asyncio.sleep(wait)
+            waited = time.monotonic() - t0
             status, body = 0, ""
+            attempt = 0
             for attempt in range(1, SCRAPE_RETRIES + 1):
                 self._last_at = time.monotonic()
                 status, body = await self._inpage_fetch(path)
                 if status == 200 and not _looks_blocked(status, body):
+                    log.info("дорожка %d: %s ок за %.2fс (спейсинг %.2fс, попыток %d)",
+                             self.idx, label, time.monotonic() - t0, waited, attempt)
                     return 200, body.encode("utf-8")
-                if attempt < SCRAPE_RETRIES:
+                if _looks_blocked(status, body):
+                    break  # FAB — ретрай бесполезен, выходим быстро (см. docstring)
+                if attempt < SCRAPE_RETRIES:  # транзиент — короткая пауза и ещё попытка
                     await self._nudge()
-                    await self._page.wait_for_timeout(2000)
+                    await self._page.wait_for_timeout(RETRY_PAUSE_MS)
             self.healthy = False
-            log.warning("дорожка %d: FAB/блок на %s (status=%s) — пометил нездоровой",
-                        self.idx, label, status)
+            log.warning("дорожка %d: FAB/блок на %s (status=%s) за %.2fс попыток %d — нездорова",
+                        self.idx, label, status, time.monotonic() - t0, attempt)
             return 403, (body or "").encode("utf-8")
 
     async def _inpage_fetch(self, path: str):
