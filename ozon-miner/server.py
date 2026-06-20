@@ -422,6 +422,27 @@ async def handle_health(request: web.Request) -> web.Response:
                              status=200 if healthy > 0 else 503)
 
 
+async def handle_metrics(request: web.Request) -> web.Response:
+    """Prometheus-метрики (text exposition) без зависимости prometheus_client —
+    формат простой, отдаём строкой. Ключевая для алертов — ozon_miner_healthy_lanes:
+    0 = все дорожки мертвы (протух refresh-token/FAB-пропуск → нужен переинжект
+    кук). Процесс-даун ловится отдельно через up{job=~"tryberrybot-.+"}."""
+    pool: Pool = request.app["pool"]
+    lines = [
+        "# HELP ozon_miner_healthy_lanes Число прогретых (healthy) дорожек camoufox",
+        "# TYPE ozon_miner_healthy_lanes gauge",
+        f"ozon_miner_healthy_lanes {pool.healthy_count()}",
+        "# HELP ozon_miner_total_lanes Всего сконфигурённых дорожек",
+        "# TYPE ozon_miner_total_lanes gauge",
+        f"ozon_miner_total_lanes {len(pool.lanes)}",
+        "# HELP ozon_miner_lane_healthy Здоровье конкретной дорожки (1=healthy, 0=нет)",
+        "# TYPE ozon_miner_lane_healthy gauge",
+    ]
+    for l in pool.lanes:
+        lines.append(f'ozon_miner_lane_healthy{{lane="{l.idx}"}} {1 if l.healthy else 0}')
+    return web.Response(text="\n".join(lines) + "\n", content_type="text/plain")
+
+
 async def main():
     configs = _load_lane_configs()
     if not configs:
@@ -448,6 +469,7 @@ async def main():
     app.router.add_get("/scrape", handle_scrape)
     app.router.add_get("/search", handle_search)
     app.router.add_get("/healthz", handle_health)
+    app.router.add_get("/metrics", handle_metrics)
 
     asyncio.ensure_future(pool.maintenance_loop())
 

@@ -114,6 +114,19 @@ groups:
           summary: "Скрейпер {{ $labels.marketplace }} отключён (не сконфигурён)"
           description: "Скрейпер возвращает ErrNotImplemented — проверь OZON_COOKIE/OZON_PROXY_URL в .env (возможна опечатка → невалидный URL → scraper disabled)."
 
+      # Ozon-сайдкар жив, но ни одной прогретой дорожки. Процесс-даун ловит
+      # ServiceDown (up==0); здесь — процесс отвечает, а camoufox не может
+      # пере-пройти FAB: вероятно протух refresh-token/FAB-пропуск cookie-сессии.
+      # Ozon-скрейп и поиск по ссылке встают → нужен переинжект свежих кук.
+      - alert: OzonMinerNoHealthyLanes
+        expr: ozon_miner_healthy_lanes == 0
+        for: 10m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Ozon-сайдкар: нет живых дорожек"
+          description: "ozon-miner отвечает, но 0 прогретых дорожек 10+ минут — camoufox не проходит FAB (протух refresh-token/FAB-пропуск). Снять свежий OZON_COOKIE (HTTP Toolkit через мобильный прокси) и пересоздать ozon-miner: docker compose up -d --force-recreate ozon-miner."
+
       # Высокая латентность скрейпинга
       - alert: HighScrapeLatency
         expr: tryberrybot:scrape_duration_p95:5m > 10

@@ -38,6 +38,15 @@ scrape_configs:
         labels:
           service: scraper
 
+  # Сайдкар Ozon (camoufox-пул дорожек). Имя job под общий префикс tryberrybot-*,
+  # чтобы ServiceDown ловил падение процесса; живые дорожки — отдельным алертом.
+  - job_name: tryberrybot-ozon-miner
+    metrics_path: /metrics
+    static_configs:
+      - targets: [ 'ozon-miner:8080' ]
+        labels:
+          service: ozon-miner
+
   - job_name: tryberrybot-notifier
     metrics_path: /metrics
     static_configs:
