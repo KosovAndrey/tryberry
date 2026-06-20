@@ -36,6 +36,10 @@ type PriceAlert struct {
 	// BackInStock — алерт о появлении товара в наличии (триггер back_in_stock),
 	// а не о снижении цены. OldPrice не используется (товара не было в продаже).
 	BackInStock bool
+	// HonestLine — строка «честной цены» (вердикт по истории), пусто = не показывать.
+	// Заполняет notifier через domain.AssessHonestPrice; рендерится только в
+	// price-drop алерте (для back_in_stock не применяется).
+	HonestLine string
 }
 
 func (n *Notifier) SendPriceAlert(ctx context.Context, a PriceAlert) error {
@@ -48,13 +52,18 @@ func (n *Notifier) SendPriceAlert(ctx context.Context, a PriceAlert) error {
 	} else {
 		diff := a.OldPrice - a.NewPrice
 		percent := math.Round(diff / a.OldPrice * 100)
+		honest := ""
+		if a.HonestLine != "" {
+			honest = "\n" + a.HonestLine
+		}
 		caption = fmt.Sprintf(
-			"📉 Цена снизилась!\n\n%s\n\nБыло: %.0f ₽ → Стало: %.0f ₽\nСкидка: %.0f ₽ (%.0f%%)\n\n%s",
+			"📉 Цена снизилась!\n\n%s\n\nБыло: %.0f ₽ → Стало: %.0f ₽\nСкидка: %.0f ₽ (%.0f%%)%s\n\n%s",
 			a.ProductName,
 			a.OldPrice,
 			a.NewPrice,
 			diff,
 			percent,
+			honest,
 			a.ProductURL,
 		)
 	}
