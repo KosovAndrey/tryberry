@@ -1,6 +1,7 @@
 package scraper
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"net/url"
@@ -118,7 +119,7 @@ func TestOzonSearch_URLHandling(t *testing.T) {
 	}
 	// Без browser-сайдкара (OzonOptions{} → not configured) ScrapeSearch отдаёт
 	// blocked: поиск Ozon работает только через ozon-miner (mode=browser).
-	if _, err := s.ScrapeSearch(nil, "https://www.ozon.ru/search/?text=x"); !errors.Is(err, ErrMarketplaceBlocked) {
+	if _, err := s.ScrapeSearch(context.Background(), "https://www.ozon.ru/search/?text=x"); !errors.Is(err, ErrMarketplaceBlocked) {
 		t.Errorf("want ErrMarketplaceBlocked, got %v", err)
 	}
 }

@@ -32,10 +32,3 @@ type StaticTokenProvider struct{ T SearchToken }
 func (s StaticTokenProvider) Token(context.Context) (SearchToken, error) { return s.T, nil }
 func (s StaticTokenProvider) MarkBad(context.Context, int)               {}
 func (s StaticTokenProvider) MarkGood(context.Context, int)              {}
-
-// TokenProviderFunc — адаптер: обычная функция как TokenProvider.
-type TokenProviderFunc func(ctx context.Context) (SearchToken, error)
-
-func (f TokenProviderFunc) Token(ctx context.Context) (SearchToken, error) { return f(ctx) }
-func (f TokenProviderFunc) MarkBad(context.Context, int)                   {}
-func (f TokenProviderFunc) MarkGood(context.Context, int)                  {}
