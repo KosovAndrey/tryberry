@@ -14,7 +14,6 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
-	"net/http"
 	"os"
 	"os/signal"
 	"strconv"
@@ -22,11 +21,9 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/joho/godotenv"
-	"github.com/prometheus/client_golang/prometheus/promhttp"
-	"github.com/redis/go-redis/v9"
 
+	"gitlab.com/KosovAndrey/tryberrybot/internal/config"
 	"gitlab.com/KosovAndrey/tryberrybot/internal/db"
 	"gitlab.com/KosovAndrey/tryberrybot/internal/health"
 	"gitlab.com/KosovAndrey/tryberrybot/internal/kafka"
@@ -48,10 +45,10 @@ func run(log *slog.Logger) error {
 	ctx, cancel := signal.NotifyContext(context.Background(), syscall.SIGTERM, syscall.SIGINT)
 	defer cancel()
 
-	databaseURL := mustEnv("DATABASE_URL")
-	redisURL := mustEnv("REDIS_URL")
-	kafkaBrokers := strings.Split(mustEnv("KAFKA_BROKERS"), ",")
-	kafkaGroupID := mustEnv("KAFKA_GROUP_ID")
+	databaseURL := config.MustEnv("DATABASE_URL")
+	redisURL := config.MustEnv("REDIS_URL")
+	kafkaBrokers := strings.Split(config.MustEnv("KAFKA_BROKERS"), ",")
+	kafkaGroupID := config.MustEnv("KAFKA_GROUP_ID")
 	tasksTopic := getEnv("SEARCH_TASKS_TOPIC", "search-tasks")
 	poolPrefix := getEnv("WB_TOKEN_POOL_PREFIX", "wb:search:")
 	otlpEndpoint := getEnv("OTLP_ENDPOINT", "jaeger:4317")
@@ -87,7 +84,7 @@ func run(log *slog.Logger) error {
 		redisClient = nil
 	}
 
-	go runHealthServer(ctx, log, pool, redisClient, healthPort)
+	go health.RunServer(ctx, log, pool, redisClient, healthPort)
 
 	productRepo := postgres.NewProductRepo(pool)
 	searchQueryRepo := postgres.NewSearchQueryRepo(pool)
@@ -156,33 +153,6 @@ func run(log *slog.Logger) error {
 		"pool_prefix", poolPrefix, "pool_size", poolSize,
 		"default_interval", defaultInterval.String())
 	return consumer.Run(ctx, sw.makeHandler())
-}
-
-func runHealthServer(ctx context.Context, log *slog.Logger, pool *pgxpool.Pool, redisClient *redis.Client, port string) {
-	healthChecker := health.New(pool, redisClient)
-	mux := http.NewServeMux()
-	mux.HandleFunc("/health", healthChecker.Handler())
-	mux.HandleFunc("/live", health.LivenessHandler())
-	mux.Handle("/metrics", promhttp.Handler())
-
-	srv := &http.Server{Addr: ":" + port, Handler: mux}
-	go func() {
-		<-ctx.Done()
-		srv.Shutdown(context.Background())
-	}()
-
-	log.Info("health server started", "port", port)
-	if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
-		log.Error("health server", "err", err)
-	}
-}
-
-func mustEnv(key string) string {
-	v := os.Getenv(key)
-	if v == "" {
-		panic(fmt.Sprintf("env %s is required", key))
-	}
-	return v
 }
 
 func getEnv(key, fallback string) string {

@@ -28,12 +28,12 @@ type Notifier interface {
 // заводит/продлевает подписку, гасит discount-код, начисляет реферальную
 // награду paid и уведомляет.
 type Applier struct {
-	payments  *postgres.PaymentRepo
-	promos    *postgres.PromoRepo
-	referrals *postgres.ReferralRepo
-	users     *postgres.UserRepo
-	billing   *postgres.BillingSubscriptionRepo // рекуррентные подписки
-	discounts *redisrepo.DiscountStore          // может быть nil
+	payments  paymentMarker
+	promos    promoRedeemer
+	referrals referralGranter
+	users     userGetter
+	billing   subscriptionApplier // рекуррентные подписки; nil → не ведём
+	discounts discountClearer     // может быть nil
 	notify    Notifier
 	log       *slog.Logger
 }
@@ -48,8 +48,17 @@ func NewApplier(
 	notify Notifier,
 	log *slog.Logger,
 ) *Applier {
-	return &Applier{payments: payments, promos: promos, referrals: referrals,
-		users: users, billing: billing, discounts: discounts, notify: notify, log: log}
+	a := &Applier{payments: payments, promos: promos, referrals: referrals,
+		users: users, notify: notify, log: log}
+	// Присваиваем nilable-зависимости только если они реально не nil: иначе typed-nil
+	// (*postgres.…)(nil) в интерфейсе перестаёт быть == nil и ломает nil-проверки.
+	if billing != nil {
+		a.billing = billing
+	}
+	if discounts != nil {
+		a.discounts = discounts
+	}
+	return a
 }
 
 // Apply обрабатывает одно событие подтверждённой оплаты. Возврат ошибки →

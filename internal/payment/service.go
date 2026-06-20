@@ -24,14 +24,20 @@ type ConsentLogger interface {
 // Service создаёт платежи из витрины тарифов через выбранный Provider.
 type Service struct {
 	provider  Provider
-	payments  *postgres.PaymentRepo
-	discounts *redisrepo.DiscountStore // nil → скидки не применяем (нет Redis)
-	consents  ConsentLogger            // лог согласия на подписку
+	payments  paymentCreator
+	discounts discountReader // nil → скидки не применяем (нет Redis)
+	consents  ConsentLogger  // лог согласия на подписку; nil → не логируем
 	log       *slog.Logger
 }
 
 func NewService(provider Provider, payments *postgres.PaymentRepo, discounts *redisrepo.DiscountStore, consents ConsentLogger, log *slog.Logger) *Service {
-	return &Service{provider: provider, payments: payments, discounts: discounts, consents: consents, log: log}
+	s := &Service{provider: provider, payments: payments, consents: consents, log: log}
+	// Только реально не-nil зависимости (typed-nil в интерфейсе != nil — сломал бы
+	// nil-проверки на discounts/consents).
+	if discounts != nil {
+		s.discounts = discounts
+	}
+	return s
 }
 
 // SupportsSubscription — умеет ли текущий провайдер автосписания (для витрины).

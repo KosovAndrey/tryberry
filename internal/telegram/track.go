@@ -7,10 +7,17 @@ import (
 	"fmt"
 	"strconv"
 	"strings"
+	"time"
 
 	tgbotapi "github.com/go-telegram-bot-api/telegram-bot-api/v5"
+	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/codes"
+	"go.opentelemetry.io/otel/trace"
 
 	"gitlab.com/KosovAndrey/tryberrybot/internal/domain"
+	"gitlab.com/KosovAndrey/tryberrybot/internal/metrics"
+	"gitlab.com/KosovAndrey/tryberrybot/internal/scraper"
 )
 
 // trackFSM — состояние диалога настройки стратегии для ТОВАРНОЙ подписки:
@@ -242,4 +249,326 @@ func (b *Bot) confirmTrackTrigger(chatID, subID int64, t domain.TriggerType, tar
 	kb := trackTriggerKeyboard(subID, t)
 	m.ReplyMarkup = kb
 	b.send(m)
+}
+
+// ── Подписки ──────────────────────────────────────────────────────────────────
+func (b *Bot) handleList(ctx context.Context, chatID int64, user *domain.User) {
+	subs, err := b.subRepo.GetActiveByUserID(ctx, user.ID)
+	if err != nil {
+		b.log.Error("get subscriptions", "err", err)
+		b.reply(chatID, "Произошла ошибка, попробуй позже.")
+		return
+	}
+
+	if len(subs) == 0 {
+		m := tgbotapi.NewMessage(chatID,
+			"📋 У тебя пока нет активных подписок.\n\n"+
+				"Отправь ссылку на товар Wildberries прямо в чат — я начну отслеживать цену.",
+		)
+		m.ParseMode = "HTML"
+		m.ReplyMarkup = tgbotapi.NewInlineKeyboardMarkup(
+			tgbotapi.NewInlineKeyboardRow(
+				tgbotapi.NewInlineKeyboardButtonData("◀️ В меню", "menu:main"),
+			),
+		)
+		b.send(m)
+		return
+	}
+
+	text, keyboard := b.buildListView(subs)
+	m := tgbotapi.NewMessage(chatID, text)
+	m.ParseMode = "HTML"
+	m.ReplyMarkup = keyboard
+	b.send(m)
+}
+
+func (b *Bot) buildListView(subs []*domain.Subscription) (string, tgbotapi.InlineKeyboardMarkup) {
+	var sb strings.Builder
+	fmt.Fprintf(&sb, "📋 <b>Твои подписки — %d активных</b>\n\n", len(subs))
+
+	for i, sub := range subs {
+		priceEmoji := ""
+		if sub.CurrentPrice > 0 && sub.CurrentPrice < sub.FirstSeenPrice {
+			priceEmoji = "📉 "
+		}
+		currentPriceStr := "нет данных"
+		if sub.CurrentPrice > 0 {
+			currentPriceStr = fmt.Sprintf("%s%.0f ₽", priceEmoji, sub.CurrentPrice)
+		}
+
+		fmt.Fprintf(&sb, "%d. %s <b>%s</b>\n   сейчас %s  |  при подписке %.0f ₽\n   %s\n\n",
+			i+1, marketplaceIcon(sub.ProductMarketplace), sub.ProductName, currentPriceStr, sub.FirstSeenPrice,
+			domain.TriggerDescription(sub.TriggerType, sub.TargetPrice, sub.DiscountPct),
+		)
+	}
+
+	var rows [][]tgbotapi.InlineKeyboardButton
+	for i, sub := range subs {
+		rows = append(rows, tgbotapi.NewInlineKeyboardRow(
+			tgbotapi.NewInlineKeyboardButtonURL(
+				fmt.Sprintf("🔗 #%d %s", i+1, truncate(sub.ProductName, 20)),
+				sub.ProductURL,
+			),
+			tgbotapi.NewInlineKeyboardButtonData(
+				fmt.Sprintf("❌ Отменить #%d", i+1),
+				fmt.Sprintf("untrack:%d", sub.ID),
+			),
+		))
+	}
+
+	rows = append(rows, tgbotapi.NewInlineKeyboardRow(
+		tgbotapi.NewInlineKeyboardButtonData("◀️ В меню", "menu:main"),
+	))
+
+	return sb.String(), tgbotapi.NewInlineKeyboardMarkup(rows...)
+}
+
+func (b *Bot) handleUntrack(ctx context.Context, msg *tgbotapi.Message) {
+	args := strings.TrimSpace(msg.CommandArguments())
+	if args == "" {
+		b.reply(msg.Chat.ID, "Укажи номер подписки из /list.\nПример: /untrack 3")
+		return
+	}
+	id, err := strconv.ParseInt(args, 10, 64)
+	if err != nil {
+		b.reply(msg.Chat.ID, "Номер подписки должен быть числом.")
+		return
+	}
+	user, err := b.userRepo.GetByTelegramID(ctx, msg.From.ID)
+	if err != nil {
+		b.reply(msg.Chat.ID, "Произошла ошибка, попробуй позже.")
+		return
+	}
+	if err := b.subRepo.Deactivate(ctx, id, user.ID); err != nil {
+		if errors.Is(err, domain.ErrNotFound) {
+			b.reply(msg.Chat.ID, "Подписка не найдена.")
+			return
+		}
+		b.log.Error("deactivate subscription", "err", err)
+		b.reply(msg.Chat.ID, "Произошла ошибка, попробуй позже.")
+		return
+	}
+	b.reply(msg.Chat.ID, "✅ Отслеживание отменено.")
+}
+
+func (b *Bot) doTrack(ctx context.Context, chatID int64, rawURL string, user *domain.User) {
+	tracer := otel.Tracer("bot")
+	ctx, span := tracer.Start(ctx, "bot.handleTrack",
+		trace.WithAttributes(
+			attribute.String("url", rawURL),
+			attribute.Int64("user.id", user.ID),
+			attribute.Int64("chat.id", chatID),
+		),
+	)
+	defer span.End()
+
+	s, err := b.registry.FindByURL(rawURL)
+	if err != nil {
+		span.RecordError(err)
+		span.SetStatus(codes.Error, err.Error())
+		metrics.TrackCommands.WithLabelValues("error").Inc()
+		supported := b.registry.SupportedMarketplaces()
+		b.reply(chatID, fmt.Sprintf(
+			"Не могу распознать ссылку.\n\nПоддерживаемые маркетплейсы: %v\n\n"+
+				"Пример ссылки:\n<code>https://www.wildberries.ru/catalog/123456789/detail.aspx</code>",
+			supported,
+		))
+		return
+	}
+
+	span.SetAttributes(attribute.String("marketplace", string(s.Marketplace())))
+
+	wait := tgbotapi.NewMessage(chatID, "⏳ Получаю данные о товаре...")
+	wait.ParseMode = "HTML"
+	sent, _ := b.api.Send(wait)
+
+	// Через registry.Scrape (а не s.Scrape напрямую), чтобы инкрементить
+	// tryberrybot_scrape_requests_total. Иначе ручные /track-скрейпы невидимы
+	// метрике, и success-rate/алерт HighScrapeErrorRate считаются только по
+	// фоновому воркеру — success-rate смещён. Маркетплейс уже знаем из s.
+	result, _, err := b.registry.Scrape(ctx, rawURL)
+	if err != nil {
+		span.RecordError(err)
+		span.SetStatus(codes.Error, err.Error())
+		metrics.TrackCommands.WithLabelValues("error").Inc()
+		b.log.Error("scrape on track", "url", rawURL, "marketplace", s.Marketplace(), "err", err)
+
+		msg := "❌ Не удалось получить данные о товаре. Попробуй позже."
+		switch {
+		case errors.Is(err, scraper.ErrAgeRestricted):
+			// 18+ товар: цена скрыта за возрастным гейтом Ozon — понятное сообщение
+			// вместо «не удалось».
+			msg = "🔞 Это товар <b>18+</b>. Ozon прячет его цену за подтверждением возраста — пока не могу отслеживать такие товары."
+		case s.Marketplace() == scraper.MarketplaceOzon &&
+			(errors.Is(err, scraper.ErrNotImplemented) || errors.Is(err, scraper.ErrMarketplaceBlocked)):
+			// Заглушка: Ozon ещё в разработке (антибот/прокси). Не пугаем «ошибкой» —
+			// показываем понятное «скоро будет». Когда Ozon заработает стабильно,
+			// сюда дойдёт обычный успешный путь, и заглушка не сработает.
+			msg = ozonComingSoonMsg
+		case errors.Is(err, scraper.ErrNotImplemented):
+			msg = fmt.Sprintf("⚠️ Маркетплейс <b>%s</b> пока не поддерживается. Сейчас доступен только Wildberries.", s.Marketplace())
+		}
+
+		edit := tgbotapi.NewEditMessageText(chatID, sent.MessageID, msg)
+		edit.ParseMode = "HTML"
+		b.api.Send(edit) //nolint:errcheck
+		return
+	}
+
+	span.SetAttributes(
+		attribute.String("product.name", result.Name),
+		attribute.Float64("product.price", result.Price),
+	)
+
+	product, err := b.prodRepo.Upsert(ctx, rawURL, result.Name, result.ImageURL, string(s.Marketplace()))
+	if err != nil {
+		span.RecordError(err)
+		span.SetStatus(codes.Error, err.Error())
+		metrics.TrackCommands.WithLabelValues("error").Inc()
+		b.log.Error("upsert product", "err", err)
+		b.reply(chatID, "Произошла ошибка, попробуй позже.")
+		return
+	}
+
+	// Лимит тарифа на товарные подписки. Повторная ссылка на уже
+	// отслеживаемый товар лимит не расходует (это обновление, не новая).
+	plan := user.EffectivePlan(time.Now())
+	active, err := b.subRepo.GetActiveByUserID(ctx, user.ID)
+	if err != nil {
+		span.RecordError(err)
+		b.log.Error("count active subs", "err", err)
+		edit := tgbotapi.NewEditMessageText(chatID, sent.MessageID, "Произошла ошибка, попробуй позже.")
+		edit.ParseMode = "HTML"
+		b.api.Send(edit) //nolint:errcheck
+		return
+	}
+	alreadyTracked := false
+	for _, sub := range active {
+		if sub.ProductID == product.ID {
+			alreadyTracked = true
+			break
+		}
+	}
+	if !alreadyTracked && len(active) >= plan.MaxProduct {
+		metrics.TrackCommands.WithLabelValues("limit").Inc()
+		edit := tgbotapi.NewEditMessageText(chatID, sent.MessageID, productLimitText(plan, len(active)))
+		edit.ParseMode = "HTML"
+		b.api.Send(edit) //nolint:errcheck
+		return
+	}
+
+	// Карточка без активного оффера («нет в продаже»): цены нет, обычное «слежу за
+	// снижением» неприменимо. Заводим подписку с триггером back_in_stock и
+	// предлагаем выбор — ждать наличие или указать целевую цену. in_stock=false
+	// фиксируем явно, чтобы последующий скрейп с ценой дал переход false→true.
+	if !result.InStock {
+		if err := b.prodRepo.SetInStock(ctx, product.ID, false); err != nil {
+			b.log.Warn("set product out of stock", "product_id", product.ID, "err", err)
+		}
+		// result.Price для OOS = последняя известная цена (0, если неизвестна).
+		sub, _, err := b.subRepo.UpsertOutOfStock(ctx, user.ID, product.ID, result.Price)
+		if err != nil {
+			span.RecordError(err)
+			metrics.TrackCommands.WithLabelValues("error").Inc()
+			b.log.Error("upsert oos subscription", "err", err)
+			b.reply(chatID, "Произошла ошибка, попробуй позже.")
+			return
+		}
+		metrics.TrackCommands.WithLabelValues("success").Inc()
+
+		priceLine := "Цена появится, когда товар вернётся в продажу."
+		if result.Price > 0 {
+			priceLine = fmt.Sprintf("💰 Последняя цена: <b>%.0f ₽</b>", result.Price)
+		}
+		text := fmt.Sprintf(
+			"✅ <b>Добавил в отслеживание!</b>\n\n"+
+				"<b>%s</b>\n"+
+				"🚫 Сейчас товара <b>нет в наличии</b> (нет активного предложения).\n"+
+				"%s\n\n"+
+				"По умолчанию уведомлю, как только он <b>появится в наличии</b>. "+
+				"Можно сменить тип уведомления кнопками ниже 👇",
+			result.Name, priceLine,
+		)
+		// 3 стратегии как у обычного товара, но «любое снижение» → «в наличии».
+		// below_target/discount_pct показываем только при известной last-цене
+		// (есть опора): без неё процент скидки считать не от чего.
+		kb := trackOOSKeyboard(sub.ID, result.Price > 0)
+		edit := tgbotapi.NewEditMessageText(chatID, sent.MessageID, text)
+		edit.ParseMode = "HTML"
+		edit.ReplyMarkup = &kb
+		b.api.Send(edit) //nolint:errcheck
+		return
+	}
+
+	sub, created, err := b.subRepo.Upsert(ctx, user.ID, product.ID, result.Price)
+	if err != nil {
+		span.RecordError(err)
+		span.SetStatus(codes.Error, err.Error())
+		metrics.TrackCommands.WithLabelValues("error").Inc()
+		b.log.Error("upsert subscription", "err", err)
+		b.reply(chatID, "Произошла ошибка, попробуй позже.")
+		return
+	}
+
+	span.SetAttributes(attribute.Bool("subscription.created", created))
+
+	var responseText string
+	if created {
+		metrics.TrackCommands.WithLabelValues("success").Inc()
+		responseText = fmt.Sprintf(
+			"✅ <b>Добавил в отслеживание!</b>\n\n"+
+				"<b>%s</b>\n"+
+				"💰 Текущая цена: <b>%.0f ₽</b>\n\n"+
+				"🔔 Сейчас уведомлю при <b>любом снижении</b>. Можно сменить тип уведомления кнопками ниже 👇",
+			result.Name, result.Price,
+		)
+	} else {
+		metrics.TrackCommands.WithLabelValues("reactivated").Inc()
+		responseText = fmt.Sprintf(
+			"🔄 <b>Отслеживание возобновлено!</b>\n\n"+
+				"<b>%s</b>\n"+
+				"💰 Текущая цена: <b>%.0f ₽</b>\n\n"+
+				"🔔 Тип уведомления: <b>любое снижение</b>. Сменить — кнопками ниже 👇",
+			result.Name, result.Price,
+		)
+	}
+
+	keyboard := trackTriggerKeyboard(sub.ID, domain.TriggerAnyDrop)
+
+	edit := tgbotapi.NewEditMessageText(chatID, sent.MessageID, responseText)
+	edit.ParseMode = "HTML"
+	edit.ReplyMarkup = &keyboard
+	b.api.Send(edit) //nolint:errcheck
+}
+
+func (b *Bot) callbackUntrack(ctx context.Context, cb *tgbotapi.CallbackQuery) {
+	idStr := strings.TrimPrefix(cb.Data, "untrack:")
+	id, err := strconv.ParseInt(idStr, 10, 64)
+	if err != nil {
+		b.answerCallback(cb.ID, "Ошибка")
+		return
+	}
+
+	// id — из callback_data; гасим только если подписка принадлежит этому юзеру.
+	user, err := b.userRepo.GetByTelegramID(ctx, cb.From.ID)
+	if err != nil {
+		b.answerCallback(cb.ID, "Ошибка")
+		return
+	}
+	if err := b.subRepo.Deactivate(ctx, id, user.ID); err != nil && !errors.Is(err, domain.ErrNotFound) {
+		b.log.Error("deactivate via callback", "err", err)
+		b.answerCallback(cb.ID, "Ошибка, попробуй позже")
+		return
+	}
+
+	subs, err := b.subRepo.GetActiveByUserID(ctx, user.ID)
+	if err == nil && len(subs) > 0 {
+		text, keyboard := b.buildListView(subs)
+		b.editMenu(cb.Message.Chat.ID, cb.Message.MessageID, text, keyboard)
+		b.answerCallback(cb.ID, "✅ Отслеживание отменено")
+		return
+	}
+
+	b.sendMainMenu(ctx, cb.Message.Chat.ID, cb.Message.MessageID, true)
+	b.answerCallback(cb.ID, "✅ Отслеживание отменено")
 }

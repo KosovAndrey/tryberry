@@ -86,6 +86,47 @@ log = logging.getLogger("ozon-miner")
 
 _FAB_RE = re.compile(r"fab_|incidentId")
 
+# ── Гистограмма латентности скрейпа (без prometheus_client) ───────────────────
+# Меряет латентность ВНУТРИ сайдкара (in-page fetch + спейсинг + ретраи) по метке
+# outcome=ok|blocked — раньше латентность была видна только тоталом на Go-стороне,
+# без разбивки. asyncio однопоточен → инкременты без локов безопасны.
+_LAT_BUCKETS = [0.5, 1, 2, 5, 10, 30]
+_lat = {
+    "ok": {"counts": [0] * (len(_LAT_BUCKETS) + 1), "sum": 0.0},
+    "blocked": {"counts": [0] * (len(_LAT_BUCKETS) + 1), "sum": 0.0},
+}
+
+
+def _observe_latency(outcome: str, sec: float):
+    h = _lat.get(outcome)
+    if h is None:
+        return
+    h["sum"] += sec
+    for i, b in enumerate(_LAT_BUCKETS):
+        if sec <= b:
+            h["counts"][i] += 1
+            return
+    h["counts"][-1] += 1  # +Inf
+
+
+def _latency_metric_lines():
+    lines = [
+        "# HELP ozon_miner_scrape_duration_seconds Латентность скрейпа внутри сайдкара",
+        "# TYPE ozon_miner_scrape_duration_seconds histogram",
+    ]
+    for outcome, h in _lat.items():
+        cum = 0
+        for i, b in enumerate(_LAT_BUCKETS):
+            cum += h["counts"][i]
+            lines.append(
+                f'ozon_miner_scrape_duration_seconds_bucket{{outcome="{outcome}",le="{b}"}} {cum}')
+        total = cum + h["counts"][-1]
+        lines.append(
+            f'ozon_miner_scrape_duration_seconds_bucket{{outcome="{outcome}",le="+Inf"}} {total}')
+        lines.append(f'ozon_miner_scrape_duration_seconds_sum{{outcome="{outcome}"}} {h["sum"]:.3f}')
+        lines.append(f'ozon_miner_scrape_duration_seconds_count{{outcome="{outcome}"}} {total}')
+    return lines
+
 _FETCH_JS = """
 async (path) => {
   const url = '/api/entrypoint-api.bx/page/json/v2?url=' + encodeURIComponent(path);
@@ -286,8 +327,10 @@ class Lane:
                 self._last_at = time.monotonic()
                 status, body = await self._inpage_fetch(path)
                 if status == 200 and not _looks_blocked(status, body):
+                    elapsed = time.monotonic() - t0
+                    _observe_latency("ok", elapsed)
                     log.info("дорожка %d: %s ок за %.2fс (спейсинг %.2fс, попыток %d)",
-                             self.idx, label, time.monotonic() - t0, waited, attempt)
+                             self.idx, label, elapsed, waited, attempt)
                     return 200, body.encode("utf-8")
                 if _looks_blocked(status, body):
                     break  # FAB — ретрай бесполезен, выходим быстро (см. docstring)
@@ -295,8 +338,10 @@ class Lane:
                     await self._nudge()
                     await self._page.wait_for_timeout(RETRY_PAUSE_MS)
             self.healthy = False
+            elapsed = time.monotonic() - t0
+            _observe_latency("blocked", elapsed)
             log.warning("дорожка %d: FAB/блок на %s (status=%s) за %.2fс попыток %d — нездорова",
-                        self.idx, label, status, time.monotonic() - t0, attempt)
+                        self.idx, label, status, elapsed, attempt)
             return 403, (body or "").encode("utf-8")
 
     async def _inpage_fetch(self, path: str):
@@ -459,6 +504,7 @@ async def handle_metrics(request: web.Request) -> web.Response:
     ]
     for l in pool.lanes:
         lines.append(f'ozon_miner_lane_healthy{{lane="{l.idx}"}} {1 if l.healthy else 0}')
+    lines.extend(_latency_metric_lines())
     return web.Response(text="\n".join(lines) + "\n", content_type="text/plain")
 
 

@@ -17,7 +17,6 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
-	"net/http"
 	"os"
 	"os/signal"
 	"strconv"
@@ -25,10 +24,9 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/joho/godotenv"
-	"github.com/prometheus/client_golang/prometheus/promhttp"
 
+	"gitlab.com/KosovAndrey/tryberrybot/internal/config"
 	"gitlab.com/KosovAndrey/tryberrybot/internal/db"
 	"gitlab.com/KosovAndrey/tryberrybot/internal/domain"
 	"gitlab.com/KosovAndrey/tryberrybot/internal/health"
@@ -54,8 +52,8 @@ func run(log *slog.Logger) error {
 	ctx, cancel := signal.NotifyContext(context.Background(), syscall.SIGTERM, syscall.SIGINT)
 	defer cancel()
 
-	databaseURL := mustEnv("DATABASE_URL")
-	brokers := strings.Split(mustEnv("KAFKA_BROKERS"), ",")
+	databaseURL := config.MustEnv("DATABASE_URL")
+	brokers := strings.Split(config.MustEnv("KAFKA_BROKERS"), ",")
 	otlpEndpoint := getEnv("OTLP_ENDPOINT", "jaeger:4317")
 	healthPort := getEnv("SCHEDULER_HEALTH_PORT", "8092")
 	// Дефолт-фолбэк интервала для тарифов без своего Interval (на практике все
@@ -98,7 +96,7 @@ func run(log *slog.Logger) error {
 	}
 	defer pool.Close()
 
-	go runHealthServer(ctx, log, pool, healthPort)
+	go health.RunServer(ctx, log, pool, nil, healthPort)
 
 	productRepo := postgres.NewProductRepo(pool)
 	searchQueryRepo := postgres.NewSearchQueryRepo(pool)
@@ -400,34 +398,6 @@ func searchSchedulerTick(
 	}
 	log.Info("search scheduler tick done", "due", len(due), "reseller", sentFast, "normal", sentNormal)
 	return nil
-}
-
-func runHealthServer(ctx context.Context, log *slog.Logger, pool *pgxpool.Pool, port string) {
-	healthChecker := health.New(pool, nil)
-	mux := http.NewServeMux()
-	mux.HandleFunc("/health", healthChecker.Handler())
-	mux.HandleFunc("/live", health.LivenessHandler())
-	mux.Handle("/metrics", promhttp.Handler())
-
-	srv := &http.Server{Addr: ":" + port, Handler: mux}
-
-	go func() {
-		<-ctx.Done()
-		srv.Shutdown(context.Background())
-	}()
-
-	log.Info("health server started", "port", port)
-	if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
-		log.Error("health server", "err", err)
-	}
-}
-
-func mustEnv(key string) string {
-	v := os.Getenv(key)
-	if v == "" {
-		panic(fmt.Sprintf("env %s is required", key))
-	}
-	return v
 }
 
 func getEnv(key, fallback string) string {
