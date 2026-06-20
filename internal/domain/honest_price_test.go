@@ -7,11 +7,11 @@ import (
 
 func TestAssessHonestPrice(t *testing.T) {
 	now := time.Now()
-	old := now.Add(-30 * 24 * time.Hour) // достаточно «старая» история
-	// Базовый набор: достаточно точек и возраста; min30=100, median30=150, min90=90, minAll=80.
+	old := now.Add(-30 * 24 * time.Hour) // наблюдаем дольше honestMinAge
+	// Базовый набор: достаточно возраста; min30=100, median30=150, min90=90, minAll=80.
 	full := PriceStats{
 		Min30: 100, Median30: 150, Min90: 90, MinAll: 80,
-		Count30: 20, CountAll: 50, Since: old, HasData: true,
+		Seg30: 4, CountAll: 50, Since: old, HasData: true,
 	}
 
 	cases := []struct {
@@ -27,12 +27,13 @@ func TestAssessHonestPrice(t *testing.T) {
 		{"в районе медианы", 150, full, VerdictTypical},
 		{"чуть ниже медианы", 140, full, VerdictTypical},
 		{"выше медианы — завышенная скидка", 170, full, VerdictAboveTypical},
-		{"мало точек за 30д", 100, PriceStats{
-			Min30: 100, Median30: 150, MinAll: 80, Count30: 3, CountAll: 3, Since: old, HasData: true,
-		}, VerdictInsufficient},
-		{"молодая история", 100, PriceStats{
-			Min30: 100, Median30: 150, MinAll: 80, Count30: 20, CountAll: 20,
-			Since: now.Add(-12 * time.Hour), HasData: true,
+		{"стабильная цена, мало записей, но возраст ок", 100, PriceStats{
+			Min30: 100, Median30: 100, Min90: 100, MinAll: 100,
+			Seg30: 1, CountAll: 1, Since: old, HasData: true,
+		}, VerdictLowestEver},
+		{"молодая история (< honestMinAge)", 100, PriceStats{
+			Min30: 100, Median30: 150, MinAll: 80, Seg30: 5, CountAll: 5,
+			Since: now.Add(-2 * 24 * time.Hour), HasData: true,
 		}, VerdictInsufficient},
 		{"нет данных", 100, PriceStats{}, VerdictInsufficient},
 		{"нулевая цена", 0, full, VerdictInsufficient},

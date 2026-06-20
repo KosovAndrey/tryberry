@@ -28,35 +28,61 @@ func (r *PriceHistoryRepo) Insert(ctx context.Context, productID int64, price fl
 	return err
 }
 
-// Stats — агрегаты цены по товару одним проходом: минимум/медиана за 30 дней,
-// минимум за 90 дней и за всё наблюдение, число точек и дата первой записи. Опирается
-// на индекс (product_id, recorded_at). Для фичи «честная цена» (анти-фейк-скидка).
+// Stats — агрегаты цены по товару для «честной цены». Рассчитан на CHANGE-ONLY
+// хранение (в price_history пишем только смену цены, см. cmd/scraper): каждая запись —
+// начало сегмента, действующего до следующей записи (последний — до now). Поэтому:
+//   - min за окно берём по сегментам, ПЕРЕСЕКАЮЩИМ окно (включая «якорь» — сегмент,
+//     активный на границе окна, даже если его запись старше окна);
+//   - медиана за 30д ВЗВЕШЕНА ПО ДЛИТЕЛЬНОСТИ (lower weighted median): «обычная цена» —
+//     та, где товар провёл половину времени, а не просто середина по числу записей
+//     (иначе редкая краткая акция перекосила бы вердикт).
+//
+// Опирается на индекс (product_id, recorded_at).
 func (r *PriceHistoryRepo) Stats(ctx context.Context, productID int64, now time.Time) (domain.PriceStats, error) {
 	const q = `
+		WITH seg AS (
+			SELECT price, recorded_at AS t0,
+			       lead(recorded_at, 1, $2::timestamptz) OVER (ORDER BY recorded_at) AS t1
+			FROM price_history
+			WHERE product_id = $1
+		),
+		seg30 AS (
+			SELECT price,
+			       GREATEST(t0, $2::timestamptz - interval '30 days') AS s,
+			       LEAST(t1, $2::timestamptz)                         AS e
+			FROM seg
+			WHERE t1 > $2::timestamptz - interval '30 days' AND t0 < $2::timestamptz
+		),
+		dur30 AS (
+			SELECT price, EXTRACT(EPOCH FROM (e - s)) AS d FROM seg30 WHERE e > s
+		),
+		wmed AS (
+			SELECT price,
+			       SUM(d) OVER (ORDER BY price) AS cum,
+			       SUM(d) OVER ()               AS tot
+			FROM dur30
+		)
 		SELECT
-			min(price) FILTER (WHERE recorded_at >= $2::timestamptz - interval '30 days'),
-			percentile_cont(0.5) WITHIN GROUP (ORDER BY price)
-				FILTER (WHERE recorded_at >= $2::timestamptz - interval '30 days'),
-			min(price) FILTER (WHERE recorded_at >= $2::timestamptz - interval '90 days'),
-			min(price),
-			count(*) FILTER (WHERE recorded_at >= $2::timestamptz - interval '30 days'),
-			count(*),
-			min(recorded_at)
-		FROM price_history
-		WHERE product_id = $1`
+			(SELECT min(price) FROM dur30),
+			(SELECT price FROM wmed WHERE tot > 0 AND cum >= tot / 2.0 ORDER BY price LIMIT 1),
+			(SELECT min(price) FROM seg WHERE t1 > $2::timestamptz - interval '90 days'),
+			(SELECT min(price) FROM price_history WHERE product_id = $1),
+			(SELECT count(*) FROM dur30),
+			(SELECT count(*) FROM price_history WHERE product_id = $1),
+			(SELECT min(recorded_at) FROM price_history WHERE product_id = $1)`
 
 	var (
 		min30, median30, min90, minAll *float64
-		count30, countAll              int64
+		seg30, countAll                int64
 		since                          *time.Time
 	)
 	err := r.db.QueryRow(ctx, q, productID, now).
-		Scan(&min30, &median30, &min90, &minAll, &count30, &countAll, &since)
+		Scan(&min30, &median30, &min90, &minAll, &seg30, &countAll, &since)
 	if err != nil {
 		return domain.PriceStats{}, err
 	}
 
-	s := domain.PriceStats{Count30: int(count30), CountAll: int(countAll), HasData: countAll > 0}
+	s := domain.PriceStats{Seg30: int(seg30), CountAll: int(countAll), HasData: countAll > 0}
 	if min30 != nil {
 		s.Min30 = *min30
 	}

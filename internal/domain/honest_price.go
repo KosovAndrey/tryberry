@@ -11,22 +11,24 @@ import (
 // зачёркнутой ценой (её скрейперы пока не отдают — см. docs/features/honest-price.md).
 
 // PriceStats — агрегаты price_history по товару (заполняет PriceHistoryRepo.Stats).
+// Min30/Median30 взвешены ПО ДЛИТЕЛЬНОСТИ сегментов (см. Stats): при change-only
+// хранении точки неравномерны, поэтому «обычная цена» = медиана по времени, где
+// товар провёл половину наблюдения, а не по числу записей.
 type PriceStats struct {
-	Min30, Median30 float64 // минимум и медиана за 30 дней
+	Min30, Median30 float64 // минимум и медиана за 30 дней (time-weighted)
 	Min90           float64 // минимум за 90 дней
 	MinAll          float64 // минимум за всё наблюдение
-	Count30         int     // точек за 30 дней
-	CountAll        int     // точек всего
+	Seg30           int     // сегментов цены, пересекающих 30-дн окно
+	CountAll        int     // записей всего
 	Since           time.Time
 	HasData         bool // есть хоть одна запись
 }
 
-// Пороги «достаточности данных»: история есть только с момента, как МЫ начали
-// трекать товар, поэтому на малой выборке выводы не делаем (честность важнее бейджа).
-const (
-	honestMinSamples = 5
-	honestMinAge     = 3 * 24 * time.Hour
-)
+// honestMinAge — минимальный срок наблюдения, прежде чем делать выводы. При
+// change-only хранении число записей НЕ показатель достаточности (стабильный товар
+// может иметь 1 запись на 40 дней), поэтому гейтим по ВОЗРАСТУ наблюдения, а не по
+// количеству точек. История есть только с момента, как МЫ начали трекать товар.
+const honestMinAge = 7 * 24 * time.Hour
 
 type PriceVerdict int
 
@@ -52,8 +54,8 @@ type HonestPrice struct {
 func AssessHonestPrice(current float64, s PriceStats, now time.Time) HonestPrice {
 	hp := HonestPrice{Min30: s.Min30, Median30: s.Median30, Min90: s.Min90, MinAll: s.MinAll}
 
-	tooYoung := !s.Since.IsZero() && now.Sub(s.Since) < honestMinAge
-	if current <= 0 || !s.HasData || s.Count30 < honestMinSamples || tooYoung {
+	tooYoung := s.Since.IsZero() || now.Sub(s.Since) < honestMinAge
+	if current <= 0 || !s.HasData || tooYoung {
 		hp.Verdict = VerdictInsufficient
 		return hp
 	}
