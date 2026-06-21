@@ -123,6 +123,15 @@ func (d *deliverer) SendSearchAlert(ctx context.Context, a telegram.SearchAlert)
 		vkSearchText(a), "")
 }
 
+// SendDigest — персональный дайджест (один и тот же текст в TG и VK), роутинг по
+// notify_channel. Текст уже отрендерен билдером (HTML годится и для VK — теги VK
+// игнорирует/не критично).
+func (d *deliverer) SendDigest(ctx context.Context, userID, telegramID int64, text string) error {
+	return d.deliver(ctx, userID, telegramID,
+		func(ctx context.Context) error { return d.tg.SendDigest(ctx, telegramID, text) },
+		text, "")
+}
+
 // ── Сервисные уведомления реконсайлера (по users.id) ──────────────────────────
 
 func (d *deliverer) SendPlanPausedNotice(ctx context.Context, userID int64) error {

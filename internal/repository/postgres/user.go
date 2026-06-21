@@ -21,6 +21,50 @@ func NewUserRepo(db *pgxpool.Pool) *UserRepo {
 	return &UserRepo{db: db}
 }
 
+// DigestRecipient — кому слать дайджест (минимум для роутинга; канал/план
+// дотягивает deliverer/билдер по user_id).
+type DigestRecipient struct {
+	UserID     int64
+	TelegramID int64
+}
+
+// UsersDueForDigest — юзеры с ≥1 активной ТОВАРНОЙ подпиской, которым пора слать
+// дайджест (last_digest_at IS NULL или старше before). limit ограничивает пачку на
+// тик (чтобы не бластить всех разом). Сортировка по last_digest_at — самые «давние»
+// первыми (NULL раньше всего).
+func (r *UserRepo) UsersDueForDigest(ctx context.Context, before time.Time, limit int) ([]DigestRecipient, error) {
+	const q = `
+		SELECT u.id, u.telegram_id
+		FROM users u
+		WHERE (u.last_digest_at IS NULL OR u.last_digest_at < $1)
+		  AND EXISTS (SELECT 1 FROM subscriptions s WHERE s.user_id = u.id AND s.active = TRUE)
+		ORDER BY u.last_digest_at ASC NULLS FIRST
+		LIMIT $2`
+
+	rows, err := r.db.Query(ctx, q, before, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var out []DigestRecipient
+	for rows.Next() {
+		var d DigestRecipient
+		if err := rows.Scan(&d.UserID, &d.TelegramID); err != nil {
+			return nil, err
+		}
+		out = append(out, d)
+	}
+	return out, rows.Err()
+}
+
+// MarkDigestSent двигает чек-поинт дайджеста (вызывается после обработки юзера,
+// независимо от того, было ли что слать — чтобы каданс оставался недельным).
+func (r *UserRepo) MarkDigestSent(ctx context.Context, userID int64, at time.Time) error {
+	_, err := r.db.Exec(ctx, `UPDATE users SET last_digest_at = $2 WHERE id = $1`, userID, at)
+	return err
+}
+
 func (r *UserRepo) Upsert(ctx context.Context, telegramID int64, username string) (*domain.User, error) {
 	const q = `
 		INSERT INTO users (telegram_id, username)

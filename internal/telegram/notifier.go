@@ -204,6 +204,17 @@ func (n *Notifier) sendPhoto(ctx context.Context, chatID int64, photo, caption s
 	return n.call(ctx, "sendPhoto", payload)
 }
 
+// SendDigest шлёт персональный дайджест ПЛОСКИМ текстом (без parse_mode): тот же
+// текст годится для VK и не требует экранирования имён товаров с & / <. Превью
+// ссылок выключено — их в дайджесте много.
+func (n *Notifier) SendDigest(ctx context.Context, chatID int64, text string) error {
+	return n.call(ctx, "sendMessage", map[string]any{
+		"chat_id":                  chatID,
+		"text":                     text,
+		"disable_web_page_preview": true,
+	})
+}
+
 func (n *Notifier) sendMessage(ctx context.Context, chatID int64, text string, keyboard any) error {
 	payload := map[string]any{
 		"chat_id":                  chatID,
