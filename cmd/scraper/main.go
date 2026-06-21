@@ -138,8 +138,12 @@ func run(log *slog.Logger) error {
 	defer producer.Close()
 
 	// ── Скрейперы (товарные карточки) ──────────────────────────────────────────
+	wbCard := scraper.NewWildberriesScraper(rpsWB)
+	if redisClient != nil {
+		wbCard.SetBasketResolver(redisrepo.NewBasketCache(redisClient))
+	}
 	registry := scraper.NewRegistry(
-		scraper.NewWildberriesScraper(rpsWB),
+		wbCard,
 		scraper.NewOzonScraper(scraper.OzonOptions{
 			ProxyURL:     getEnv("OZON_PROXY_URL", ""),
 			RPS:          rpsOzon,

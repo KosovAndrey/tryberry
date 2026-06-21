@@ -137,6 +137,29 @@ groups:
           summary: "Медленный скрейпинг {{ $labels.marketplace }}"
           description: "p95 латентности > 10s в течение 5 минут (текущее: {{ $value | humanizeDuration }})"
 
+      # WB: товар не нашёлся ни на одном basket-шарде (удалён / трансгран. Ali не в
+      # CDN / баскет за окном проб). На старте — per-event (видеть всё и чинить).
+      # Когда вырастет объём — заменить на rate/долю (см. README мониторинга).
+      - alert: WBBasketNotFound
+        expr: increase(tryberrybot_wb_basket_resolve_total{outcome="not_found"}[5m]) > 0
+        for: 0m
+        labels:
+          severity: warning
+        annotations:
+          summary: "WB: товар(ы) не найдены в basket-CDN"
+          description: "За 5м не нашли {{ $value }} WB-товар(ов) ни на одном шарде. Смотри артикулы: docker logs pt_scraper pt_bot_worker | grep -iE 'scrape|basket'. Норма для удалённых; всплеск = проблема."
+
+      # WB: формула баскета сильно промахнулась (нашли далёким перебором >±4) —
+      # пора расширить таблицу/окно в wbBasketNumber.
+      - alert: WBBasketFormulaDrift
+        expr: increase(tryberrybot_wb_basket_resolve_total{outcome="probe_far"}[10m]) > 0
+        for: 0m
+        labels:
+          severity: warning
+        annotations:
+          summary: "WB: формула basket-шарда уехала"
+          description: "{{ $value }} товар(ов) за 10м нашлись далёким перебором (>±4 от формулы) — обнови маппинг wbBasketNumber под новые vol-диапазоны."
+
   - name: tryberrybot_kafka
     interval: 30s
     rules:

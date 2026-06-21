@@ -103,7 +103,11 @@ func run(log *slog.Logger) error {
 
 	// Боту токен скрейпа не нужен — он зовёт только разбор URL
 	// (FindByURL/NormalizeSearchURL), не ScrapeSearch. Идентично api.
-	wbSearch := scraper.NewWildberriesSearchScraper(scraper.NewWildberriesScraper(5), nil, nil, 5, 0)
+	wbCard := scraper.NewWildberriesScraper(5)
+	if redisClient != nil {
+		wbCard.SetBasketResolver(redisrepo.NewBasketCache(redisClient))
+	}
+	wbSearch := scraper.NewWildberriesSearchScraper(wbCard, nil, nil, 5, 0)
 	// Бот при /track скрейпит карточку сразу (показать товар), а поисковые ссылки
 	// только разбирает (NormalizeSearchURL, не ScrapeSearch). Поэтому Ozon/Я.Маркет
 	// заводим как search-обёртки: они встраивают карточный скрейпер (Matches/Scrape)

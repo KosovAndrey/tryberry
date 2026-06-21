@@ -11,11 +11,21 @@ import (
 	"time"
 
 	"golang.org/x/time/rate"
+
+	"gitlab.com/KosovAndrey/tryberrybot/internal/metrics"
 )
+
+// BasketResolver — кэш соответствия vol→basket-шард (vol = id/100000). Реализуется
+// redisrepo.BasketCache. nil → кэш не используется (только проба формулы+соседей).
+type BasketResolver interface {
+	Get(ctx context.Context, vol int64) (int64, bool)
+	Put(ctx context.Context, vol, basket int64)
+}
 
 type WildberriesScraper struct {
 	http    *http.Client
 	limiter *rate.Limiter
+	baskets BasketResolver // nilable
 }
 
 func NewWildberriesScraper(rps float64) *WildberriesScraper {
@@ -26,6 +36,10 @@ func NewWildberriesScraper(rps float64) *WildberriesScraper {
 		limiter: rate.NewLimiter(rate.Limit(rps), 1),
 	}
 }
+
+// SetBasketResolver подключает кэш vol→basket (опционально; сервисы передают
+// redisrepo.BasketCache). Без него скрейпер всё равно работает — пробой формулы+соседей.
+func (s *WildberriesScraper) SetBasketResolver(r BasketResolver) { s.baskets = r }
 
 func (s *WildberriesScraper) Marketplace() Marketplace {
 	return MarketplaceWildberries
@@ -79,37 +93,79 @@ func (s *WildberriesScraper) fetchFromBasket(ctx context.Context, articleID stri
 	vol := id / 100000
 	part := id / 1000
 
-	// Номер basket-шарда у WB — лукап-таблица, которую они постоянно расширяют; наша
-	// формула wbBasketNumber для высоких vol мажет на ±1-2 (проверено: vol8943 реально
-	// на basket-39, формула даёт 40 → стабильный 404). Поэтому пробуем кандидата и
-	// соседние шарды, пока не найдём цену. Кандидат первым — для известных диапазонов
-	// он точен (1 запрос); пробы соседей включаются только при 404/недоступности.
+	// Номер basket-шарда у WB — лукап-таблица, которую они постоянно расширяют; формула
+	// wbBasketNumber для высоких vol мажет (проверено: vol8943 реально на basket-39,
+	// формула даёт 40 → стабильный 404). Резолвим так:
+	//   1) кэш vol→basket (выучен прежней пробой, неделя) — 1 запрос, без перебора;
+	//   2) проба: кандидат формулы → соседи ±12, первый 200 побеждает, кэшируем;
+	//   3) нигде не нашли → not_found (удалён / трансгран. Ali не в CDN / шард за окном).
+	// Метрика wb_basket_resolve_total{outcome} → видно дрейф формулы и всплески not_found.
 	candidate := wbBasketNumber(id)
-	lastErr := error(ErrProductNotFound)
-	for _, basket := range basketCandidates(candidate) {
-		base := fmt.Sprintf("https://basket-%02d.wbbasket.ru/vol%d/part%d/%s/info",
-			basket, vol, part, articleID)
-		price, err := s.fetchBasketPrice(ctx, base)
-		if err == nil {
-			name, imageURL := s.fetchBasketCard(ctx, base, articleID, basket, vol, part)
-			return &Result{Name: name, Price: price, ImageURL: imageURL, InStock: true}, nil
+
+	if s.baskets != nil {
+		if cached, ok := s.baskets.Get(ctx, vol); ok {
+			if r, err := s.tryBasket(ctx, vol, part, articleID, cached); err == nil {
+				metrics.WBBasketResolve.WithLabelValues("cache").Inc()
+				return r, nil
+			}
+			// кэш протух / шард переехал → перепробуем формулой+соседями
 		}
-		lastErr = err // 404 (не тот шард) / сетевая → пробуем следующий
 	}
-	return nil, fmt.Errorf("basket price: %w", lastErr)
+
+	for _, basket := range basketCandidates(candidate, 12) {
+		r, err := s.tryBasket(ctx, vol, part, articleID, basket)
+		if err != nil {
+			continue // 404 (не тот шард) / сетевая / нет хоста → следующий
+		}
+		dist := basket - candidate
+		if dist < 0 {
+			dist = -dist
+		}
+		switch {
+		case dist == 0:
+			metrics.WBBasketResolve.WithLabelValues("formula").Inc()
+		case dist <= 4:
+			metrics.WBBasketResolve.WithLabelValues("probe").Inc()
+		default:
+			metrics.WBBasketResolve.WithLabelValues("probe_far").Inc() // формула сильно уехала
+		}
+		if s.baskets != nil {
+			s.baskets.Put(ctx, vol, basket)
+		}
+		return r, nil
+	}
+	metrics.WBBasketResolve.WithLabelValues("not_found").Inc()
+	return nil, fmt.Errorf("basket price: %w", ErrProductNotFound)
 }
 
-// basketCandidates — порядок проб номеров шарда вокруг кандидата формулы (она мажет
-// на ±несколько для новых vol). Кандидат первым, затем ближайшие соседи; номера <1
-// отбрасываем. Для старых диапазонов кандидат точен → пробуется один шард.
-func basketCandidates(c int64) []int64 {
-	out := make([]int64, 0, 9)
+// tryBasket — попытка получить цену (+ карточку) с конкретного шарда.
+func (s *WildberriesScraper) tryBasket(ctx context.Context, vol, part int64, articleID string, basket int64) (*Result, error) {
+	base := fmt.Sprintf("https://basket-%02d.wbbasket.ru/vol%d/part%d/%s/info",
+		basket, vol, part, articleID)
+	price, err := s.fetchBasketPrice(ctx, base)
+	if err != nil {
+		return nil, err
+	}
+	name, imageURL := s.fetchBasketCard(ctx, base, articleID, basket, vol, part)
+	return &Result{Name: name, Price: price, ImageURL: imageURL, InStock: true}, nil
+}
+
+// basketCandidates — порядок проб номеров шарда вокруг кандидата формулы: кандидат
+// первым (для известных диапазонов он точен → один шард), затем ближайшие соседи до
+// ±maxDelta. Номера <1 отбрасываем.
+func basketCandidates(c, maxDelta int64) []int64 {
+	out := make([]int64, 0, 2*maxDelta+1)
 	seen := map[int64]bool{}
-	for _, d := range []int64{0, -1, 1, -2, 2, -3, 3, -4, 4} {
-		if b := c + d; b >= 1 && !seen[b] {
+	add := func(b int64) {
+		if b >= 1 && !seen[b] {
 			seen[b] = true
 			out = append(out, b)
 		}
+	}
+	add(c)
+	for d := int64(1); d <= maxDelta; d++ {
+		add(c - d)
+		add(c + d)
 	}
 	return out
 }

@@ -28,6 +28,7 @@ import (
 	"gitlab.com/KosovAndrey/tryberrybot/internal/health"
 	"gitlab.com/KosovAndrey/tryberrybot/internal/kafka"
 	"gitlab.com/KosovAndrey/tryberrybot/internal/repository/postgres"
+	redisrepo "gitlab.com/KosovAndrey/tryberrybot/internal/repository/redis"
 	"gitlab.com/KosovAndrey/tryberrybot/internal/scraper"
 	"gitlab.com/KosovAndrey/tryberrybot/internal/tracing"
 )
@@ -101,8 +102,12 @@ func run(log *slog.Logger) error {
 		log.Warn("bad search proxy, skipped", "err", e)
 	}
 
+	wbCard := scraper.NewWildberriesScraper(rpsWB)
+	if redisClient != nil {
+		wbCard.SetBasketResolver(redisrepo.NewBasketCache(redisClient))
+	}
 	wbSearch := scraper.NewWildberriesSearchScraper(
-		scraper.NewWildberriesScraper(rpsWB),
+		wbCard,
 		proxyPool,
 		tokenProvider,
 		getEnvInt("SEARCH_MAX_PAGES", 5),

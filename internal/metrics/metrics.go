@@ -210,6 +210,20 @@ var (
 		},
 		[]string{"marketplace", "status"}, // success | not_found | blocked | proxy | auth | disabled | parse_error | error
 	)
+
+	// WBBasketResolve — как резолвился basket-шард WB для товара. Формула
+	// wbBasketNumber мажет для новых vol, поэтому пробуем соседние шарды и кэшируем.
+	// outcome: cache (из кэша) | formula (кандидат точен) | probe (сосед ±4) |
+	// probe_far (далёкий сосед 5..12 — формула сильно уехала, обновить маппинг) |
+	// not_found (не нашли нигде в окне — удалён/трансгран/баскет за окном).
+	WBBasketResolve = promauto.NewCounterVec(
+		prometheus.CounterOpts{
+			Namespace: namespace,
+			Name:      "wb_basket_resolve_total",
+			Help:      "How WB basket shard was resolved for a product",
+		},
+		[]string{"outcome"},
+	)
 )
 
 // ── Kafka ────────────────────────────────────────────────────────────────────
