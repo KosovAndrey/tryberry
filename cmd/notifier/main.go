@@ -227,6 +227,14 @@ func runPlanReconciler(
 
 		// 5. Реферальные награды за «активных» друзей (48ч + активная подписка).
 		rewardReferralActivations(ctx, log, referralRepo, sender, now)
+
+		// 6. Сигнал «пора бандлинг»: макс. активных подписок у одного юзера. Дёшево
+		//    (1 запрос раз в reconcile-интервал), не на горячем пути.
+		if n, err := subRepo.MaxActivePerUser(ctx); err != nil {
+			log.Warn("reconcile: max active subs per user", "err", err)
+		} else {
+			metrics.MaxActiveSubsPerUser.Set(float64(n))
+		}
 	}
 
 	log.Info("plan reconciler started", "interval", interval.String())

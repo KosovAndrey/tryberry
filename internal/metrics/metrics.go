@@ -224,6 +224,18 @@ var (
 		},
 		[]string{"outcome"},
 	)
+
+	// MaxActiveSubsPerUser — максимум активных товарных подписок у одного юзера.
+	// Сигнал «пора делать бандлинг алертов»: пока мало (единицы) — пачек уведомлений
+	// за цикл почти нет; когда вырастет (~15+) или появятся reseller-юзеры — за цикл
+	// у юзера может падать много товаров → нужен коалесцер (см. задачу «Бандлинг»).
+	MaxActiveSubsPerUser = promauto.NewGauge(
+		prometheus.GaugeOpts{
+			Namespace: namespace,
+			Name:      "max_active_subs_per_user",
+			Help:      "Max active product subscriptions held by a single user (bundling-need signal)",
+		},
+	)
 )
 
 // ── Kafka ────────────────────────────────────────────────────────────────────

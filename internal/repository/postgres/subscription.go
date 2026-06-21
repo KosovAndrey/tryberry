@@ -269,6 +269,19 @@ func (r *SubscriptionRepo) UpdateBaseline(ctx context.Context, id int64, newPric
 // CHECK-констрейнты в БД гарантируют согласованность.
 // userID обязателен: id берётся из callback_data пользователя, фильтр по
 // владельцу не даёт менять стратегию чужой подписки (IDOR).
+// MaxActivePerUser — наибольшее число активных товарных подписок у одного юзера.
+// Сигнал для решения о бандлинге уведомлений (metrics.MaxActiveSubsPerUser).
+func (r *SubscriptionRepo) MaxActivePerUser(ctx context.Context) (int, error) {
+	const q = `
+		SELECT COALESCE(MAX(cnt), 0) FROM (
+			SELECT count(*) AS cnt FROM subscriptions
+			WHERE active = TRUE GROUP BY user_id
+		) t`
+	var n int
+	err := r.db.QueryRow(ctx, q).Scan(&n)
+	return n, err
+}
+
 func (r *SubscriptionRepo) SetTrigger(ctx context.Context, id, userID int64, trigger string, target *float64, pct *int16) error {
 	const q = `
 		UPDATE subscriptions
