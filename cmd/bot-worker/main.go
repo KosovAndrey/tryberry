@@ -88,6 +88,7 @@ func run(log *slog.Logger) error {
 	userRepo := postgres.NewUserRepo(pool)
 	subRepo := postgres.NewSubscriptionRepo(pool)
 	prodRepo := postgres.NewProductRepo(pool)
+	priceHistoryRepo := postgres.NewPriceHistoryRepo(pool)
 	searchQueryRepo := postgres.NewSearchQueryRepo(pool)
 	searchSubRepo := postgres.NewSearchSubscriptionRepo(pool)
 	promoRepo := postgres.NewPromoRepo(pool)
@@ -130,7 +131,7 @@ func run(log *slog.Logger) error {
 	// getMe ходит наружу (через HTTPS_PROXY). Ретраим старт.
 	bot, err := initWithRetry(ctx, log, func() (*telegram.Bot, error) {
 		return telegram.NewBot(
-			botToken, log, userRepo, subRepo, prodRepo, registry,
+			botToken, log, userRepo, subRepo, prodRepo, priceHistoryRepo, registry,
 			searchQueryRepo, searchSubRepo, promoRepo, referralRepo, redisClient, parseAdminIDs(getEnv("ADMIN_IDS", "")),
 			getEnv("VK_BOT_URL", ""),
 		)

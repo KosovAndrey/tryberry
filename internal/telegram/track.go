@@ -178,11 +178,31 @@ func (b *Bot) handleTrackTriggerCallback(ctx context.Context, cb *tgbotapi.Callb
 		b.answerCallback(cb.ID, "Готово")
 
 	case "below":
-		if err := b.setTrackFSM(ctx, cb.From.ID, trackFSM{SubID: subID, Trigger: string(domain.TriggerBelowTarget)}); err != nil {
-			b.reply(chatID, "Не получилось начать ввод (нет связи с хранилищем). Останется «Любое снижение».")
+		// Подсказка целевой цены из истории (honest-price): считаем текущую цену +
+		// Stats, предлагаем кнопки. Фолбэк на ручной ввод сохранён («Своя цена»).
+		var current float64
+		var stats domain.PriceStats
+		if s, err := b.subRepo.GetByID(ctx, subID); err == nil {
+			current = s.FirstSeenPrice
+			if b.priceRepo != nil {
+				if p, _, e := b.priceRepo.GetLatest(ctx, s.ProductID); e == nil && p > 0 {
+					current = p
+				}
+				if st, e := b.priceRepo.Stats(ctx, s.ProductID, time.Now()); e == nil {
+					stats = st
+				}
+			}
+		}
+		sugg := domain.SuggestTargets(current, stats, time.Now())
+		if current <= 0 || len(sugg) == 0 {
+			// Нет опорной цены → старый путь: ручной ввод.
+			b.promptManualTarget(ctx, cb.From.ID, chatID, subID)
+			b.answerCallback(cb.ID, "")
 			return
 		}
-		b.reply(chatID, "💰 Введи целевую цену в рублях (например <code>1499</code>).\nУведомлю, когда цена опустится до неё или ниже.")
+		b.editMenu(chatID, cb.Message.MessageID,
+			fmt.Sprintf("📉 <b>Уведомить, когда подешевеет</b>\nТекущая цена: %.0f ₽. Выбери порог или задай свою:", current),
+			belowTargetKeyboard(subID, sugg))
 		b.answerCallback(cb.ID, "")
 
 	case "disc":
@@ -249,6 +269,76 @@ func (b *Bot) confirmTrackTrigger(chatID, subID int64, t domain.TriggerType, tar
 	kb := trackTriggerKeyboard(subID, t)
 	m.ReplyMarkup = kb
 	b.send(m)
+}
+
+// belowTargetKeyboard — кнопки подсказанных целевых цен + «своя цена». Каждая кнопка
+// несёт готовую цену (ptgt:<subID>:<rub>); manual → ручной ввод.
+func belowTargetKeyboard(subID int64, sugg []domain.TargetSuggestion) tgbotapi.InlineKeyboardMarkup {
+	rows := make([][]tgbotapi.InlineKeyboardButton, 0, len(sugg)+2)
+	for _, s := range sugg {
+		rows = append(rows, tgbotapi.NewInlineKeyboardRow(
+			tgbotapi.NewInlineKeyboardButtonData(
+				fmt.Sprintf("≤ %.0f ₽ · %s", s.Price, s.Label),
+				fmt.Sprintf("ptgt:%d:%.0f", subID, s.Price)),
+		))
+	}
+	rows = append(rows,
+		tgbotapi.NewInlineKeyboardRow(
+			tgbotapi.NewInlineKeyboardButtonData("✏️ Своя цена", fmt.Sprintf("ptgt:%d:manual", subID))),
+		tgbotapi.NewInlineKeyboardRow(
+			tgbotapi.NewInlineKeyboardButtonData("◀️ В меню", "menu:main")),
+	)
+	return tgbotapi.NewInlineKeyboardMarkup(rows...)
+}
+
+// promptManualTarget — запросить ручной ввод целевой цены (фолбэк, как было).
+func (b *Bot) promptManualTarget(ctx context.Context, tgID, chatID, subID int64) {
+	if err := b.setTrackFSM(ctx, tgID, trackFSM{SubID: subID, Trigger: string(domain.TriggerBelowTarget)}); err != nil {
+		b.reply(chatID, "Не получилось начать ввод (нет связи с хранилищем). Останется «Любое снижение».")
+		return
+	}
+	b.reply(chatID, "💰 Введи целевую цену в рублях (например <code>1499</code>).\nУведомлю, когда цена опустится до неё или ниже.")
+}
+
+// handleTrackTargetCallback — выбор целевой цены: ptgt:<subID>:<rub> ставит триггер
+// сразу, ptgt:<subID>:manual → ручной ввод. Владельца резолвим по telegram_id.
+func (b *Bot) handleTrackTargetCallback(ctx context.Context, cb *tgbotapi.CallbackQuery) {
+	parts := strings.Split(strings.TrimPrefix(cb.Data, "ptgt:"), ":")
+	if len(parts) != 2 {
+		b.answerCallback(cb.ID, "Ошибка")
+		return
+	}
+	subID, err := strconv.ParseInt(parts[0], 10, 64)
+	if err != nil {
+		b.answerCallback(cb.ID, "Ошибка")
+		return
+	}
+	chatID := cb.Message.Chat.ID
+
+	if parts[1] == "manual" {
+		b.promptManualTarget(ctx, cb.From.ID, chatID, subID)
+		b.answerCallback(cb.ID, "")
+		return
+	}
+
+	price, err := domain.ParsePrice(parts[1])
+	if err != nil || price <= 0 {
+		b.answerCallback(cb.ID, "Ошибка")
+		return
+	}
+	user, err := b.userRepo.GetByTelegramID(ctx, cb.From.ID)
+	if err != nil {
+		b.answerCallback(cb.ID, "Ошибка")
+		return
+	}
+	b.clearTrackFSM(ctx, cb.From.ID)
+	if err := b.subRepo.SetTrigger(ctx, subID, user.ID, string(domain.TriggerBelowTarget), &price, nil); err != nil {
+		b.log.Error("set trigger below (suggested)", "sub_id", subID, "err", err)
+		b.answerCallback(cb.ID, "Ошибка, попробуй позже")
+		return
+	}
+	b.confirmTrackTrigger(chatID, subID, domain.TriggerBelowTarget, &price, nil)
+	b.answerCallback(cb.ID, "Готово")
 }
 
 // ── Подписки ──────────────────────────────────────────────────────────────────

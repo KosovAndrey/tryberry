@@ -189,8 +189,15 @@ func makeHandler(
 		// цены для OOS засорила бы аналитику и дала ложный price drop. Событие шлём
 		// всегда — notifier обрабатывает и появление в наличии, и снижение цены.
 		if result.InStock {
-			if err := priceHistoryRepo.Insert(ctx, task.ProductID, result.Price); err != nil {
-				return fmt.Errorf("insert price history: %w", err)
+			// CHANGE-ONLY: пишем в историю лишь при СМЕНЕ цены. При 1-мин кадансе
+			// reseller хранить идентичные точки расточительно (~99% дублей); сегмент
+			// «цена X действует с t0» восстанавливаем на чтении (PriceHistoryRepo.Stats
+			// взвешивает по длительности). prevPrice<=0 → первая точка по товару.
+			// Кэш последней цены обновляем ВСЕГДА — на нём держится детект снижения.
+			if prevPrice <= 0 || result.Price != prevPrice {
+				if err := priceHistoryRepo.Insert(ctx, task.ProductID, result.Price); err != nil {
+					return fmt.Errorf("insert price history: %w", err)
+				}
 			}
 			if priceCache != nil {
 				if err := priceCache.Set(ctx, task.ProductID, result.Price); err != nil {

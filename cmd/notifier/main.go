@@ -485,6 +485,19 @@ func makeHandler(
 		wasInStock := event.WasInStock || event.OldPrice > 0
 
 		now := time.Now()
+
+		// «Честная цена»: вердикт по истории считаем раз на событие (по товару), не на
+		// подписку. Только для товара в наличии с валидной ценой; ошибки/мало данных →
+		// пустая строка (в уведомление ничего не добавляем).
+		var honestLine string
+		if inStock && currentPrice > 0 {
+			if stats, err := priceHistoryRepo.Stats(ctx, event.ProductID, now); err != nil {
+				log.Warn("honest price stats", "err", err)
+			} else {
+				honestLine = domain.AssessHonestPrice(currentPrice, stats, now).Line()
+			}
+		}
+
 		for _, sub := range subs {
 			// Throttle: оцениваем подписку не чаще интервала её тарифа. PriceEvent
 			// шлётся на каждом скрейпе (= MIN-интервал по подписчикам товара), но
@@ -562,6 +575,7 @@ func makeHandler(
 				NewPrice:       event.NewPrice,
 				ImageURL:       sub.ProductImageURL,
 				BackInStock:    backInStock,
+				HonestLine:     honestLine,
 			})
 			if err != nil {
 				return fmt.Errorf("send telegram notification: %w", err)

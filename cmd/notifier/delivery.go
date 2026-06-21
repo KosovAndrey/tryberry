@@ -185,9 +185,13 @@ func vkPriceText(a telegram.PriceAlert) string {
 	}
 	diff := a.OldPrice - a.NewPrice
 	percent := math.Round(diff / a.OldPrice * 100)
+	honest := ""
+	if a.HonestLine != "" {
+		honest = "\n" + a.HonestLine
+	}
 	return fmt.Sprintf(
-		"📉 Цена снизилась!\n\n%s\n\nБыло: %.0f ₽ → Стало: %.0f ₽\nСкидка: %.0f ₽ (%.0f%%)\n\n%s",
-		a.ProductName, a.OldPrice, a.NewPrice, diff, percent, a.ProductURL)
+		"📉 Цена снизилась!\n\n%s\n\nБыло: %.0f ₽ → Стало: %.0f ₽\nСкидка: %.0f ₽ (%.0f%%)%s\n\n%s",
+		a.ProductName, a.OldPrice, a.NewPrice, diff, percent, honest, a.ProductURL)
 }
 
 func vkSearchText(a telegram.SearchAlert) string {
