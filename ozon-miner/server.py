@@ -98,6 +98,13 @@ _DEAD_RE = re.compile(
 def _is_dead(exc) -> bool:
     return bool(_DEAD_RE.search(str(exc)))
 
+
+def _first_line(exc) -> str:
+    """Первая строка текста исключения. str(exc).splitlines()[0] падал с
+    IndexError, когда у исключения пустой текст (splitlines() → []) — и ронял
+    обработчик ошибки вместо логирования."""
+    return (str(exc).splitlines() or [""])[0]
+
 # ── Гистограмма латентности скрейпа (без prometheus_client) ───────────────────
 # Меряет латентность ВНУТРИ сайдкара (in-page fetch + спейсинг + ретраи) по метке
 # outcome=ok|blocked — раньше латентность была видна только тоталом на Go-стороне,
@@ -203,7 +210,7 @@ async def _add_cookies_safe(context, cookies) -> int:
                 ok += 1
             except Exception as e:  # noqa: BLE001
                 log.warning("дорожка: пропускаю cookie %r: %s",
-                            c["name"], str(e).splitlines()[0])
+                            c["name"], _first_line(e))
         return ok
 
 
@@ -262,7 +269,7 @@ class Lane:
             self._browser = await self._cam.__aenter__()
         except Exception as e:  # noqa: BLE001
             log.warning("дорожка %d: geoip недоступен (%s) — без него",
-                        self.idx, str(e).splitlines()[0])
+                        self.idx, _first_line(e))
             self._cam = AsyncCamoufox(**kw)
             self._browser = await self._cam.__aenter__()
         self._page = await self._browser.new_page()
@@ -285,7 +292,7 @@ class Lane:
             return True
         except Exception as e:  # noqa: BLE001
             log.error("дорожка %d: пересоздание браузера упало: %s",
-                      self.idx, str(e).splitlines()[0])
+                      self.idx, _first_line(e))
             return False
 
     async def warm(self):
@@ -297,7 +304,7 @@ class Lane:
                                   timeout=int(NAV_TIMEOUT_S * 1000))
         except Exception as e:  # noqa: BLE001
             log.warning("дорожка %d: навигация прогрева: %s",
-                        self.idx, str(e).splitlines()[0])
+                        self.idx, _first_line(e))
             # Драйвер мёртв → пересоздать браузер и повторить навигацию один раз.
             if _is_dead(e) and await self._relaunch():
                 try:
@@ -305,7 +312,7 @@ class Lane:
                                           timeout=int(NAV_TIMEOUT_S * 1000))
                 except Exception as e2:  # noqa: BLE001
                     log.warning("дорожка %d: навигация после пересоздания: %s",
-                                self.idx, str(e2).splitlines()[0])
+                                self.idx, _first_line(e2))
         self.egress_ip = await self._egress_ip()
         log.info("дорожка %d: навигация ок (egress=%s), жду прохождения FAB…",
                  self.idx, self.egress_ip or "?")
@@ -346,7 +353,7 @@ class Lane:
                         await r.text()
                 log.info("дорожка %d: ротация IP (switch-link дёрнут)", self.idx)
             except Exception as e:  # noqa: BLE001
-                log.warning("дорожка %d: ротация не удалась: %s", self.idx, str(e).splitlines()[0])
+                log.warning("дорожка %d: ротация не удалась: %s", self.idx, _first_line(e))
             await asyncio.sleep(ROTATE_SETTLE_S)
         self._last_rotate = time.monotonic()
         await self.warm()
@@ -395,7 +402,7 @@ class Lane:
             res = await asyncio.wait_for(
                 self._page.evaluate(_FETCH_JS, path), timeout=SCRAPE_TIMEOUT_S)
         except Exception as e:  # noqa: BLE001
-            log.warning("дорожка %d: fetch упал: %s", self.idx, str(e).splitlines()[0])
+            log.warning("дорожка %d: fetch упал: %s", self.idx, _first_line(e))
             return 0, ""
         return int(res.get("status") or 0), (res.get("body") or "")
 
