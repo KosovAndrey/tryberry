@@ -27,6 +27,24 @@ RUN pip install -r requirements.txt \
  && apt-get clean \
  && rm -rf /var/lib/apt/lists/* /root/.cache/pip
 
+# ── Хотфикс бага playwright-firefox (juggler), 21.06.2026 ────────────────────
+# При uncaught page-error БЕЗ source-location обработчик FFPage._onUncaughtError →
+# _Page.addPageError безусловно читает pageError.location.url у undefined →
+# НЕОБРАБОТАННЫЙ TypeError роняет весь Node-процесс драйвера (coreBundle.js).
+# После этого playwright-соединение мертво и ВЕСЬ пул дорожек уходит в 100%
+# ошибок ('Connection closed while reading from the driver'). Ozon начал отдавать
+# такие ошибки 21.06.2026; апгрейд playwright НЕ помогает (баг есть и в актуальной
+# сборке), а из Python краш не перехватить — он в самом драйвере до доставки
+# события. Делаем доступ к .location опциональным прямо в бандле.
+# set -e + grep-проверки: билд ПАДАЕТ, если паттерн исчез (значит версия
+# playwright сменилась — патч надо пересмотреть, а не молча потерять).
+RUN set -eu; \
+    bundle="$(python -c 'import os,playwright; print(os.path.join(os.path.dirname(playwright.__file__),"driver","package","lib","coreBundle.js"))')"; \
+    grep -q 'pageError\.location\.url' "$bundle"; \
+    sed -i 's/pageError\.location\.\([A-Za-z]\+\)/pageError.location?.\1/g' "$bundle"; \
+    ! grep -q 'pageError\.location\.url' "$bundle"; \
+    echo "coreBundle.js: pageError.location guard applied → $bundle"
+
 # Отдельным слоем: Xvfb, программный GL (Mesa) и шрифты с кириллицей.
 # Идёт ПОСЛЕ слоя выше, чтобы не сбивать кэш скачивания Chromium.
 RUN apt-get update \
