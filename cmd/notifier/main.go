@@ -486,16 +486,26 @@ func makeHandler(
 
 		now := time.Now()
 
-		// «Честная цена»: вердикт по истории считаем раз на событие (по товару), не на
-		// подписку. Только для товара в наличии с валидной ценой; ошибки/мало данных →
-		// пустая строка (в уведомление ничего не добавляем).
-		var honestLine string
-		if inStock && currentPrice > 0 {
-			if stats, err := priceHistoryRepo.Stats(ctx, event.ProductID, now); err != nil {
-				log.Warn("honest price stats", "err", err)
-			} else {
-				honestLine = domain.AssessHonestPrice(currentPrice, stats, now).Line()
+		// «Честная цена»: вердикт по истории считаем ЛЕНИВО — только когда реально
+		// собираемся отправить алерт (а не на каждое событие: уведомления редки,
+		// событий — на каждом скрейпе). Мемоизация на событие: первый отправляемый
+		// алерт по товару считает Stats, остальные подписчики переиспользуют. Цикл
+		// последователен — без локов. Ошибки/мало данных → пустая строка.
+		honestLine := ""
+		honestDone := false
+		honest := func() string {
+			if honestDone {
+				return honestLine
 			}
+			honestDone = true
+			if inStock && currentPrice > 0 {
+				if stats, err := priceHistoryRepo.Stats(ctx, event.ProductID, now); err != nil {
+					log.Warn("honest price stats", "err", err)
+				} else {
+					honestLine = domain.AssessHonestPrice(currentPrice, stats, now).Line()
+				}
+			}
+			return honestLine
 		}
 
 		for _, sub := range subs {
@@ -564,6 +574,13 @@ func makeHandler(
 				continue
 			}
 
+			// Вердикт «честной цены» — только для ценового алерта (для back_in_stock
+			// не показываем и Stats не дёргаем). Ленивый расчёт здесь = «когда реально шлём».
+			hl := ""
+			if !backInStock {
+				hl = honest()
+			}
+
 			// Отправляем уведомление (роутинг по каналам — внутри sender)
 			err = sender.SendPriceAlert(ctx, telegram.PriceAlert{
 				ChatID:         sub.TelegramID,
@@ -575,7 +592,7 @@ func makeHandler(
 				NewPrice:       event.NewPrice,
 				ImageURL:       sub.ProductImageURL,
 				BackInStock:    backInStock,
-				HonestLine:     honestLine,
+				HonestLine:     hl,
 			})
 			if err != nil {
 				return fmt.Errorf("send telegram notification: %w", err)
