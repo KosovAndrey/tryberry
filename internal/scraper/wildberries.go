@@ -118,10 +118,40 @@ func (s *WildberriesScraper) fetchBasketCard(ctx context.Context, base, articleI
 	return card.Name, imageURL
 }
 
+// getWithRetry — GET с ретраями ТРАНЗИЕНТНЫХ сбоев (сетевые ошибки/EOF, 5xx). WB
+// basket-CDN изредка рвёт соединение (EOF) — один-два ретрая убирают ложные «не
+// удалось», особенно в bulk, где нет ручного повтора. 404/2xx — окончательный ответ
+// (товара нет / есть), не ретраим. (Несуществующий шард — напр. трансгран. Ali не в
+// баскетах — даст устойчивую сетевую ошибку и честно вернётся после ретраев.)
+func (s *WildberriesScraper) getWithRetry(ctx context.Context, url string) (*http.Response, error) {
+	const attempts = 3
+	var lastErr error
+	for i := 0; i < attempts; i++ {
+		req, _ := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+		req.Header.Set("User-Agent", wbUserAgent)
+		resp, err := s.http.Do(req)
+		switch {
+		case err != nil:
+			lastErr = err
+		case resp.StatusCode >= 500:
+			lastErr = fmt.Errorf("status %d", resp.StatusCode)
+			resp.Body.Close()
+		default:
+			return resp, nil // 2xx/3xx/4xx — окончательный ответ
+		}
+		if i < attempts-1 {
+			select {
+			case <-ctx.Done():
+				return nil, ctx.Err()
+			case <-time.After(time.Duration(200*(i+1)) * time.Millisecond):
+			}
+		}
+	}
+	return nil, lastErr
+}
+
 func (s *WildberriesScraper) fetchBasketPrice(ctx context.Context, base string) (float64, error) {
-	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, base+"/price-history.json", nil)
-	req.Header.Set("User-Agent", wbUserAgent)
-	resp, err := s.http.Do(req)
+	resp, err := s.getWithRetry(ctx, base+"/price-history.json")
 	if err != nil {
 		return 0, err
 	}
