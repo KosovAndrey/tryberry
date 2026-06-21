@@ -16,12 +16,13 @@ import (
 )
 
 type Bot struct {
-	api      *tgbotapi.BotAPI
-	log      *slog.Logger
-	userRepo *postgres.UserRepo
-	subRepo  *postgres.SubscriptionRepo
-	prodRepo *postgres.ProductRepo
-	registry *scraper.Registry
+	api       *tgbotapi.BotAPI
+	log       *slog.Logger
+	userRepo  *postgres.UserRepo
+	subRepo   *postgres.SubscriptionRepo
+	prodRepo  *postgres.ProductRepo
+	priceRepo *postgres.PriceHistoryRepo // история цен для подсказки target (может быть nil)
+	registry  *scraper.Registry
 
 	// Поиск-подписки
 	searchQueryRepo *postgres.SearchQueryRepo
@@ -61,6 +62,7 @@ func NewBot(
 	userRepo *postgres.UserRepo,
 	subRepo *postgres.SubscriptionRepo,
 	prodRepo *postgres.ProductRepo,
+	priceRepo *postgres.PriceHistoryRepo,
 	registry *scraper.Registry,
 	searchQueryRepo *postgres.SearchQueryRepo,
 	searchSubRepo *postgres.SearchSubscriptionRepo,
@@ -90,6 +92,7 @@ func NewBot(
 		userRepo:        userRepo,
 		subRepo:         subRepo,
 		prodRepo:        prodRepo,
+		priceRepo:       priceRepo,
 		registry:        registry,
 		searchQueryRepo: searchQueryRepo,
 		searchSubRepo:   searchSubRepo,
@@ -445,6 +448,9 @@ func (b *Bot) handleCallback(ctx context.Context, cb *tgbotapi.CallbackQuery) {
 
 	case strings.HasPrefix(cb.Data, "untrack:"):
 		b.callbackUntrack(ctx, cb)
+
+	case strings.HasPrefix(cb.Data, "ptgt:"):
+		b.handleTrackTargetCallback(ctx, cb)
 
 	case strings.HasPrefix(cb.Data, "ptrack:"):
 		b.handleTrackTriggerCallback(ctx, cb)
