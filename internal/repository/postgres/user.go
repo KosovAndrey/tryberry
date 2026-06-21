@@ -33,8 +33,10 @@ type DigestRecipient struct {
 // тик (чтобы не бластить всех разом). Сортировка по last_digest_at — самые «давние»
 // первыми (NULL раньше всего).
 func (r *UserRepo) UsersDueForDigest(ctx context.Context, before time.Time, limit int) ([]DigestRecipient, error) {
+	// COALESCE: у VK-only юзеров telegram_id = NULL → 0 (deliverer отправит в VK по
+	// notify_channel; в канареечном фильтре по tg_id такой юзер просто не совпадёт).
 	const q = `
-		SELECT u.id, u.telegram_id
+		SELECT u.id, COALESCE(u.telegram_id, 0)
 		FROM users u
 		WHERE (u.last_digest_at IS NULL OR u.last_digest_at < $1)
 		  AND EXISTS (SELECT 1 FROM subscriptions s WHERE s.user_id = u.id AND s.active = TRUE)
