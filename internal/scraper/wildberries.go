@@ -78,20 +78,40 @@ func (s *WildberriesScraper) fetchFromBasket(ctx context.Context, articleID stri
 
 	vol := id / 100000
 	part := id / 1000
-	basket := wbBasketNumber(id)
-	base := fmt.Sprintf("https://basket-%02d.wbbasket.ru/vol%d/part%d/%s/info",
-		basket, vol, part, articleID)
 
-	// Цена — обязательна. Если её нет, товар считаем не найденным.
-	price, err := s.fetchBasketPrice(ctx, base)
-	if err != nil {
-		return nil, fmt.Errorf("basket price: %w", err)
+	// Номер basket-шарда у WB — лукап-таблица, которую они постоянно расширяют; наша
+	// формула wbBasketNumber для высоких vol мажет на ±1-2 (проверено: vol8943 реально
+	// на basket-39, формула даёт 40 → стабильный 404). Поэтому пробуем кандидата и
+	// соседние шарды, пока не найдём цену. Кандидат первым — для известных диапазонов
+	// он точен (1 запрос); пробы соседей включаются только при 404/недоступности.
+	candidate := wbBasketNumber(id)
+	lastErr := error(ErrProductNotFound)
+	for _, basket := range basketCandidates(candidate) {
+		base := fmt.Sprintf("https://basket-%02d.wbbasket.ru/vol%d/part%d/%s/info",
+			basket, vol, part, articleID)
+		price, err := s.fetchBasketPrice(ctx, base)
+		if err == nil {
+			name, imageURL := s.fetchBasketCard(ctx, base, articleID, basket, vol, part)
+			return &Result{Name: name, Price: price, ImageURL: imageURL, InStock: true}, nil
+		}
+		lastErr = err // 404 (не тот шард) / сетевая → пробуем следующий
 	}
+	return nil, fmt.Errorf("basket price: %w", lastErr)
+}
 
-	// Имя и картинка — желательны, но не критичны (best-effort)
-	name, imageURL := s.fetchBasketCard(ctx, base, articleID, basket, vol, part)
-
-	return &Result{Name: name, Price: price, ImageURL: imageURL, InStock: true}, nil
+// basketCandidates — порядок проб номеров шарда вокруг кандидата формулы (она мажет
+// на ±несколько для новых vol). Кандидат первым, затем ближайшие соседи; номера <1
+// отбрасываем. Для старых диапазонов кандидат точен → пробуется один шард.
+func basketCandidates(c int64) []int64 {
+	out := make([]int64, 0, 9)
+	seen := map[int64]bool{}
+	for _, d := range []int64{0, -1, 1, -2, 2, -3, 3, -4, 4} {
+		if b := c + d; b >= 1 && !seen[b] {
+			seen[b] = true
+			out = append(out, b)
+		}
+	}
+	return out
 }
 
 func (s *WildberriesScraper) fetchBasketCard(ctx context.Context, base, articleID string, basket, vol, part int64) (string, string) {
@@ -118,53 +138,10 @@ func (s *WildberriesScraper) fetchBasketCard(ctx context.Context, base, articleI
 	return card.Name, imageURL
 }
 
-// getWithRetry — GET с ретраями ТРАНЗИЕНТНЫХ сбоев. WB basket-CDN глючит двумя
-// способами: (1) рвёт соединение (EOF) и (2) отдаёт НЕПОСТОЯННЫЙ 404 для
-// существующих товаров (рассинхрон эджей кэша — проверено: один и тот же артикул
-// то 200, то 404 между прогонами). Поэтому ретраим И сетевые ошибки/5xx, И 404.
-// Настоящий «товара нет» переживёт все попытки и вернётся 404 (caller → not found),
-// транзиентный 404 на ретрае станет 200. На последней попытке отдаём что есть —
-// статус разбирает caller. 2xx/3xx и прочие 4xx (напр. 403) — окончательны.
-func (s *WildberriesScraper) getWithRetry(ctx context.Context, url string) (*http.Response, error) {
-	const attempts = 4
-	var lastErr error
-	for i := 0; i < attempts; i++ {
-		req, _ := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
-		req.Header.Set("User-Agent", wbUserAgent)
-		if i > 0 {
-			// На ретраях форсируем новое соединение: непостоянный 404 — это рассинхрон
-			// эджей CDN, по keep-alive повтор уйдёт на тот же эдж и снова 404. Свежий
-			// коннект даёт шанс попасть на эдж, где объект есть.
-			req.Close = true
-		}
-		resp, err := s.http.Do(req)
-		switch {
-		case err == nil && resp.StatusCode < 500 && resp.StatusCode != http.StatusNotFound:
-			return resp, nil // окончательный ответ (есть/403/…)
-		case i == attempts-1:
-			// Попытки кончились: сетевую ошибку отдаём как err, иначе отдаём resp
-			// (его статус — 404/5xx — разберёт caller).
-			if err != nil {
-				return nil, err
-			}
-			return resp, nil
-		case err != nil:
-			lastErr = err
-		default:
-			lastErr = fmt.Errorf("status %d", resp.StatusCode)
-			resp.Body.Close()
-		}
-		select {
-		case <-ctx.Done():
-			return nil, ctx.Err()
-		case <-time.After(time.Duration(200*(i+1)) * time.Millisecond):
-		}
-	}
-	return nil, lastErr
-}
-
 func (s *WildberriesScraper) fetchBasketPrice(ctx context.Context, base string) (float64, error) {
-	resp, err := s.getWithRetry(ctx, base+"/price-history.json")
+	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, base+"/price-history.json", nil)
+	req.Header.Set("User-Agent", wbUserAgent)
+	resp, err := s.http.Do(req)
 	if err != nil {
 		return 0, err
 	}
