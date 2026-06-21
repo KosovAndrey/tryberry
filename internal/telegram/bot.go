@@ -184,6 +184,13 @@ func (b *Bot) handleMessage(ctx context.Context, msg *tgbotapi.Message) {
 		return
 	}
 
+	// 1d. Несколько товарных ссылок в одном сообщении → массовое добавление
+	// (одна сводка вместо карточки на каждую). Одиночная ссылка идёт обычным флоу ниже.
+	if prods := b.trackableProductURLs(text); len(prods) >= 2 {
+		b.handleBulkTrack(ctx, msg.Chat.ID, prods, user)
+		return
+	}
+
 	// 2. Поисковая ссылка WB (?search=...) → флоу поиск-подписки.
 	if b.isSearchURL(text) {
 		b.startSearchTrack(ctx, msg.Chat.ID, text, user)
