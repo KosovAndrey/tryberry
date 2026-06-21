@@ -85,6 +85,18 @@ logging.basicConfig(level=getattr(logging, LOG_LEVEL, logging.INFO),
 log = logging.getLogger("ozon-miner")
 
 _FAB_RE = re.compile(r"fab_|incidentId")
+# Признаки СМЕРТИ драйвера/браузера (playwright-транспорт оборвался): дорожка
+# работает на трупе и без пересоздания camoufox будет вечно крутиться в ошибках
+# ('Connection closed while reading from the driver', 'pipe closed by peer',
+# 'Target closed' и т.п.). См. Lane._relaunch.
+_DEAD_RE = re.compile(
+    r"Connection closed|pipe closed|Target (page|frame|browser).*closed|"
+    r"Browser.*closed|has been closed|Target closed|Navigation failed because browser",
+    re.IGNORECASE)
+
+
+def _is_dead(exc) -> bool:
+    return bool(_DEAD_RE.search(str(exc)))
 
 # ── Гистограмма латентности скрейпа (без prometheus_client) ───────────────────
 # Меряет латентность ВНУТРИ сайдкара (in-page fetch + спейсинг + ретраи) по метке
@@ -236,7 +248,9 @@ class Lane:
         self._browser = None
         self._page = None
 
-    async def start(self):
+    async def _launch(self):
+        """Поднять camoufox + страницу + куки (без прогрева). Общий код для
+        первого старта и для пересоздания после смерти драйвера."""
         kw = {"headless": HEADLESS}
         proxy = _parse_proxy(self.proxy)
         if proxy:
@@ -253,8 +267,26 @@ class Lane:
             self._browser = await self._cam.__aenter__()
         self._page = await self._browser.new_page()
         await _add_cookies_safe(self._page.context, _cookie_jar(self.cookie))
+
+    async def start(self):
+        await self._launch()
         self._last_rotate = time.monotonic()
         await self.warm()
+
+    async def _relaunch(self) -> bool:
+        """Пересоздать camoufox после смерти драйвера/браузера. Без этого дорожка
+        вечно крутится на трупе страницы (warm() лишь ре-навигирует мёртвый _page).
+        Возвращает True, если новый браузер поднялся."""
+        log.warning("дорожка %d: драйвер мёртв — пересоздаю браузер", self.idx)
+        await self.close()
+        self._cam = self._browser = self._page = None
+        try:
+            await self._launch()
+            return True
+        except Exception as e:  # noqa: BLE001
+            log.error("дорожка %d: пересоздание браузера упало: %s",
+                      self.idx, str(e).splitlines()[0])
+            return False
 
     async def warm(self):
         """Навигация на карточку + ожидание, что FAB пройден (тестовый fetch=200).
@@ -266,6 +298,14 @@ class Lane:
         except Exception as e:  # noqa: BLE001
             log.warning("дорожка %d: навигация прогрева: %s",
                         self.idx, str(e).splitlines()[0])
+            # Драйвер мёртв → пересоздать браузер и повторить навигацию один раз.
+            if _is_dead(e) and await self._relaunch():
+                try:
+                    await self._page.goto(WARM_URL, wait_until="domcontentloaded",
+                                          timeout=int(NAV_TIMEOUT_S * 1000))
+                except Exception as e2:  # noqa: BLE001
+                    log.warning("дорожка %d: навигация после пересоздания: %s",
+                                self.idx, str(e2).splitlines()[0])
         self.egress_ip = await self._egress_ip()
         log.info("дорожка %d: навигация ок (egress=%s), жду прохождения FAB…",
                  self.idx, self.egress_ip or "?")
@@ -282,7 +322,13 @@ class Lane:
                          self.idx, self.egress_ip or "?")
                 return
             await self._nudge()
-            await self._page.wait_for_timeout(3000)
+            # Не голый wait_for_timeout: на мёртвом драйвере он бросал исключение
+            # ВВЕРХ из warm() (до строк healthy=False/backoff ниже) — дорожка
+            # застревала healthy=True на трупе. Фолбэк на asyncio.sleep.
+            try:
+                await self._page.wait_for_timeout(3000)
+            except Exception:  # noqa: BLE001
+                await asyncio.sleep(3)
         # не прогрелась — backoff, чтобы не долбить FAB (это и жжёт IP)
         self.healthy = False
         self._warm_fails += 1
