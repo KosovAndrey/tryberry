@@ -97,6 +97,26 @@ func run(log *slog.Logger) error {
 	}
 	log.Info("partitions ok")
 
+	// Периодически до-создаём партиции: EnsurePartitions на старте покрывает +2 мес,
+	// но при длинном аптайме (>2 мес без рестарта) партиция нового месяца не появится
+	// и INSERT в price_history упадёт. Суточный тик держит окно открытым.
+	go func() {
+		t := time.NewTicker(24 * time.Hour)
+		defer t.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-t.C:
+				if err := pm.EnsurePartitions(ctx, 2); err != nil {
+					log.Error("ensure partitions (periodic)", "err", err)
+				} else {
+					log.Info("partitions ensured (periodic)")
+				}
+			}
+		}
+	}()
+
 	go health.RunServer(ctx, log, pool, redisClient, "8090")
 
 	// ── Репозитории ──────────────────────────────────────────────────────────

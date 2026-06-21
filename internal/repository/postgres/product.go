@@ -19,6 +19,57 @@ func NewProductRepo(db *pgxpool.Pool) *ProductRepo {
 	return &ProductRepo{db: db}
 }
 
+// ProductUpsert — одна строка для батч-апсерта товаров.
+type ProductUpsert struct {
+	URL, Name, ImageURL, Marketplace string
+}
+
+// UpsertBatch апсертит много товаров за ОДИН round-trip (pgx.Batch) и возвращает
+// id по URL. Для поиск-выдачи (сотни item'ов на скрейп) — вместо N отдельных
+// Upsert. Дубли URL во входе схлопываются (один queue на URL).
+func (r *ProductRepo) UpsertBatch(ctx context.Context, items []ProductUpsert) (map[string]int64, error) {
+	out := make(map[string]int64, len(items))
+	if len(items) == 0 {
+		return out, nil
+	}
+	// дедуп по URL: последний выигрывает (свежие name/image)
+	uniq := make(map[string]ProductUpsert, len(items))
+	order := make([]string, 0, len(items))
+	for _, it := range items {
+		if _, ok := uniq[it.URL]; !ok {
+			order = append(order, it.URL)
+		}
+		uniq[it.URL] = it
+	}
+
+	const q = `
+		INSERT INTO products (url, name, image_url, marketplace)
+		VALUES ($1, $2, $3, $4)
+		ON CONFLICT (url) DO UPDATE
+			SET name        = EXCLUDED.name,
+			    image_url   = EXCLUDED.image_url,
+			    marketplace = EXCLUDED.marketplace,
+			    updated_at  = NOW()
+		RETURNING id, url`
+
+	b := &pgx.Batch{}
+	for _, u := range order {
+		it := uniq[u]
+		b.Queue(q, it.URL, it.Name, it.ImageURL, it.Marketplace)
+	}
+	br := r.db.SendBatch(ctx, b)
+	defer br.Close()
+	for range order {
+		var id int64
+		var url string
+		if err := br.QueryRow().Scan(&id, &url); err != nil {
+			return nil, err
+		}
+		out[url] = id
+	}
+	return out, nil
+}
+
 func (r *ProductRepo) Upsert(ctx context.Context, url, name, imageURL, marketplace string) (*domain.Product, error) {
 	const q = `
 		INSERT INTO products (url, name, image_url, marketplace)
