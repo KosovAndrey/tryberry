@@ -3,6 +3,7 @@ package postgres
 import (
 	"context"
 
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"gitlab.com/KosovAndrey/tryberrybot/internal/domain"
@@ -43,6 +44,50 @@ func (r *SearchResultRepo) Upsert(ctx context.Context, queryID, productID int64,
 		return false, err
 	}
 	return isNew, nil
+}
+
+// ResultUpsert — одна строка выдачи для батч-апсерта.
+type ResultUpsert struct {
+	ProductID int64
+	Position  int
+	Price     float64
+}
+
+// UpsertBatch апсертит всю выдачу запроса за ОДИН round-trip (pgx.Batch). Вместо N
+// отдельных Upsert на скрейп (сотни item'ов, особенно reseller 1-мин).
+//
+// NO-OP SUPPRESSION + HEARTBEAT: строку перезаписываем только если цена/позиция
+// изменились ЛИБО last_seen_at устарел (>1ч). Так режем MVCC-чёрн (на стабильной
+// выдаче почти ничего не пишется), но liveness сохраняем — last_seen_at у
+// присутствующих товаров обновляется минимум раз в час (для будущей TTL-чистки
+// выпавших товаров). isNew не возвращаем — в searchloop он не используется.
+func (r *SearchResultRepo) UpsertBatch(ctx context.Context, queryID int64, rows []ResultUpsert) error {
+	if len(rows) == 0 {
+		return nil
+	}
+	const q = `
+		INSERT INTO search_results (search_query_id, product_id, position, last_price)
+		VALUES ($1, $2, $3, $4)
+		ON CONFLICT (search_query_id, product_id) DO UPDATE
+			SET position     = EXCLUDED.position,
+			    last_price   = EXCLUDED.last_price,
+			    last_seen_at = NOW()
+		WHERE search_results.last_price   IS DISTINCT FROM EXCLUDED.last_price
+		   OR search_results.position     IS DISTINCT FROM EXCLUDED.position
+		   OR search_results.last_seen_at <  NOW() - INTERVAL '1 hour'`
+
+	b := &pgx.Batch{}
+	for _, row := range rows {
+		b.Queue(q, queryID, row.ProductID, row.Position, row.Price)
+	}
+	br := r.db.SendBatch(ctx, b)
+	defer br.Close()
+	for range rows {
+		if _, err := br.Exec(); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // GetByQueryID — текущая выдача запроса, по позиции.
