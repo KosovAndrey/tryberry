@@ -46,7 +46,7 @@ func (n *Notifier) SendPriceAlert(ctx context.Context, a PriceAlert) error {
 	var caption string
 	if a.BackInStock {
 		caption = fmt.Sprintf(
-			"🔔 Снова в наличии!\n\n%s\n\nЦена: %.0f ₽\n\n%s",
+			"🔔 Снова в наличии!\n\n%s\n\nЦена: %.0f ₽\nТеперь слежу за снижением цены (поменять — /list)\n\n%s",
 			a.ProductName, a.NewPrice, a.ProductURL,
 		)
 	} else {

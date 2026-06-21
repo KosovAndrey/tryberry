@@ -628,6 +628,18 @@ func makeHandler(
 				return fmt.Errorf("update baseline: %w", err)
 			}
 
+			// Товар вернулся в наличии: дальше следим за ЦЕНОЙ — переключаем триггер на
+			// any_drop (baseline уже = цена возврата). Иначе подписка осталась бы «жду
+			// наличия» и ничего не делала, пока товар в продаже, а /list врал бы.
+			// SetTrigger не трогает baseline/notified — they уже выставлены выше.
+			if backInStock {
+				if err := subRepo.SetTrigger(ctx, sub.ID, sub.UserID, string(domain.TriggerAnyDrop), nil, nil); err != nil {
+					log.Warn("back_in_stock: switch to any_drop", "sub_id", sub.ID, "err", err)
+				} else {
+					log.Info("back_in_stock: switched to any_drop", "sub_id", sub.ID)
+				}
+			}
+
 			// Записываем в notifications (idempotency)
 			if err := notifRepo.Insert(ctx, &domain.Notification{
 				SubscriptionID: sub.ID,

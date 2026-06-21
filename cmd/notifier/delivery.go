@@ -189,7 +189,7 @@ func (d *deliverer) SendReferralRewardNotice(ctx context.Context, userID int64, 
 
 func vkPriceText(a telegram.PriceAlert) string {
 	if a.BackInStock {
-		return fmt.Sprintf("🔔 Снова в наличии!\n\n%s\n\nЦена: %.0f ₽\n\n%s",
+		return fmt.Sprintf("🔔 Снова в наличии!\n\n%s\n\nЦена: %.0f ₽\nТеперь слежу за снижением цены (поменять — /list)\n\n%s",
 			a.ProductName, a.NewPrice, a.ProductURL)
 	}
 	diff := a.OldPrice - a.NewPrice
