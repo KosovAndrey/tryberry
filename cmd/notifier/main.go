@@ -133,12 +133,22 @@ func run(log *slog.Logger) error {
 	// Персональный дайджест «твои товары сейчас» (еженедельно). Гейт DIGEST_ENABLED —
 	// фича шлёт сообщения ВСЕМ юзерам, поэтому включается осознанно (по умолчанию выкл).
 	if os.Getenv("DIGEST_ENABLED") == "true" {
+		// Тест: снизить возрастной гейт (свежие товары попадут в дайджест). В проде не задавать.
+		if v := getEnvInt("DIGEST_MIN_AGE_DAYS", -1); v >= 0 {
+			domain.SetHonestMinAge(time.Duration(v) * 24 * time.Hour)
+			log.Info("digest: honest min age overridden", "days", v)
+		}
+		onlyTG := parseTGIDs(os.Getenv("DIGEST_TEST_TG_IDS"))
+		if len(onlyTG) > 0 {
+			log.Info("digest: canary mode — only listed telegram ids", "count", len(onlyTG))
+		}
 		go runDigest(ctx, log, userRepo, subRepo, priceHistoryRepo, sender, digestConfig{
 			intervalDays: getEnvInt("DIGEST_INTERVAL_DAYS", 7),
 			batch:        getEnvInt("DIGEST_BATCH", 100),
 			startHour:    getEnvInt("DIGEST_HOUR_START", 6),    // UTC; 06–18 = 09–21 МСК
 			endHour:      getEnvInt("DIGEST_HOUR_END", 18),     // для теста: 0..24 = без окна
 			tickMinutes:  getEnvInt("DIGEST_TICK_MINUTES", 60), // для теста можно 1
+			onlyTG:       onlyTG,                               // DIGEST_TEST_TG_IDS — рассылать только себе
 		})
 	} else {
 		log.Info("digest disabled (set DIGEST_ENABLED=true to enable)")
@@ -718,11 +728,12 @@ func makeSearchHandler(
 
 // digestConfig — параметры дайджеста (все из env, с дефолтами).
 type digestConfig struct {
-	intervalDays int // каданс на юзера
-	batch        int // юзеров на тик
-	startHour    int // начало дневного окна, UTC (вкл.)
-	endHour      int // конец дневного окна, UTC (искл.); startHour..endHour
-	tickMinutes  int // период проверки
+	intervalDays int            // каданс на юзера
+	batch        int            // юзеров на тик
+	startHour    int            // начало дневного окна, UTC (вкл.)
+	endHour      int            // конец дневного окна, UTC (искл.); startHour..endHour
+	tickMinutes  int            // период проверки
+	onlyTG       map[int64]bool // непусто → шлём ТОЛЬКО этим telegram_id (канареечный тест)
 }
 
 // runDigest — персональный дайджест «хорошие цены сейчас». Тик каждые tickMinutes;
@@ -744,16 +755,16 @@ func runDigest(ctx context.Context, log *slog.Logger, userRepo *postgres.UserRep
 			if h := time.Now().UTC().Hour(); h < cfg.startHour || h >= cfg.endHour {
 				continue // вне дневного окна — не беспокоим
 			}
-			digestSweep(ctx, log, userRepo, subRepo, priceRepo, sender, cfg.intervalDays, cfg.batch)
+			digestSweep(ctx, log, userRepo, subRepo, priceRepo, sender, cfg)
 		}
 	}
 }
 
 func digestSweep(ctx context.Context, log *slog.Logger, userRepo *postgres.UserRepo,
 	subRepo *postgres.SubscriptionRepo, priceRepo *postgres.PriceHistoryRepo,
-	sender alertSender, intervalDays, batch int) {
-	before := time.Now().Add(-time.Duration(intervalDays) * 24 * time.Hour)
-	recipients, err := userRepo.UsersDueForDigest(ctx, before, batch)
+	sender alertSender, cfg digestConfig) {
+	before := time.Now().Add(-time.Duration(cfg.intervalDays) * 24 * time.Hour)
+	recipients, err := userRepo.UsersDueForDigest(ctx, before, cfg.batch)
 	if err != nil {
 		log.Error("digest: list due", "err", err)
 		return
@@ -765,6 +776,11 @@ func digestSweep(ctx context.Context, log *slog.Logger, userRepo *postgres.UserR
 	for _, r := range recipients {
 		if ctx.Err() != nil {
 			return
+		}
+		// Канареечный тест: шлём только указанным TG, остальных НЕ трогаем (их
+		// last_digest_at не двигаем → останутся due для боевой рассылки).
+		if len(cfg.onlyTG) > 0 && !cfg.onlyTG[r.TelegramID] {
+			continue
 		}
 		if text, ok := buildDigest(ctx, log, subRepo, priceRepo, r.UserID); ok {
 			if err := sender.SendDigest(ctx, r.UserID, r.TelegramID, text); err != nil {
@@ -839,6 +855,22 @@ func clipRunes(s string, max int) string {
 		return s
 	}
 	return string(r[:max]) + "…"
+}
+
+// parseTGIDs парсит "111,222" в множество telegram_id (для DIGEST_TEST_TG_IDS).
+// Пусто → nil (фильтра нет, шлём всем).
+func parseTGIDs(s string) map[int64]bool {
+	s = strings.TrimSpace(s)
+	if s == "" {
+		return nil
+	}
+	out := make(map[int64]bool)
+	for _, p := range strings.Split(s, ",") {
+		if id, err := strconv.ParseInt(strings.TrimSpace(p), 10, 64); err == nil {
+			out[id] = true
+		}
+	}
+	return out
 }
 
 func getEnvInt(key string, fallback int) int {

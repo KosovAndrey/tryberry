@@ -407,6 +407,10 @@ services:
       DIGEST_HOUR_START: "${DIGEST_HOUR_START:-6}"
       DIGEST_HOUR_END: "${DIGEST_HOUR_END:-18}"
       DIGEST_TICK_MINUTES: "${DIGEST_TICK_MINUTES:-60}"
+      # Канарейка: DIGEST_TEST_TG_IDS=<твой_tg_id> — слать дайджест ТОЛЬКО себе.
+      # DIGEST_MIN_AGE_DAYS=0 — снять 7-дн. гейт (свежие товары попадут). В проде не задавать.
+      DIGEST_TEST_TG_IDS: "${DIGEST_TEST_TG_IDS:-}"
+      DIGEST_MIN_AGE_DAYS: "${DIGEST_MIN_AGE_DAYS:--1}"
     depends_on:
       postgres:
         condition: service_healthy

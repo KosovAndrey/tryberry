@@ -30,7 +30,12 @@ type PriceStats struct {
 // change-only хранении число записей НЕ показатель достаточности (стабильный товар
 // может иметь 1 запись на 40 дней), поэтому гейтим по ВОЗРАСТУ наблюдения, а не по
 // количеству точек. История есть только с момента, как МЫ начали трекать товар.
-const honestMinAge = 7 * 24 * time.Hour
+// var (не const) — чтобы можно было снизить для канареечного теста дайджеста
+// (DIGEST_MIN_AGE_DAYS=0); в проде 7 дней.
+var honestMinAge = 7 * 24 * time.Hour
+
+// SetHonestMinAge переопределяет порог достаточности (для теста). 0 → выводы сразу.
+func SetHonestMinAge(d time.Duration) { honestMinAge = d }
 
 type PriceVerdict int
 
