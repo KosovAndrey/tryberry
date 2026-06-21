@@ -133,8 +133,13 @@ func run(log *slog.Logger) error {
 	// Персональный дайджест «твои товары сейчас» (еженедельно). Гейт DIGEST_ENABLED —
 	// фича шлёт сообщения ВСЕМ юзерам, поэтому включается осознанно (по умолчанию выкл).
 	if os.Getenv("DIGEST_ENABLED") == "true" {
-		go runDigest(ctx, log, userRepo, subRepo, priceHistoryRepo, sender,
-			getEnvInt("DIGEST_INTERVAL_DAYS", 7), getEnvInt("DIGEST_BATCH", 100))
+		go runDigest(ctx, log, userRepo, subRepo, priceHistoryRepo, sender, digestConfig{
+			intervalDays: getEnvInt("DIGEST_INTERVAL_DAYS", 7),
+			batch:        getEnvInt("DIGEST_BATCH", 100),
+			startHour:    getEnvInt("DIGEST_HOUR_START", 6),    // UTC; 06–18 = 09–21 МСК
+			endHour:      getEnvInt("DIGEST_HOUR_END", 18),     // для теста: 0..24 = без окна
+			tickMinutes:  getEnvInt("DIGEST_TICK_MINUTES", 60), // для теста можно 1
+		})
 	} else {
 		log.Info("digest disabled (set DIGEST_ENABLED=true to enable)")
 	}
@@ -711,25 +716,35 @@ func makeSearchHandler(
 	}
 }
 
-// runDigest — еженедельный персональный дайджест «хорошие цены сейчас». Тик раз в
-// час; шлём только в дневном окне 06–18 UTC (09–21 МСК), пачками (batch), и только
-// тем, у кого есть что показать. Каданс держим last_digest_at (двигаем для каждого
-// обработанного, даже если слать было нечего — иначе сканировали бы каждый час).
+// digestConfig — параметры дайджеста (все из env, с дефолтами).
+type digestConfig struct {
+	intervalDays int // каданс на юзера
+	batch        int // юзеров на тик
+	startHour    int // начало дневного окна, UTC (вкл.)
+	endHour      int // конец дневного окна, UTC (искл.); startHour..endHour
+	tickMinutes  int // период проверки
+}
+
+// runDigest — персональный дайджест «хорошие цены сейчас». Тик каждые tickMinutes;
+// шлём только в дневном окне [startHour, endHour) UTC, пачками (batch), и только тем,
+// у кого есть что показать. Каданс держим last_digest_at (двигаем для каждого
+// обработанного, даже если слать было нечего — иначе сканировали бы каждый тик).
 func runDigest(ctx context.Context, log *slog.Logger, userRepo *postgres.UserRepo,
 	subRepo *postgres.SubscriptionRepo, priceRepo *postgres.PriceHistoryRepo,
-	sender alertSender, intervalDays, batch int) {
-	log.Info("digest started", "interval_days", intervalDays, "batch", batch)
-	ticker := time.NewTicker(1 * time.Hour)
+	sender alertSender, cfg digestConfig) {
+	log.Info("digest started", "interval_days", cfg.intervalDays, "batch", cfg.batch,
+		"window_utc", fmt.Sprintf("%d-%d", cfg.startHour, cfg.endHour), "tick_min", cfg.tickMinutes)
+	ticker := time.NewTicker(time.Duration(cfg.tickMinutes) * time.Minute)
 	defer ticker.Stop()
 	for {
 		select {
 		case <-ctx.Done():
 			return
 		case <-ticker.C:
-			if h := time.Now().UTC().Hour(); h < 6 || h >= 18 {
+			if h := time.Now().UTC().Hour(); h < cfg.startHour || h >= cfg.endHour {
 				continue // вне дневного окна — не беспокоим
 			}
-			digestSweep(ctx, log, userRepo, subRepo, priceRepo, sender, intervalDays, batch)
+			digestSweep(ctx, log, userRepo, subRepo, priceRepo, sender, cfg.intervalDays, cfg.batch)
 		}
 	}
 }

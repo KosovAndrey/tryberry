@@ -402,6 +402,11 @@ services:
       DIGEST_ENABLED: "${DIGEST_ENABLED:-false}"
       DIGEST_INTERVAL_DAYS: "${DIGEST_INTERVAL_DAYS:-7}"
       DIGEST_BATCH: "${DIGEST_BATCH:-100}"
+      # Дневное окно рассылки (UTC) и период тика. Для теста «сейчас»: окно 0..24 +
+      # тик 1 мин (увидишь свой дайджест в течение минуты), потом верни 6/18/60.
+      DIGEST_HOUR_START: "${DIGEST_HOUR_START:-6}"
+      DIGEST_HOUR_END: "${DIGEST_HOUR_END:-18}"
+      DIGEST_TICK_MINUTES: "${DIGEST_TICK_MINUTES:-60}"
     depends_on:
       postgres:
         condition: service_healthy
