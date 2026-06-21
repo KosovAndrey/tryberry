@@ -61,14 +61,17 @@ type bulkItemResult struct {
 func (b *Bot) trackOne(ctx context.Context, user *domain.User, rawURL string, tracked map[int64]bool, count int, plan domain.Plan) bulkItemResult {
 	s, err := b.registry.FindByURL(rawURL)
 	if err != nil {
+		b.log.Warn("bulk: url not recognized", "url", rawURL, "err", err)
 		return bulkItemResult{outcome: bulkFailed}
 	}
 	result, _, err := b.registry.Scrape(ctx, rawURL)
 	if err != nil {
+		b.log.Warn("bulk: scrape failed", "url", rawURL, "marketplace", s.Marketplace(), "err", err)
 		return bulkItemResult{outcome: bulkFailed}
 	}
 	product, err := b.prodRepo.Upsert(ctx, rawURL, result.Name, result.ImageURL, string(s.Marketplace()))
 	if err != nil {
+		b.log.Warn("bulk: upsert product failed", "url", rawURL, "err", err)
 		return bulkItemResult{outcome: bulkFailed}
 	}
 	// Уже отслеживаемый товар лимит не расходует (это обновление, не новая подписка).
@@ -82,6 +85,7 @@ func (b *Bot) trackOne(ctx context.Context, user *domain.User, rawURL string, tr
 		}
 		_, created, err := b.subRepo.UpsertOutOfStock(ctx, user.ID, product.ID, result.Price)
 		if err != nil {
+			b.log.Warn("bulk: upsert oos sub failed", "url", rawURL, "err", err)
 			return bulkItemResult{outcome: bulkFailed}
 		}
 		return bulkItemResult{outcome: outcomeFor(created), name: result.Name, productID: product.ID}
@@ -89,6 +93,7 @@ func (b *Bot) trackOne(ctx context.Context, user *domain.User, rawURL string, tr
 
 	_, created, err := b.subRepo.Upsert(ctx, user.ID, product.ID, result.Price)
 	if err != nil {
+		b.log.Warn("bulk: upsert sub failed", "url", rawURL, "err", err)
 		return bulkItemResult{outcome: bulkFailed}
 	}
 	return bulkItemResult{outcome: outcomeFor(created), name: result.Name, productID: product.ID}
