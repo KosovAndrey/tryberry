@@ -397,6 +397,11 @@ services:
       NO_PROXY: "postgres,redis,kafka,jaeger,localhost,127.0.0.1,api.vk.com"
       # VK-доставка уведомлений (пусто = выключено, всё идёт в Telegram).
       VK_GROUP_TOKEN: "${VK_GROUP_TOKEN:-}"
+      # Еженедельный дайджест «хорошие цены сейчас». Выкл по умолчанию (шлёт всем
+      # юзерам — включать осознанно). DIGEST_BATCH — юзеров на тик (раз в час).
+      DIGEST_ENABLED: "${DIGEST_ENABLED:-false}"
+      DIGEST_INTERVAL_DAYS: "${DIGEST_INTERVAL_DAYS:-7}"
+      DIGEST_BATCH: "${DIGEST_BATCH:-100}"
     depends_on:
       postgres:
         condition: service_healthy
