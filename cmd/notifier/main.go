@@ -130,6 +130,15 @@ func run(log *slog.Logger) error {
 	reconcileInterval := time.Duration(getEnvInt("PLAN_RECONCILE_INTERVAL_MINUTES", 15)) * time.Minute
 	go runPlanReconciler(ctx, log, searchSubRepo, subRepo, userRepo, referralRepo, sender, reconcileInterval)
 
+	// Персональный дайджест «твои товары сейчас» (еженедельно). Гейт DIGEST_ENABLED —
+	// фича шлёт сообщения ВСЕМ юзерам, поэтому включается осознанно (по умолчанию выкл).
+	if os.Getenv("DIGEST_ENABLED") == "true" {
+		go runDigest(ctx, log, userRepo, subRepo, priceHistoryRepo, sender,
+			getEnvInt("DIGEST_INTERVAL_DAYS", 7), getEnvInt("DIGEST_BATCH", 100))
+	} else {
+		log.Info("digest disabled (set DIGEST_ENABLED=true to enable)")
+	}
+
 	// Дефолт-фолбэк интервала проверки для тарифов без своего Interval.
 	defaultInterval := time.Duration(getEnvInt("SCRAPE_INTERVAL_MINUTES", 15)) * time.Minute
 	handler := makeHandler(log, subRepo, notifRepo, priceHistoryRepo, priceCache, sender, defaultInterval)
@@ -437,6 +446,7 @@ func shouldEvaluate(lastEval *time.Time, interval time.Duration, now time.Time) 
 type alertSender interface {
 	SendPriceAlert(ctx context.Context, a telegram.PriceAlert) error
 	SendSearchAlert(ctx context.Context, a telegram.SearchAlert) error
+	SendDigest(ctx context.Context, userID, telegramID int64, text string) error
 }
 
 func makeHandler(
@@ -699,6 +709,121 @@ func makeSearchHandler(
 			"sub_id", ev.SubID, "telegram_id", ev.TelegramID, "items", len(alert.Items), "total_hits", total)
 		return nil
 	}
+}
+
+// runDigest — еженедельный персональный дайджест «хорошие цены сейчас». Тик раз в
+// час; шлём только в дневном окне 06–18 UTC (09–21 МСК), пачками (batch), и только
+// тем, у кого есть что показать. Каданс держим last_digest_at (двигаем для каждого
+// обработанного, даже если слать было нечего — иначе сканировали бы каждый час).
+func runDigest(ctx context.Context, log *slog.Logger, userRepo *postgres.UserRepo,
+	subRepo *postgres.SubscriptionRepo, priceRepo *postgres.PriceHistoryRepo,
+	sender alertSender, intervalDays, batch int) {
+	log.Info("digest started", "interval_days", intervalDays, "batch", batch)
+	ticker := time.NewTicker(1 * time.Hour)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			if h := time.Now().UTC().Hour(); h < 6 || h >= 18 {
+				continue // вне дневного окна — не беспокоим
+			}
+			digestSweep(ctx, log, userRepo, subRepo, priceRepo, sender, intervalDays, batch)
+		}
+	}
+}
+
+func digestSweep(ctx context.Context, log *slog.Logger, userRepo *postgres.UserRepo,
+	subRepo *postgres.SubscriptionRepo, priceRepo *postgres.PriceHistoryRepo,
+	sender alertSender, intervalDays, batch int) {
+	before := time.Now().Add(-time.Duration(intervalDays) * 24 * time.Hour)
+	recipients, err := userRepo.UsersDueForDigest(ctx, before, batch)
+	if err != nil {
+		log.Error("digest: list due", "err", err)
+		return
+	}
+	if len(recipients) == 0 {
+		return
+	}
+	sent := 0
+	for _, r := range recipients {
+		if ctx.Err() != nil {
+			return
+		}
+		if text, ok := buildDigest(ctx, log, subRepo, priceRepo, r.UserID); ok {
+			if err := sender.SendDigest(ctx, r.UserID, r.TelegramID, text); err != nil {
+				log.Warn("digest: send", "user_id", r.UserID, "err", err)
+			} else {
+				sent++
+			}
+		}
+		// Чек-поинт двигаем независимо от факта отправки — каданс недельный, без
+		// ретрай-шторма (неотправленный дайджест не критичен, дождётся следующего).
+		if err := userRepo.MarkDigestSent(ctx, r.UserID, time.Now()); err != nil {
+			log.Warn("digest: mark", "user_id", r.UserID, "err", err)
+		}
+	}
+	log.Info("digest sweep done", "due", len(recipients), "sent", sent)
+}
+
+// buildDigest собирает текст дайджеста: товары пользователя, которые СЕЙЧАС по
+// честно хорошей цене (вердикт 🟢 минимум за 30/90д/всё время). Пусто (ok=false),
+// если показывать нечего — тогда дайджест не шлём (без спама «ничего нет»).
+func buildDigest(ctx context.Context, log *slog.Logger, subRepo *postgres.SubscriptionRepo,
+	priceRepo *postgres.PriceHistoryRepo, userID int64) (string, bool) {
+	subs, err := subRepo.GetActiveByUserID(ctx, userID)
+	if err != nil {
+		log.Warn("digest: load subs", "user_id", userID, "err", err)
+		return "", false
+	}
+	if len(subs) == 0 {
+		return "", false
+	}
+	now := time.Now()
+	type deal struct {
+		name, url, verdict string
+		price              float64
+	}
+	var deals []deal
+	for _, s := range subs {
+		if s.CurrentPrice <= 0 {
+			continue
+		}
+		stats, err := priceRepo.Stats(ctx, s.ProductID, now)
+		if err != nil {
+			continue
+		}
+		hp := domain.AssessHonestPrice(s.CurrentPrice, stats, now)
+		switch hp.Verdict {
+		case domain.VerdictLowestEver, domain.VerdictLowest90, domain.VerdictLowest30:
+			deals = append(deals, deal{name: s.ProductName, url: s.ProductURL, verdict: hp.Line(), price: s.CurrentPrice})
+		}
+	}
+	if len(deals) == 0 {
+		return "", false
+	}
+
+	var sb strings.Builder
+	fmt.Fprintf(&sb, "🟢 Хорошие цены сейчас — %d из %d твоих товаров:\n\n", len(deals), len(subs))
+	const showN = 10
+	for i, d := range deals {
+		if i >= showN {
+			fmt.Fprintf(&sb, "…и ещё %d\n", len(deals)-showN)
+			break
+		}
+		fmt.Fprintf(&sb, "%s — %.0f ₽\n%s\n%s\n\n", clipRunes(d.name, 60), d.price, d.verdict, d.url)
+	}
+	sb.WriteString("Тип уведомлений — в /list · больше слотов — /plans")
+	return sb.String(), true
+}
+
+func clipRunes(s string, max int) string {
+	r := []rune(s)
+	if len(r) <= max {
+		return s
+	}
+	return string(r[:max]) + "…"
 }
 
 func getEnvInt(key string, fallback int) int {
