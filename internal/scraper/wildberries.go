@@ -118,33 +118,46 @@ func (s *WildberriesScraper) fetchBasketCard(ctx context.Context, base, articleI
 	return card.Name, imageURL
 }
 
-// getWithRetry — GET с ретраями ТРАНЗИЕНТНЫХ сбоев (сетевые ошибки/EOF, 5xx). WB
-// basket-CDN изредка рвёт соединение (EOF) — один-два ретрая убирают ложные «не
-// удалось», особенно в bulk, где нет ручного повтора. 404/2xx — окончательный ответ
-// (товара нет / есть), не ретраим. (Несуществующий шард — напр. трансгран. Ali не в
-// баскетах — даст устойчивую сетевую ошибку и честно вернётся после ретраев.)
+// getWithRetry — GET с ретраями ТРАНЗИЕНТНЫХ сбоев. WB basket-CDN глючит двумя
+// способами: (1) рвёт соединение (EOF) и (2) отдаёт НЕПОСТОЯННЫЙ 404 для
+// существующих товаров (рассинхрон эджей кэша — проверено: один и тот же артикул
+// то 200, то 404 между прогонами). Поэтому ретраим И сетевые ошибки/5xx, И 404.
+// Настоящий «товара нет» переживёт все попытки и вернётся 404 (caller → not found),
+// транзиентный 404 на ретрае станет 200. На последней попытке отдаём что есть —
+// статус разбирает caller. 2xx/3xx и прочие 4xx (напр. 403) — окончательны.
 func (s *WildberriesScraper) getWithRetry(ctx context.Context, url string) (*http.Response, error) {
-	const attempts = 3
+	const attempts = 4
 	var lastErr error
 	for i := 0; i < attempts; i++ {
 		req, _ := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 		req.Header.Set("User-Agent", wbUserAgent)
+		if i > 0 {
+			// На ретраях форсируем новое соединение: непостоянный 404 — это рассинхрон
+			// эджей CDN, по keep-alive повтор уйдёт на тот же эдж и снова 404. Свежий
+			// коннект даёт шанс попасть на эдж, где объект есть.
+			req.Close = true
+		}
 		resp, err := s.http.Do(req)
 		switch {
+		case err == nil && resp.StatusCode < 500 && resp.StatusCode != http.StatusNotFound:
+			return resp, nil // окончательный ответ (есть/403/…)
+		case i == attempts-1:
+			// Попытки кончились: сетевую ошибку отдаём как err, иначе отдаём resp
+			// (его статус — 404/5xx — разберёт caller).
+			if err != nil {
+				return nil, err
+			}
+			return resp, nil
 		case err != nil:
 			lastErr = err
-		case resp.StatusCode >= 500:
+		default:
 			lastErr = fmt.Errorf("status %d", resp.StatusCode)
 			resp.Body.Close()
-		default:
-			return resp, nil // 2xx/3xx/4xx — окончательный ответ
 		}
-		if i < attempts-1 {
-			select {
-			case <-ctx.Done():
-				return nil, ctx.Err()
-			case <-time.After(time.Duration(200*(i+1)) * time.Millisecond):
-			}
+		select {
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		case <-time.After(time.Duration(200*(i+1)) * time.Millisecond):
 		}
 	}
 	return nil, lastErr
