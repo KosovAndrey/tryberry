@@ -225,6 +225,18 @@ var (
 		[]string{"outcome"},
 	)
 
+	// WBPriceSource — каким источником взята цена WB-карточки. ucard — основной
+	// (u-card.wb.ru, real-time, без перебора баскетов, видит трансграничные);
+	// basket — fallback на basket-CDN price-history (u-card не ответил).
+	WBPriceSource = promauto.NewCounterVec(
+		prometheus.CounterOpts{
+			Namespace: namespace,
+			Name:      "wb_price_source_total",
+			Help:      "Which source served the WB product price",
+		},
+		[]string{"source"},
+	)
+
 	// MaxActiveSubsPerUser — максимум активных товарных подписок у одного юзера.
 	// Сигнал «пора делать бандлинг алертов»: пока мало (единицы) — пачек уведомлений
 	// за цикл почти нет; когда вырастет (~15+) или появятся reseller-юзеры — за цикл

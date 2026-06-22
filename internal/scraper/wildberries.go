@@ -60,17 +60,17 @@ func ExtractArticleID(url string) (string, error) {
 	return m[1], nil
 }
 
-// Scrape получает данные о товаре напрямую из basket CDN Wildberries.
+// Scrape получает данные о товаре Wildberries.
 //
-// Раньше код сначала дёргал card.wb.ru/cards/{v1,v2}/detail — но эти endpoint'ы
-// отдают 404 (API мёртв/изменился), и backoff крутил их по 3 раза каждый перед
-// fallback на basket → ~5s впустую на каждом скрейпе. Теперь basket — основной
-// и единственный путь: он быстрый (<1s), детерминированный (URL вычисляется из
-// article_id) и стабильный.
+// Основной источник — u-card.wb.ru/cards/v4/list (открытый, без токена): даёт
+// REAL-TIME цену (поле price.product), не требует перебора basket-шардов и видит
+// трансграничные товары («Находки из Китая»), которых нет в basket-CDN.
 //
-// Примечание: цена берётся из price-history.json (последняя запись). Она может
-// отставать от реальной цены на сайте на несколько часов — это компромисс,
-// т.к. real-time источник (card.wb.ru) больше недоступен.
+// Fallback — basket-CDN price-history.json (прежний путь): на случай, если
+// u-card не ответил. Его цена может отставать на часы, зато источник независим.
+//
+// (Историческая справка: до u-card единственным путём был basket — card.wb.ru
+// тогда отдавал 404. Новый хост u-card.wb.ru ожил и отдаёт цену напрямую.)
 func (s *WildberriesScraper) Scrape(ctx context.Context, url string) (*Result, error) {
 	articleID, err := ExtractArticleID(url)
 	if err != nil {
@@ -81,7 +81,84 @@ func (s *WildberriesScraper) Scrape(ctx context.Context, url string) (*Result, e
 		return nil, err
 	}
 
-	return s.fetchFromBasket(ctx, articleID)
+	if r, err := s.fetchFromUCard(ctx, articleID); err == nil {
+		metrics.WBPriceSource.WithLabelValues("ucard").Inc()
+		return r, nil
+	}
+	r, err := s.fetchFromBasket(ctx, articleID)
+	if err == nil {
+		metrics.WBPriceSource.WithLabelValues("basket").Inc()
+	}
+	return r, err
+}
+
+// fetchFromUCard берёт карточку с u-card.wb.ru/cards/v4/list — открытый real-time
+// эндпоинт. Форма ответа совпадает с поисковой выдачей (products[].sizes[].price),
+// поэтому переиспользуем wbSearchResponse.
+func (s *WildberriesScraper) fetchFromUCard(ctx context.Context, articleID string) (*Result, error) {
+	id, err := strconv.ParseInt(articleID, 10, 64)
+	if err != nil {
+		return nil, fmt.Errorf("%w: invalid article id", ErrInvalidURL)
+	}
+
+	apiURL := wbUCardBase + "?appType=1&curr=rub&dest=-1257786&spp=30&nm=" + articleID
+	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, apiURL, nil)
+	req.Header.Set("User-Agent", wbUserAgent)
+	resp, err := s.http.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("u-card status %d", resp.StatusCode)
+	}
+
+	var parsed wbSearchResponse
+	if err := json.NewDecoder(resp.Body).Decode(&parsed); err != nil {
+		return nil, err
+	}
+	if len(parsed.Products) == 0 {
+		return nil, ErrProductNotFound
+	}
+
+	p := parsed.Products[0]
+	priceKopecks := ucardPriceKopecks(p)
+	if priceKopecks == 0 {
+		// Нет активного оффера в u-card → отдаём на fallback (basket price-history
+		// мог сохранить последнюю цену). Так контракт WB-скрейпера не меняется:
+		// он, как и раньше, не отдаёт «нет в наличии» (InStock всегда true).
+		return nil, ErrProductNotFound
+	}
+	return &Result{
+		Name:     firstNonEmpty(p.Name, "Товар WB"),
+		Price:    float64(priceKopecks) / 100,
+		ImageURL: wbImageURL(id),
+		InStock:  true,
+	}, nil
+}
+
+// ucardPriceKopecks — финальная цена позиции в копейках: product (что видит
+// юзер), фолбэк total/basic. 0, если оффера нет.
+func ucardPriceKopecks(p wbSearchProduct) int64 {
+	if len(p.Sizes) == 0 {
+		return 0
+	}
+	pr := p.Sizes[0].Price
+	switch {
+	case pr.Product > 0:
+		return pr.Product
+	case pr.Total > 0:
+		return pr.Total
+	default:
+		return pr.Basic
+	}
+}
+
+func firstNonEmpty(s, fallback string) string {
+	if s == "" {
+		return fallback
+	}
+	return s
 }
 
 func (s *WildberriesScraper) fetchFromBasket(ctx context.Context, articleID string) (*Result, error) {
@@ -231,6 +308,9 @@ func (s *WildberriesScraper) fetchBasketPrice(ctx context.Context, base string) 
 }
 
 const wbUserAgent = "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
+
+// wbUCardBase — открытый real-time эндпоинт карточки (цена в price.product).
+const wbUCardBase = "https://u-card.wb.ru/cards/v4/list"
 
 func wbBasketNumber(id int64) int64 {
 	vol := id / 100000
