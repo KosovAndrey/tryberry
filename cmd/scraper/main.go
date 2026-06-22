@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"os"
@@ -191,6 +192,14 @@ func makeHandler(
 		// Скрейпим через registry — он сам выбирает нужный маркетплейс
 		result, marketplace, err := registry.Scrape(ctx, task.URL)
 		if err != nil {
+			// Перманентные ошибки (товар не найден / битый URL) не ретраим: иначе
+			// один нескрейпящийся товар (удалённый / трансгран без цены на этом
+			// egress) застревает в петле и лагает весь консьюмер. Пропускаем —
+			// следующая плановая задача по этому товару попробует снова.
+			if errors.Is(err, scraper.ErrProductNotFound) || errors.Is(err, scraper.ErrInvalidURL) {
+				log.Warn("scrape skipped (permanent)", "err", err)
+				return nil
+			}
 			log.Error("scrape failed", "err", err)
 			return err
 		}
