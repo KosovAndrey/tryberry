@@ -116,6 +116,16 @@ func run(log *slog.Logger) error {
 		sellerMaxPages = v
 	}
 	wbSeller := scraper.NewWildberriesSellerScraper(wbCard, sellerMaxPages, 0)
+	// Резолв буквенных слагов витрины (/seller/имя) требует wbaas-токена: берём
+	// из того же пула wb:search:, что наполняет майнер (общий Redis). Без Redis —
+	// резолв недоступен, бот покажет хинт.
+	if redisClient != nil {
+		poolSize := 5
+		if v, err := strconv.Atoi(getEnv("WB_TOKEN_POOL_SIZE", "5")); err == nil && v > 0 {
+			poolSize = v
+		}
+		wbSeller.SetTokens(scraper.NewRedisSearchTokenPool(redisClient, poolSize, log, "wb:search:"))
+	}
 	// Бот при /track скрейпит карточку сразу (показать товар), а поисковые ссылки
 	// только разбирает (NormalizeSearchURL, не ScrapeSearch). Поэтому Ozon/Я.Маркет
 	// заводим как search-обёртки: они встраивают карточный скрейпер (Matches/Scrape)

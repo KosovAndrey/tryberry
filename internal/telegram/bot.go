@@ -209,9 +209,17 @@ func (b *Bot) handleMessage(ctx context.Context, msg *tgbotapi.Message) {
 		return
 	}
 
-	// 4. Витрина продавца с буквенной ссылкой (/seller/имя) — пока не поддерживаем.
-	if domain.IsSellerVanityURL(text) {
-		b.reply(msg.Chat.ID, "🏬 Магазины с буквенной ссылкой (<code>/seller/имя</code>) пока не поддерживаю — нужна ссылка с числовым номером магазина (вида <code>/seller/250021611</code>). Обычно её даёт кнопка «Поделиться» на странице продавца в приложении WB.")
+	// 4. Витрина продавца с буквенной ссылкой (/seller/имя) → резолвим слаг в
+	// числовой id (через wbaas-токен) и заводим как обычную seller-подписку.
+	if slug, ok := domain.SellerVanitySlug(text); ok {
+		if id, err := b.registry.ResolveSellerVanity(ctx, slug); err == nil && id != "" {
+			b.startSearchTrack(ctx, msg.Chat.ID, domain.RewriteSellerVanity(text, id), user)
+		} else {
+			if err != nil {
+				b.log.Warn("resolve seller vanity", "slug", slug, "err", err)
+			}
+			b.reply(msg.Chat.ID, "🏬 Не получилось открыть этот магазин по буквенной ссылке. Попробуй ссылку с числовым номером (вида <code>/seller/250021611</code>) — её даёт кнопка «Поделиться» на странице продавца в приложении WB.")
+		}
 		return
 	}
 

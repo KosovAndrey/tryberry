@@ -61,6 +61,29 @@ func TestIsSellerVanityURL(t *testing.T) {
 	}
 }
 
+func TestSellerVanitySlug(t *testing.T) {
+	if s, ok := SellerVanitySlug("https://www.wildberries.ru/seller/moderndevice"); !ok || s != "moderndevice" {
+		t.Errorf("slug = %q,%v; want moderndevice,true", s, ok)
+	}
+	if s, ok := SellerVanitySlug("https://www.wildberries.ru/seller/moderndevice?x=1"); !ok || s != "moderndevice" {
+		t.Errorf("slug с query = %q,%v", s, ok)
+	}
+	if _, ok := SellerVanitySlug("https://www.wildberries.ru/seller/250021611"); ok {
+		t.Error("числовой /seller/ не должен считаться vanity")
+	}
+	if _, ok := SellerVanitySlug("https://market.yandex.ru/search?text=x"); ok {
+		t.Error("не-seller-ссылка не vanity")
+	}
+}
+
+func TestRewriteSellerVanity(t *testing.T) {
+	got := RewriteSellerVanity("https://www.wildberries.ru/seller/moderndevice?xsubject=515&tb_q=iphone", "12345")
+	want := "https://www.wildberries.ru/seller/12345?xsubject=515&tb_q=iphone"
+	if got != want {
+		t.Errorf("RewriteSellerVanity = %q; want %q", got, want)
+	}
+}
+
 func TestSellerLabel(t *testing.T) {
 	base := "https://www.wildberries.ru/seller/100"
 	if got := SellerLabel("Купибара", base); got != "Купибара" {

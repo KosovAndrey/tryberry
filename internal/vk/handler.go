@@ -312,10 +312,18 @@ func (b *Bot) handleMessage(ctx context.Context, vkID int64, text, payload strin
 			b.handleTrack(ctx, vkID, user, text)
 			return
 		}
-		// Витрина продавца с буквенной ссылкой (/seller/имя) — пока не поддерживаем.
-		if domain.IsSellerVanityURL(text) {
+		// Витрина продавца с буквенной ссылкой (/seller/имя) → резолвим слаг в
+		// числовой id (через wbaas-токен) и заводим как обычную seller-подписку.
+		if slug, ok := domain.SellerVanitySlug(text); ok {
 			metrics.VKMessages.WithLabelValues("seller_vanity").Inc()
-			b.send(ctx, vkID, "🏬 Магазины с буквенной ссылкой (/seller/имя) пока не поддерживаю — нужна ссылка с числовым номером магазина (вида /seller/250021611). Обычно её даёт кнопка «Поделиться» на странице продавца в приложении WB.", kb)
+			if id, err := b.registry.ResolveSellerVanity(ctx, slug); err == nil && id != "" {
+				b.startSearchTrack(ctx, vkID, user, domain.RewriteSellerVanity(text, id))
+			} else {
+				if err != nil {
+					b.log.Warn("vk: resolve seller vanity", "slug", slug, "err", err)
+				}
+				b.send(ctx, vkID, "🏬 Не получилось открыть этот магазин по буквенной ссылке. Попробуй ссылку с числовым номером (вида /seller/250021611) — её даёт кнопка «Поделиться» на странице продавца в приложении WB.", kb)
+			}
 			return
 		}
 	}

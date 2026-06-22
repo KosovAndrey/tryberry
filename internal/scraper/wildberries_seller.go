@@ -25,12 +25,36 @@ const (
 	// витрины (то, что видит юзер вверху страницы магазина).
 	wbSupplierInfoBase = "https://static-basket-01.wbbasket.ru/vol0/data/supplier-by-id"
 
+	// HTML-страница витрины: единственный способ резолвнуть буквенный слаг
+	// /seller/{slug} → числовой supplierId (за wbaas, нужен токен).
+	wbSellerPageBase = "https://www.wildberries.ru/seller/"
+
 	// tbTextParam — наш «клиентский» текст-фильтр в ссылке подписки. Применяется
 	// на нашей стороне к name/brand карточек (для магазинов, где нет хороших
 	// фильтров WB); в WB-API НЕ уходит. Префикс tb_ — чтобы не пересечься с
 	// параметрами WB.
 	tbTextParam = "tb_q"
 )
+
+// supplierIDRes — паттерны, которыми достаём supplierId из HTML страницы витрины.
+// Порядок = приоритет: сперва явный JSON-ключ, потом параметр API, в последнюю
+// очередь любой /seller/{N} (может зацепить рекомендованного продавца).
+var supplierIDRes = []*regexp.Regexp{
+	// "supplierId":N — терпим экранирование кавычек (\"supplierId\") в JS-строках.
+	regexp.MustCompile(`"supplierId\\?"?\s*:\s*(\d+)`),
+	regexp.MustCompile(`supplier(?:Id)?=(\d+)`),
+	regexp.MustCompile(`/seller/(\d+)`),
+}
+
+// extractSupplierID — найти числовой supplierId в HTML страницы витрины.
+func extractSupplierID(html []byte) (string, bool) {
+	for _, re := range supplierIDRes {
+		if m := re.FindSubmatch(html); m != nil {
+			return string(m[1]), true
+		}
+	}
+	return "", false
+}
 
 // wbSellerURLRe — путь /seller/{id}, где id = supplier_id WB.
 var wbSellerURLRe = regexp.MustCompile(`/seller/(\d+)`)
@@ -53,6 +77,12 @@ type WildberriesSellerScraper struct {
 	// чтобы в тестах подменять сетевой слой фейком и проверять логику пагинации/
 	// фильтрации герметично, без сети.
 	fetch func(ctx context.Context, apiURL string) ([]byte, error)
+
+	// tokens — провайдер wbaas-токена для резолва буквенных слагов /seller/{slug}
+	// (nil → резолв недоступен, бот покажет хинт). vanityClient ходит НАПРЯМУЮ
+	// (Proxy=nil): токен привязан к IP майнера (= VPS), мимо egress-прокси бота.
+	tokens       TokenProvider
+	vanityClient *http.Client
 }
 
 // NewWildberriesSellerScraper.
@@ -76,9 +106,72 @@ func NewWildberriesSellerScraper(base *WildberriesScraper, maxPages int, pageDel
 		apiBase:            wbSellerAPIBase,
 		maxPages:           maxPages,
 		pageDelay:          pageDelay,
+		vanityClient:       &http.Client{Timeout: 12 * time.Second, Transport: &http.Transport{Proxy: nil}},
 	}
 	s.fetch = s.fetchSellerPage
 	return s
+}
+
+// SetTokens подключает провайдер wbaas-токена для резолва буквенных слагов
+// /seller/{slug} (см. ResolveVanity). Без него резолв недоступен.
+func (s *WildberriesSellerScraper) SetTokens(t TokenProvider) { s.tokens = t }
+
+// ResolveVanity резолвит буквенный слаг витрины (/seller/moderndevice) в числовой
+// supplierId. Открытого пути нет: HTML-страница витрины за wbaas, поэтому ходим
+// под токеном пула (как текстовый поиск) и достаём supplierId из HTML. Запрос —
+// напрямую (vanityClient, Proxy=nil): токен привязан к IP майнера (= VPS).
+func (s *WildberriesSellerScraper) ResolveVanity(ctx context.Context, slug string) (string, error) {
+	if s.tokens == nil {
+		return "", fmt.Errorf("%w: vanity resolver disabled (no tokens)", ErrNotImplemented)
+	}
+	tok, err := s.tokens.Token(ctx)
+	if err != nil {
+		return "", fmt.Errorf("%w: token: %v", ErrMarketplaceBlocked, err)
+	}
+	if !tok.Valid() {
+		return "", fmt.Errorf("%w: empty wbaas token", ErrMarketplaceBlocked)
+	}
+	ua := tok.UserAgent
+	if ua == "" {
+		ua = defaultSearchUA
+	}
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, wbSellerPageBase+url.PathEscape(slug), nil)
+	if err != nil {
+		return "", err
+	}
+	req.Header.Set("User-Agent", ua)
+	req.Header.Set("Cookie", tok.Cookie)
+	req.Header.Set("Accept", "text/html,application/xhtml+xml")
+	req.Header.Set("Accept-Language", "ru,en;q=0.9")
+
+	resp, err := s.vanityClient.Do(req)
+	if err != nil {
+		return "", fmt.Errorf("%w: vanity request: %v", ErrMarketplaceBlocked, err)
+	}
+	defer resp.Body.Close()
+
+	switch {
+	case resp.StatusCode == http.StatusOK:
+		// ok
+	case resp.StatusCode == http.StatusTooManyRequests:
+		s.tokens.MarkBad(ctx, tok.Slot)
+		return "", fmt.Errorf("%w: 429 on seller page", ErrMarketplaceBlocked)
+	default:
+		return "", fmt.Errorf("%w: seller page status %d", ErrMarketplaceBlocked, resp.StatusCode)
+	}
+
+	body, err := io.ReadAll(io.LimitReader(resp.Body, maxSearchBodyBytes))
+	if err != nil {
+		return "", err
+	}
+	s.tokens.MarkGood(ctx, tok.Slot)
+
+	id, ok := extractSupplierID(body)
+	if !ok {
+		return "", fmt.Errorf("%w: supplierId not found in seller page (len=%d)", ErrParseFailed, len(body))
+	}
+	return id, nil
 }
 
 var _ SearchScraper = (*WildberriesSellerScraper)(nil)

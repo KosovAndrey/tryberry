@@ -326,6 +326,25 @@ func TestScrapeSearch_PartialOnLatePageError(t *testing.T) {
 	}
 }
 
+func TestExtractSupplierID(t *testing.T) {
+	cases := []struct {
+		name, html, want string
+		ok               bool
+	}{
+		{"json key", `<script>window.__NEXT="{\"supplierId\":250021611,\"trademark\":\"КАПИБАРА\"}"</script>`, "250021611", true},
+		{"api param", `<link href="https://catalog.wb.ru/sellers/v4/catalog?supplier=4315173&dest=-1">`, "4315173", true},
+		{"seller href", `<a href="/seller/1234">магазин</a>`, "1234", true},
+		{"priority: supplierId over href", `{"supplierId":777} <a href="/seller/999">other</a>`, "777", true},
+		{"none", `<html>нет id</html>`, "", false},
+	}
+	for _, c := range cases {
+		got, ok := extractSupplierID([]byte(c.html))
+		if ok != c.ok || got != c.want {
+			t.Errorf("%s: extractSupplierID = %q,%v; want %q,%v", c.name, got, ok, c.want, c.ok)
+		}
+	}
+}
+
 func TestMaxItems(t *testing.T) {
 	if got := NewWildberriesSellerScraper(nil, 5, 0).MaxItems(); got != 500 {
 		t.Errorf("MaxItems = %d, want 500", got)

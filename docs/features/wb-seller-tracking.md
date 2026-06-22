@@ -34,20 +34,25 @@
 Фича готова и смержена в main. Имя магазина берётся из открытого supplier-by-id
 (поле `trademark` — бренд витрины, напр. «КАПИБАРА»; фолбэк `supplierName`).
 
-## Известное ограничение: буквенные ссылки /seller/{slug}
+## Буквенные ссылки /seller/{slug} — резолв через wbaas
 
-`/seller/moderndevice` (кастомный алиас витрины) **не поддерживается**. Проверено
-(2026-06-22): слаг — НЕ строковый id, дата-API принимают только числовой
-`supplierId`:
-- `catalog.wb.ru/sellers/v4/catalog?supplier=moderndevice` → 404;
-- `supplier-by-id/moderndevice.json` → 404;
-- `www.wildberries.ru/seller/moderndevice` и `webapi/seller/*` → 498 (wbaas).
+Слаг (`/seller/moderndevice`) — НЕ строковый id: дата-API принимают только числовой
+`supplierId` (проверено: `catalog?supplier=moderndevice` и `supplier-by-id/
+moderndevice.json` → 404; `www.wildberries.ru/seller/*` и `webapi/seller/*` → 498
+wbaas). Открытого slug→id резолва нет — маппинг делает только фронтенд за антиботом.
 
-Маппинг slug→id делает только фронтенд WB за антиботом. Резолв возможен лишь
-через wbaas (пул токенов `wb:search:`, который мы уже мейним для текстового
-поиска): взять токен из Redis → запросить `/seller/{slug}` → выпарсить
-`supplierId` из `__NEXT_DATA__`. Это отдельная задача с валидацией на VPS (нужен
-живой токен). Пока бот отвечает понятным хинтом (`domain.IsSellerVanityURL`).
+Реализация (`ResolveVanity`): берём wbaas-токен из пула `wb:search:` (тот же, что
+наполняет майнер для текстового поиска; бот читает общий Redis) → GET
+`/seller/{slug}` **напрямую** (`vanityClient`, Proxy=nil — токен привязан к IP
+майнера = VPS, мимо egress-прокси бота) → достаём `supplierId` из HTML
+(`extractSupplierID`, набор паттернов) → переписываем ссылку на числовую
+(`domain.RewriteSellerVanity`) → обычный seller-флоу. Любой сбой (нет токена / 498
+/ 429 / id не найден) → деградация к хинту (без регрессии).
+
+⚠️ **Живой wbaas-fetch не валидируется офлайн** (loopback в тестах + нужен живой
+токен): покрыт только `extractSupplierID` (юнит, по сэмплам HTML). Проверка
+парсинга реальной страницы — на VPS; при промахе бот логует
+`supplierId not found (len=…)` / `seller page status N` для диагностики.
 
 Цель: дать юзеру подключить к отслеживанию не отдельный товар, а всю витрину
 продавца WB — ловить снижения цен по магазину (и, опционально, новинки).

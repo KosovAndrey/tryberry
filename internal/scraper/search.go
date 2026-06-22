@@ -95,3 +95,20 @@ func (r *Registry) FindSearchByURL(url string) (SearchScraper, error) {
 	}
 	return nil, fmt.Errorf("%w: no search scraper matches URL %s", ErrInvalidURL, url)
 }
+
+// vanityResolver — скрейпер умеет резолвить буквенный слаг витрины в числовой id.
+type vanityResolver interface {
+	ResolveVanity(ctx context.Context, slug string) (string, error)
+}
+
+// ResolveSellerVanity — резолв буквенного слага витрины (/seller/{slug}) в
+// числовой supplierId через первый способный скрейпер. ErrNotImplemented, если
+// резолвер не зарегистрирован/не настроен.
+func (r *Registry) ResolveSellerVanity(ctx context.Context, slug string) (string, error) {
+	for _, s := range r.scrapers {
+		if vr, ok := s.(vanityResolver); ok {
+			return vr.ResolveVanity(ctx, slug)
+		}
+	}
+	return "", fmt.Errorf("%w: no vanity resolver", ErrNotImplemented)
+}
