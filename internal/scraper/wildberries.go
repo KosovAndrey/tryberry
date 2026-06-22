@@ -17,11 +17,16 @@ import (
 	"gitlab.com/KosovAndrey/tryberrybot/internal/metrics"
 )
 
-// BasketResolver — кэш соответствия vol→basket-шард (vol = id/100000). Реализуется
+// BasketResolver — кэш соответствия vol→basket-шард (vol = id/100000) плюс
+// негатив-кэш «товара нет в basket» (трансгран/удалён). Реализуется
 // redisrepo.BasketCache. nil → кэш не используется (только проба формулы+соседей).
 type BasketResolver interface {
 	Get(ctx context.Context, vol int64) (int64, bool)
 	Put(ctx context.Context, vol, basket int64)
+	// NoBasket/MarkNoBasket — товара нет ни в одном basket-шарде: помним, чтобы
+	// не перебирать 25 шардов на каждом скрейпе, а сразу идти в u-card.
+	NoBasket(ctx context.Context, id int64) bool
+	MarkNoBasket(ctx context.Context, id int64)
 }
 
 type WildberriesScraper struct {
@@ -103,13 +108,27 @@ func (s *WildberriesScraper) Scrape(ctx context.Context, url string) (*Result, e
 		return nil, err
 	}
 
+	// Уже знаем, что товара нет в basket (трансгран/удалён) → сразу u-card, минуя
+	// дорогой 25-шардовый перебор (~10с все 404, блокирует консьюмер).
+	if id, perr := strconv.ParseInt(articleID, 10, 64); perr == nil && s.baskets != nil && s.baskets.NoBasket(ctx, id) {
+		if ur, uerr := s.fetchFromUCard(ctx, articleID); uerr == nil {
+			metrics.WBPriceSource.WithLabelValues("ucard").Inc()
+			return ur, nil
+		}
+		return nil, ErrProductNotFound
+	}
+
 	r, err := s.fetchFromBasket(ctx, articleID)
 	if err == nil {
 		metrics.WBPriceSource.WithLabelValues("basket").Inc()
 		return r, nil
 	}
-	// Нет в basket-CDN (трансгран/удалён) → пробуем real-time u-card.
+	// Нет в basket-CDN (трансгран/удалён) → запоминаем (чтобы впредь не перебирать
+	// шарды) и пробуем real-time u-card.
 	if errors.Is(err, ErrProductNotFound) {
+		if id, perr := strconv.ParseInt(articleID, 10, 64); perr == nil && s.baskets != nil {
+			s.baskets.MarkNoBasket(ctx, id)
+		}
 		if ur, uerr := s.fetchFromUCard(ctx, articleID); uerr == nil {
 			metrics.WBPriceSource.WithLabelValues("ucard").Inc()
 			return ur, nil
