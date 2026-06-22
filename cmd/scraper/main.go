@@ -51,6 +51,7 @@ func run(log *slog.Logger) error {
 	rpsStrWB := getEnv("SCRAPER_RATE_LIMIT_RPS_WB", "5")
 	rpsStrYandex := getEnv("SCRAPER_RATE_LIMIT_RPS_YANDEX", "2")
 	rpsStrOzon := getEnv("SCRAPER_RATE_LIMIT_RPS_OZON", "1")
+	rpsStrAli := getEnv("SCRAPER_RATE_LIMIT_RPS_ALI", "1")
 	rpsWB, err := strconv.ParseFloat(rpsStrWB, 64)
 	if err != nil {
 		return fmt.Errorf("SCRAPER_RATE_LIMIT_RPS_WB: %w", err)
@@ -62,6 +63,10 @@ func run(log *slog.Logger) error {
 	rpsOzon, err := strconv.ParseFloat(rpsStrOzon, 64)
 	if err != nil {
 		return fmt.Errorf("SCRAPER_RATE_LIMIT_RPS_OZON: %w", err)
+	}
+	rpsAli, err := strconv.ParseFloat(rpsStrAli, 64)
+	if err != nil {
+		return fmt.Errorf("SCRAPER_RATE_LIMIT_RPS_ALI: %w", err)
 	}
 
 	// ── Подключения ──────────────────────────────────────────────────────────
@@ -166,6 +171,15 @@ func run(log *slog.Logger) error {
 			// выгорание (см. OZON-STATUS) — при росте нагрузки задать отдельный.
 			ProxyURL: getEnv("YANDEX_PROXY_URL", getEnv("OZON_PROXY_URL", "")),
 			RPS:      rpsYandex,
+			Logger:   log,
+		}),
+		scraper.NewAliexpressScraper(scraper.AliexpressOptions{
+			// aliexpress.ru: внутренний JSON-API (aer-jsonapi productData), без
+			// браузера. X5SEC решает РЕПУТАЦИЯ IP → нужен RU-резидентский/мобильный
+			// прокси (датацентр = капча). Дефолтом делим прокси Ozon — при росте
+			// нагрузки задать отдельный ALI_PROXY_URL (см. yandex выше про выгорание).
+			ProxyURL: getEnv("ALI_PROXY_URL", getEnv("OZON_PROXY_URL", "")),
+			RPS:      rpsAli,
 			Logger:   log,
 		}),
 	)
