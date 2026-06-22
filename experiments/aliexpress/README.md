@@ -1,68 +1,61 @@
-# AliExpress.ru — проб антибота (Camoufox)
+# AliExpress.ru — Phase-1 проб антибота (как у Ozon)
 
-Цель: понять, **можно ли вообще скрейпить aliexpress.ru с чистого датацентр-IP VPS**,
-прежде чем городить полноценный скрейпер.
+Цель: понять, **можно ли скрейпить aliexpress.ru с чистого датацентр-IP VPS**,
+прежде чем строить полноценный сайдкар. Это в точности фаза 1 метода Ozon
+(`ozon-miner/probe.py`): поднять реальный браузер, проверить гипотезу, потом уже
+городить пул.
 
-## Что уже выяснено (с dev-машины через vless)
+## Что уже выяснено
 
-- Страница товара `newDetail` — **CSR**: в HTML цены нет (`window.runParams = {}`),
+- Карточка товара `newDetail` — **CSR**: в HTML цены нет (`window.runParams = {}`),
   данные тянутся отдельным подписанным API (mtop `acs.aliexpress.com` / `aer-api`).
-- Голый HTTP (curl) **и даже Chrome-JA3 через tls-client** (которым ходят ЯМаркет/Ozon)
-  упираются в антибот **X5SEC**: вместо карточки приходит «punish»-страница
-  (`_____tmd_____/punish`, `x5secdata`, `action:captcha`, `rgv587_flag:sm`).
-  Тот же класс защиты, что FAB у Ozon.
-- Значит HTML-парсер (как у ЯМаркета через JSON-LD) **не подойдёт**.
+- Голый HTTP (curl) **и Chrome-JA3 через tls-client** (которым ходят ЯМаркет/Ozon)
+  упираются в антибот **X5SEC**: вместо карточки — «punish»-страница
+  (`_____tmd_____/punish`, `x5secdata`, `action:captcha`, `rgv587_flag:sm`). Тот же
+  класс защиты, что FAB у Ozon → HTML-парсер как у ЯМаркета тут не годится.
 
-## Гипотеза этого проба
+## Гипотеза
 
-Антидетект-браузер **Camoufox** (патченый Firefox + правдоподобный fingerprint)
-проходит X5SEC прозрачно (как настоящий браузер), и тогда цену можно снять из
-DOM либо из перехваченного API-ответа. Тестируем **с датацентр-IP VPS, без прокси** —
-ровно тот сценарий, который нужен в проде (vless дорогой/лишний, если IP и так пускают).
+Реальный браузер **camoufox** (headful в Xvfb) проходит X5SEC прозрачно, как у
+Ozon с FAB. Тогда цену берём из отрендеренного DOM и/или перехваченного API-ответа.
+Тестируем **с датацентр-IP VPS, без прокси** — нужный прод-сценарий.
 
-## Как запустить (на VPS, НЕ через vless)
+## Как запустить (на VPS)
 
-```bash
-# системные либы для Firefox + Xvfb (один раз, нужен sudo).
-# ВНИМАНИЕ Ubuntu 24.04: пакеты с суффиксом t64 (libasound2 — виртуальный):
-sudo apt-get update && sudo apt-get install -y \
-  libgtk-3-0t64 libx11-xcb1 libasound2t64 libdbus-glib-1-2 libxtst6 libxt6t64 xvfb
-
-# поставить и запустить проб:
-bash experiments/aliexpress/run_probe.sh
-```
-
-Если Xvfb не поставлен — проб сам сфолбэчится на нативный headless (чуть менее
-скрытно). Для полноценного virtual-режима хватает одного пакета: `sudo apt-get install -y xvfb`.
-
-Без xvfb — нативный headless (чуть менее скрытно):
+Проб гоняется **внутри образа ozon-miner** — там уже camoufox + Xvfb + все либы,
+поэтому никаких ручных `apt`/`libgtk`/`xvfb` на хосте (об это спотыкался venv).
 
 ```bash
-HEADLESS_MODE=true bash experiments/aliexpress/run_probe.sh
+# на VPS, в репо:
+git fetch origin && git checkout feat/aliexpress-camoufox
+
+# образ camoufox должен быть собран (если ещё нет):
+docker compose build ozon-miner
+
+# запуск проба (без прокси, чистый датацентр-IP):
+bash experiments/aliexpress/run.sh
 ```
 
-Другой товар:
+Другой товар: `ALI_ID=1005005863682926 bash experiments/aliexpress/run.sh`.
+Если без прокси не пускает — `ALI_PROXY=http://user:pass@host:port bash experiments/aliexpress/run.sh`.
 
-```bash
-ALI_ID=1005005863682926 bash experiments/aliexpress/run_probe.sh
-```
+## Что смотреть
 
-## Что смотреть в выводе
+Блок `ВЕРДИКТ` в выводе:
+- `X5SEC punish: нет — пройден ✅` + `цена доступна: ДА ✅` → **camoufox проходит**,
+  строим сайдкар `ali-miner` по образцу `ozon-miner` (browser-как-транспорт).
+- `X5SEC punish: ДА ❌` → даже браузер с датацентр-IP не пускают → нужен
+  резидентский/RU-прокси (или vless), либо меняем подход.
 
-Блок `ВЕРДИКТ`:
-- `punish/captcha: нет ✅` + `цена на странице: НАЙДЕНА ✅` → **Camoufox проходит**,
-  можно строить скрейпер (браузер-сайдкар, по образцу `OZON_BROWSER_URL`).
-- `punish/captcha: ДА ❌` → даже браузер с датацентр-IP не пускают → нужен
-  резидентский/RU-прокси (или vless), либо подход меняем.
+Артефакты в `experiments/aliexpress/out/` (пришли их мне):
+- `page.png` — скриншот (сразу видно punish или карточку),
+- `page.html` — отрендеренный DOM,
+- `resp_*.json` — перехваченные API-ответы с ценой (цель парсера).
 
-Артефакты для разбора парсера (пришли их мне):
-- `/tmp/aliprobe/page.html` — отрендеренный DOM,
-- `/tmp/aliprobe/page.png` — скриншот (видно, punish это или карточка),
-- `/tmp/aliprobe/resp_*.json` — перехваченные API-ответы с ценой (цель парсера).
+## Если проб проходит — план
 
-## Если проб проходит — что дальше
-
-Скрейпер AliExpress = **браузер-сайдкар** (Camoufox/Playwright-сервис) + Go-обёртка,
-реализующая `scraper.MarketplaceScraper`, по образцу Ozon (`OZON_BROWSER_URL`).
-`marketplace` в БД — `TEXT`, миграция не нужна; точки интеграции — как у Ozon
-(`internal/telegram/bot.go` coming-soon, `cmd/scraper/main.go` registry).
+Скрейпер AliExpress = **сайдкар `ali-miner`** (клон `ozon-miner`: aiohttp +
+пул camoufox-дорожек, `GET /scrape?id=<id>`) + Go-обёртка `AliexpressScraper`,
+реализующая `scraper.MarketplaceScraper` и ходящая в сайдкар (как `fetchViaBrowser`
+у Ozon). `marketplace` в БД — `TEXT`, миграция не нужна; точки интеграции — как у
+Ozon (`cmd/scraper/main.go` registry, `internal/telegram/bot.go` coming-soon).
