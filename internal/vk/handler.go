@@ -54,6 +54,7 @@ const (
 	cmdSearch      = "search"      // как добавить поиск-подписку
 	cmdLSearch     = "lsearch"     // список поиск-подписок
 	cmdSTrack      = "strack"      // выбор типа триггера поиск-подписки (k=any|below|disc)
+	cmdSFSkip      = "sfskip"      // «Без фильтра» на шаге текст-фильтра витрины продавца
 	cmdSUntrack    = "suntrack"    // отписка от поиска
 	cmdPlans       = "plans"       // витрина тарифов
 	cmdPlanCard    = "plan"        // карточка тарифа (k=имя плана)
@@ -290,8 +291,13 @@ func (b *Bot) handleMessage(ctx context.Context, vkID int64, text, payload strin
 			return
 		}
 		if fsm, ok := b.getSearchFSM(ctx, vkID); ok {
-			metrics.VKMessages.WithLabelValues("search_threshold").Inc()
-			b.handleSearchThreshold(ctx, vkID, user, text, fsm)
+			if fsm.SellerURL != "" {
+				metrics.VKMessages.WithLabelValues("seller_text_filter").Inc()
+				b.handleSellerTextFilter(ctx, vkID, user, text, fsm)
+			} else {
+				metrics.VKMessages.WithLabelValues("search_threshold").Inc()
+				b.handleSearchThreshold(ctx, vkID, user, text, fsm)
+			}
 			return
 		}
 		// Поисковая ссылка → флоу поиск-подписки.
@@ -343,6 +349,8 @@ func (b *Bot) handleMessage(ctx context.Context, vkID int64, text, payload strin
 		b.handleListSearch(ctx, vkID, user, "")
 	case cmdSTrack:
 		b.handleSearchTrigger(ctx, vkID, user, p)
+	case cmdSFSkip:
+		b.handleSellerSkipFilter(ctx, vkID, user)
 	case cmdSUntrack:
 		b.handleUntrackSearch(ctx, vkID, user, p.ID)
 	case cmdPlans:

@@ -17,10 +17,13 @@ import (
 // fsmTTL — сколько ждём ввод порога/процента, прежде чем состояние протухнет.
 const fsmTTL = 10 * time.Minute
 
-// searchFSM — минимальное состояние диалога: ждём число для подписки.
+// searchFSM — состояние диалога поиск-подписки. Два режима:
+//   - SellerURL задан → ждём слово-фильтр для витрины продавца (шаг до триггера);
+//   - иначе (QueryID/Trigger) → ждём число (порог/процент) после выбора триггера.
 type searchFSM struct {
-	QueryID int64  `json:"q"`
-	Trigger string `json:"t"` // domain.TriggerBelowTarget | domain.TriggerDiscountPct
+	QueryID   int64  `json:"q"`
+	Trigger   string `json:"t"`           // domain.TriggerBelowTarget | domain.TriggerDiscountPct
+	SellerURL string `json:"u,omitempty"` // ждём текст-фильтр для этой витрины продавца
 }
 
 func fsmKey(tgID int64) string { return fmt.Sprintf("search_fsm:%d", tgID) }
@@ -113,15 +116,34 @@ func (b *Bot) startSearchTrack(ctx context.Context, chatID int64, rawURL string,
 		return
 	}
 
-	normalized, err := ss.NormalizeSearchURL(rawURL)
-	if err != nil {
-		b.reply(chatID, "Не получилось разобрать поисковый запрос из ссылки. Проверь, что в ней есть текст поиска.")
-		return
-	}
-
 	// Гейт CAP для витрины продавца: если товаров в выдаче больше лимита —
 	// подписку не заводим, просим сузить фильтры. Для не-seller-скрейперов no-op.
 	if !b.checkSellerCap(ctx, chatID, ss, rawURL) {
+		return
+	}
+
+	// Витрина продавца без явного текст-фильтра → предложить добавить его, чтобы
+	// следить не за всем магазином, а за частью карточек (по слову в названии).
+	if _, isSeller := ss.(sellerSizer); isSeller && !domain.HasTextFilter(rawURL) {
+		b.promptSellerTextFilter(ctx, chatID, user, rawURL)
+		return
+	}
+
+	b.proceedSearchTrack(ctx, chatID, rawURL, user)
+}
+
+// proceedSearchTrack — финал подключения поиск-подписки: нормализуем URL,
+// заводим/находим запрос и показываем выбор типа триггера. Гейт лимита/CAP уже
+// пройден в startSearchTrack.
+func (b *Bot) proceedSearchTrack(ctx context.Context, chatID int64, rawURL string, user *domain.User) {
+	ss, err := b.registry.FindSearchByURL(rawURL)
+	if err != nil {
+		b.reply(chatID, "Это не похоже на поисковую ссылку. Нужна ссылка на поисковую выдачу (Wildberries, Яндекс.Маркет или Ozon) с текстом запроса.")
+		return
+	}
+	normalized, err := ss.NormalizeSearchURL(rawURL)
+	if err != nil {
+		b.reply(chatID, "Не получилось разобрать поисковый запрос из ссылки. Проверь, что в ней есть текст поиска.")
 		return
 	}
 
@@ -151,6 +173,66 @@ func (b *Bot) startSearchTrack(ctx context.Context, chatID int64, rawURL string,
 	m.ParseMode = "HTML"
 	m.ReplyMarkup = keyboard
 	b.send(m)
+}
+
+// promptSellerTextFilter — спросить опциональный текст-фильтр для витрины
+// продавца. Ставит FSM (ждём слово) и показывает кнопку «Без фильтра».
+func (b *Bot) promptSellerTextFilter(ctx context.Context, chatID int64, user *domain.User, rawURL string) {
+	if err := b.setSearchFSM(ctx, user.TelegramID, searchFSM{SellerURL: rawURL}); err != nil {
+		// Без Redis шаг недоступен — не теряем подключение, идём без фильтра.
+		b.log.Error("set seller text fsm", "err", err)
+		b.proceedSearchTrack(ctx, chatID, rawURL, user)
+		return
+	}
+	text := "🏬 <b>Магазин распознан.</b>\n\n" +
+		"Следить за всеми товарами магазина или только за частью? Пришли слово — оставлю карточки, " +
+		"в названии которых оно есть (например <code>iphone 17</code>).\n\n" +
+		"Или нажми «Без фильтра», чтобы следить за всей выдачей."
+	keyboard := tgbotapi.NewInlineKeyboardMarkup(
+		tgbotapi.NewInlineKeyboardRow(
+			tgbotapi.NewInlineKeyboardButtonData("⏭ Без фильтра", "sfskip"),
+		),
+	)
+	m := tgbotapi.NewMessage(chatID, text)
+	m.ParseMode = "HTML"
+	m.ReplyMarkup = keyboard
+	b.send(m)
+}
+
+// handleSellerTextFilter — пользователь прислал слово-фильтр для витрины продавца
+// (FSM в режиме SellerURL). Дописываем tb_q и идём к выбору триггера.
+func (b *Bot) handleSellerTextFilter(ctx context.Context, chatID, tgID int64, text string, user *domain.User, fsm searchFSM) {
+	b.clearSearchFSM(ctx, tgID)
+
+	// Прислали новую ссылку вместо слова → начинаем флоу заново по ней.
+	if b.isSearchURL(text) {
+		b.startSearchTrack(ctx, chatID, text, user)
+		return
+	}
+
+	rawURL := fsm.SellerURL
+	if t := strings.TrimSpace(text); t != "" {
+		rawURL = domain.AppendTextFilter(rawURL, t)
+	}
+	b.proceedSearchTrack(ctx, chatID, rawURL, user)
+}
+
+// handleSellerSkipFilter — кнопка «Без фильтра»: подключаем магазин целиком.
+func (b *Bot) handleSellerSkipFilter(ctx context.Context, cb *tgbotapi.CallbackQuery) {
+	fsm, ok := b.getSearchFSM(ctx, cb.From.ID)
+	if !ok || fsm.SellerURL == "" {
+		b.answerCallback(cb.ID, "Это действие уже неактуально")
+		return
+	}
+	b.clearSearchFSM(ctx, cb.From.ID)
+	user, err := b.userRepo.Upsert(ctx, cb.From.ID, cb.From.UserName)
+	if err != nil {
+		b.log.Error("upsert user", "err", err)
+		b.answerCallback(cb.ID, "Ошибка")
+		return
+	}
+	b.answerCallback(cb.ID, "")
+	b.proceedSearchTrack(ctx, cb.Message.Chat.ID, fsm.SellerURL, user)
 }
 
 // sellerSizer — скрейпер витрины продавца: умеет узнать размер выдачи и свой

@@ -116,6 +116,36 @@ func QueryTextFromNormalized(normalized string) string {
 // sellerPathRe — путь витрины продавца WB /seller/{id} (для ярлыка запроса).
 var sellerPathRe = regexp.MustCompile(`/seller/(\d+)`)
 
+// tbTextFilterParam — клиентский текст-фильтр в ссылке витрины продавца. Должен
+// совпадать с scraper.tbTextParam (там он применяется к выдаче).
+const tbTextFilterParam = "tb_q"
+
+// HasTextFilter — есть ли уже клиентский текст-фильтр (tb_q) в ссылке.
+func HasTextFilter(rawURL string) bool {
+	u, err := url.Parse(rawURL)
+	if err != nil {
+		return false
+	}
+	return strings.TrimSpace(u.Query().Get(tbTextFilterParam)) != ""
+}
+
+// AppendTextFilter дописывает клиентский текст-фильтр tb_q к ссылке. RawQuery
+// дополняем напрямую (не через url.Query/Encode), чтобы не потерять фильтры WB
+// вида f5023=a;b;c — стандартный парсер отбрасывает пары с «;».
+func AppendTextFilter(rawURL, text string) string {
+	u, err := url.Parse(rawURL)
+	if err != nil {
+		return rawURL
+	}
+	pair := tbTextFilterParam + "=" + url.QueryEscape(text)
+	if u.RawQuery == "" {
+		u.RawQuery = pair
+	} else {
+		u.RawQuery += "&" + pair
+	}
+	return u.String()
+}
+
 // ParsePrice — цена из пользовательского ввода («59 990», «59990,50», «100 ₽»).
 func ParsePrice(s string) (float64, error) {
 	s = strings.TrimSpace(strings.ReplaceAll(s, ",", "."))

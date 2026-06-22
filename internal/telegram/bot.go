@@ -172,9 +172,14 @@ func (b *Bot) handleMessage(ctx context.Context, msg *tgbotapi.Message) {
 		return
 	}
 
-	// 1b. Ждём ли мы от пользователя число (порог/процент) для поиск-подписки?
+	// 1b. Поиск-подписка ждёт ввод: текст-фильтр витрины продавца (SellerURL) или
+	// число (порог/процент) после выбора триггера.
 	if fsm, ok := b.getSearchFSM(ctx, msg.From.ID); ok {
-		b.handleSearchThreshold(ctx, msg.Chat.ID, msg.From.ID, text, user, fsm)
+		if fsm.SellerURL != "" {
+			b.handleSellerTextFilter(ctx, msg.Chat.ID, msg.From.ID, text, user, fsm)
+		} else {
+			b.handleSearchThreshold(ctx, msg.Chat.ID, msg.From.ID, text, user, fsm)
+		}
 		return
 	}
 
@@ -464,6 +469,9 @@ func (b *Bot) handleCallback(ctx context.Context, cb *tgbotapi.CallbackQuery) {
 
 	case strings.HasPrefix(cb.Data, "strack:"):
 		b.handleSearchTriggerCallback(ctx, cb)
+
+	case cb.Data == "sfskip":
+		b.handleSellerSkipFilter(ctx, cb)
 
 	case strings.HasPrefix(cb.Data, "suntrack:"):
 		b.callbackUntrackSearch(ctx, cb)

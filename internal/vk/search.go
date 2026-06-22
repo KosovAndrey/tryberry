@@ -18,8 +18,9 @@ import (
 const fsmTTL = 10 * time.Minute
 
 type searchFSM struct {
-	QueryID int64  `json:"q"`
-	Trigger string `json:"t"` // domain.TriggerBelowTarget | domain.TriggerDiscountPct
+	QueryID   int64  `json:"q"`
+	Trigger   string `json:"t"`           // domain.TriggerBelowTarget | domain.TriggerDiscountPct
+	SellerURL string `json:"u,omitempty"` // задан → ждём текст-фильтр для этой витрины продавца
 }
 
 func fsmKey(vkID int64) string { return fmt.Sprintf("vk_search_fsm:%d", vkID) }
@@ -80,14 +81,32 @@ func (b *Bot) startSearchTrack(ctx context.Context, vkID int64, user *domain.Use
 		b.send(ctx, vkID, "Это не похоже на поисковую ссылку Wildberries. Нужна ссылка с параметром поиска.", kb)
 		return
 	}
-	normalized, err := ss.NormalizeSearchURL(rawURL)
-	if err != nil {
-		b.send(ctx, vkID, "Не получилось разобрать поисковый запрос из ссылки. Проверь, что в ней есть текст поиска.", kb)
-		return
-	}
 
 	// Гейт CAP для витрины продавца WB (для не-seller-ссылок no-op).
 	if !b.checkSellerCap(ctx, vkID, kb, ss, rawURL) {
+		return
+	}
+
+	// Витрина продавца без явного текст-фильтра → предложить добавить его.
+	if _, isSeller := ss.(sellerSizer); isSeller && !domain.HasTextFilter(rawURL) {
+		b.promptSellerTextFilter(ctx, vkID, user, rawURL)
+		return
+	}
+
+	b.proceedSearchTrack(ctx, vkID, user, rawURL)
+}
+
+// proceedSearchTrack — финал: нормализуем URL, заводим запрос, показываем выбор
+// триггера. Лимит/CAP уже проверены в startSearchTrack.
+func (b *Bot) proceedSearchTrack(ctx context.Context, vkID int64, user *domain.User, rawURL string) {
+	ss, err := b.registry.FindSearchByURL(rawURL)
+	if err != nil {
+		b.send(ctx, vkID, "Это не похоже на поисковую ссылку Wildberries. Нужна ссылка с параметром поиска.", menuKeyboard(user.TelegramID != 0))
+		return
+	}
+	normalized, err := ss.NormalizeSearchURL(rawURL)
+	if err != nil {
+		b.send(ctx, vkID, "Не получилось разобрать поисковый запрос из ссылки. Проверь, что в ней есть текст поиска.", menuKeyboard(user.TelegramID != 0))
 		return
 	}
 
@@ -104,6 +123,52 @@ func (b *Bot) startSearchTrack(ctx context.Context, vkID int64, user *domain.Use
 		{TextButton("％ Скидка от %", searchTriggerPayload(sq.ID, "disc"), ColorPrimary)},
 	}}
 	b.send(ctx, vkID, fmt.Sprintf("🔎 Запрос: «%s»\n\nКак уведомлять о снижении цены?", sq.QueryText), triggerKB)
+}
+
+// promptSellerTextFilter — спросить опциональный текст-фильтр для витрины
+// продавца: FSM (ждём слово) + кнопка «Без фильтра».
+func (b *Bot) promptSellerTextFilter(ctx context.Context, vkID int64, user *domain.User, rawURL string) {
+	if err := b.setSearchFSM(ctx, vkID, searchFSM{SellerURL: rawURL}); err != nil {
+		// Без Redis шаг недоступен — подключаем магазин целиком.
+		b.log.Error("vk: set seller text fsm", "err", err)
+		b.proceedSearchTrack(ctx, vkID, user, rawURL)
+		return
+	}
+	kb := &Keyboard{Inline: true, Buttons: [][]Button{
+		{TextButton("⏭ Без фильтра", fmt.Sprintf(`{"cmd":%q}`, cmdSFSkip), ColorSecondary)},
+	}}
+	b.send(ctx, vkID, "🏬 Магазин распознан.\n\n"+
+		"Следить за всеми товарами или только за частью? Пришли слово — оставлю карточки, "+
+		"в названии которых оно есть (например «iphone 17»).\n\n"+
+		"Или нажми «Без фильтра», чтобы следить за всей выдачей.", kb)
+}
+
+// handleSellerTextFilter — пользователь прислал слово-фильтр для витрины (FSM в
+// режиме SellerURL): дописываем tb_q и идём к выбору триггера.
+func (b *Bot) handleSellerTextFilter(ctx context.Context, vkID int64, user *domain.User, text string, fsm searchFSM) {
+	b.clearSearchFSM(ctx, vkID)
+
+	// Прислали новую ссылку вместо слова → начинаем флоу заново по ней.
+	if _, err := b.registry.FindSearchByURL(text); err == nil {
+		b.startSearchTrack(ctx, vkID, user, text)
+		return
+	}
+
+	rawURL := fsm.SellerURL
+	if t := strings.TrimSpace(text); t != "" {
+		rawURL = domain.AppendTextFilter(rawURL, t)
+	}
+	b.proceedSearchTrack(ctx, vkID, user, rawURL)
+}
+
+// handleSellerSkipFilter — кнопка «Без фильтра»: подключить магазин целиком.
+func (b *Bot) handleSellerSkipFilter(ctx context.Context, vkID int64, user *domain.User) {
+	fsm, ok := b.getSearchFSM(ctx, vkID)
+	if !ok || fsm.SellerURL == "" {
+		return
+	}
+	b.clearSearchFSM(ctx, vkID)
+	b.proceedSearchTrack(ctx, vkID, user, fsm.SellerURL)
 }
 
 func searchTriggerPayload(queryID int64, kind string) string {
