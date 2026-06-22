@@ -86,6 +86,11 @@ func (b *Bot) startSearchTrack(ctx context.Context, vkID int64, user *domain.Use
 		return
 	}
 
+	// Гейт CAP для витрины продавца WB (для не-seller-ссылок no-op).
+	if !b.checkSellerCap(ctx, vkID, kb, ss, rawURL) {
+		return
+	}
+
 	sq, _, err := b.searchQueryRepo.Upsert(ctx, string(ss.Marketplace()), normalized, domain.QueryTextFromNormalized(normalized), nil)
 	if err != nil {
 		b.log.Error("vk: upsert search query", "err", err)
@@ -103,6 +108,40 @@ func (b *Bot) startSearchTrack(ctx context.Context, vkID int64, user *domain.Use
 
 func searchTriggerPayload(queryID int64, kind string) string {
 	return fmt.Sprintf(`{"cmd":%q,"id":%d,"k":%q}`, cmdSTrack, queryID, kind)
+}
+
+// sellerSizer — скрейпер витрины продавца WB: размер выдачи + потолок (CAP).
+type sellerSizer interface {
+	SellerTotal(ctx context.Context, rawURL string) (int, error)
+	MaxItems() int
+}
+
+// checkSellerCap — гейт размера витрины продавца. false (+ ответ юзеру), если
+// магазин пуст или товаров больше CAP. Для обычных поиск-ссылок — no-op (true);
+// сбой запроса размера не блокирует подключение.
+func (b *Bot) checkSellerCap(ctx context.Context, vkID int64, kb *Keyboard, ss interface{}, rawURL string) bool {
+	sz, ok := ss.(sellerSizer)
+	if !ok {
+		return true
+	}
+	total, err := sz.SellerTotal(ctx, rawURL)
+	if err != nil {
+		b.log.Error("vk: seller total", "err", err)
+		return true
+	}
+	if total == 0 {
+		b.send(ctx, vkID, "🏬 В этом магазине по такой ссылке нет товаров. Проверь ссылку или ослабь фильтры.", kb)
+		return false
+	}
+	if limit := sz.MaxItems(); total > limit {
+		b.send(ctx, vkID, fmt.Sprintf(
+			"🏬 В выдаче %d товаров — это больше лимита (%d).\n\n"+
+				"Сузь выбор фильтрами на сайте (категория, бренд, модель) и пришли ссылку снова. "+
+				"Можно добавить в конец ссылки &tb_q=текст — оставлю только карточки с этим текстом в названии.",
+			total, limit), kb)
+		return false
+	}
+	return true
 }
 
 // ── Выбор типа триггера (кнопка strack) ───────────────────────────────────────

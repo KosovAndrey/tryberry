@@ -108,6 +108,14 @@ func run(log *slog.Logger) error {
 		wbCard.SetBasketResolver(redisrepo.NewBasketCache(redisClient))
 	}
 	wbSearch := scraper.NewWildberriesSearchScraper(wbCard, nil, nil, 5, 0)
+	// WB-витрина продавца: боту нужен разбор ссылки (MatchesSearch/Normalize) и
+	// гейт CAP при подключении (MaxItems). maxPages берём из того же SELLER_MAX_PAGES,
+	// что и search-worker, чтобы лимит при подключении совпадал с реальным скрейпом.
+	sellerMaxPages := 5
+	if v, err := strconv.Atoi(getEnv("SELLER_MAX_PAGES", "5")); err == nil && v > 0 {
+		sellerMaxPages = v
+	}
+	wbSeller := scraper.NewWildberriesSellerScraper(wbCard, sellerMaxPages, 0)
 	// Бот при /track скрейпит карточку сразу (показать товар), а поисковые ссылки
 	// только разбирает (NormalizeSearchURL, не ScrapeSearch). Поэтому Ozon/Я.Маркет
 	// заводим как search-обёртки: они встраивают карточный скрейпер (Matches/Scrape)
@@ -128,6 +136,7 @@ func run(log *slog.Logger) error {
 	})
 	registry := scraper.NewRegistry(
 		wbSearch,
+		wbSeller,
 		scraper.NewOzonSearchScraper(ozonCard, 60),
 		scraper.NewYandexMarketSearchScraper(yandexCard, 60),
 	)

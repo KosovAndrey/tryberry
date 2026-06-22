@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"net/url"
+	"regexp"
 	"strconv"
 	"strings"
 	"time"
@@ -89,10 +90,19 @@ func DaysWord(n int) string {
 // QueryTextFromNormalized — человекочитаемый запрос из нормализованного
 // поискового URL (...search.aspx?search=...&sort=...) для отображения.
 func QueryTextFromNormalized(normalized string) string {
-	// Текст запроса лежит в query-параметре: у WB это search=, у Я.Маркета text=.
-	// Парсим URL и берём первый непустой — так не зависим от формата конкретного
-	// маркетплейса и порядка параметров.
 	if u, err := url.Parse(normalized); err == nil {
+		// Витрина продавца WB (/seller/{id}): нет текста запроса — собираем ярлык
+		// «Магазин #{id}» (+ клиентский текст-фильтр tb_q, если задан).
+		if m := sellerPathRe.FindStringSubmatch(u.Path); len(m) == 2 {
+			label := "Магазин #" + m[1]
+			if tq := strings.TrimSpace(u.Query().Get("tb_q")); tq != "" {
+				label += " · " + tq
+			}
+			return label
+		}
+		// Текст запроса лежит в query-параметре: у WB это search=, у Я.Маркета text=.
+		// Берём первый непустой — не зависим от формата маркетплейса и порядка
+		// параметров.
 		q := u.Query()
 		for _, key := range []string{"search", "text"} {
 			if v := strings.TrimSpace(q.Get(key)); v != "" {
@@ -102,6 +112,9 @@ func QueryTextFromNormalized(normalized string) string {
 	}
 	return normalized
 }
+
+// sellerPathRe — путь витрины продавца WB /seller/{id} (для ярлыка запроса).
+var sellerPathRe = regexp.MustCompile(`/seller/(\d+)`)
 
 // ParsePrice — цена из пользовательского ввода («59 990», «59990,50», «100 ₽»).
 func ParsePrice(s string) (float64, error) {

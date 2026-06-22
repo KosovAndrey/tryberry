@@ -113,6 +113,13 @@ func run(log *slog.Logger) error {
 		getEnvInt("SEARCH_MAX_PAGES", 5),
 		time.Duration(getEnvInt("SEARCH_PAGE_DELAY_MS", 700))*time.Millisecond,
 	)
+	// WB-витрина продавца (/seller/{id}): открытый каталог-API, без токена/прокси.
+	// Тот же товарный базовый скрейпер, что у поиска. SELLER_MAX_PAGES = CAP×100.
+	wbSeller := scraper.NewWildberriesSellerScraper(
+		wbCard,
+		getEnvInt("SELLER_MAX_PAGES", 5),
+		time.Duration(getEnvInt("SEARCH_PAGE_DELAY_MS", 700))*time.Millisecond,
+	)
 	// Я.Маркет-поиск: тот же транспорт, что у карточки (tls-client + RU-прокси).
 	yandexSearch := scraper.NewYandexMarketSearchScraper(
 		scraper.NewYandexMarketScraper(scraper.YandexMarketOptions{
@@ -130,7 +137,7 @@ func run(log *slog.Logger) error {
 		BrowserURL: getEnv("OZON_BROWSER_URL", ""),
 		Logger:     log,
 	}), getEnvInt("SEARCH_MAX_ITEMS_OZON", 60))
-	registry := scraper.NewRegistry(wbSearch, yandexSearch, ozonSearch)
+	registry := scraper.NewRegistry(wbSearch, wbSeller, yandexSearch, ozonSearch)
 
 	// ── Kafka ─────────────────────────────────────────────────────────────────
 	consumer := kafka.NewConsumer(kafkaBrokers, tasksTopic, kafkaGroupID)

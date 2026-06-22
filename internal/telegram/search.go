@@ -74,6 +74,9 @@ func (b *Bot) sendSearchMenu(chatID int64, messageID int) {
 		"<code>https://www.wildberries.ru/catalog/0/search.aspx?search=наушники</code>\n" +
 		"<code>https://market.yandex.ru/search?text=наушники</code>\n" +
 		"<code>https://www.ozon.ru/search/?text=наушники</code>\n\n" +
+		"🏬 <b>Магазин на WB.</b> Можно прислать ссылку на витрину продавца " +
+		"(<code>wildberries.ru/seller/…</code>) — слежу за ценами всего магазина. " +
+		"У больших магазинов сузь выдачу фильтрами на сайте (категория, бренд), иначе товаров будет слишком много.\n\n" +
 		"Совет: чем точнее запрос, тем меньше лишнего в уведомлениях."
 
 	keyboard := tgbotapi.NewInlineKeyboardMarkup(
@@ -116,6 +119,12 @@ func (b *Bot) startSearchTrack(ctx context.Context, chatID int64, rawURL string,
 		return
 	}
 
+	// Гейт CAP для витрины продавца: если товаров в выдаче больше лимита —
+	// подписку не заводим, просим сузить фильтры. Для не-seller-скрейперов no-op.
+	if !b.checkSellerCap(ctx, chatID, ss, rawURL) {
+		return
+	}
+
 	sq, _, err := b.searchQueryRepo.Upsert(ctx, string(ss.Marketplace()), normalized, domain.QueryTextFromNormalized(normalized), nil)
 	if err != nil {
 		b.log.Error("upsert search query", "err", err)
@@ -142,6 +151,41 @@ func (b *Bot) startSearchTrack(ctx context.Context, chatID int64, rawURL string,
 	m.ParseMode = "HTML"
 	m.ReplyMarkup = keyboard
 	b.send(m)
+}
+
+// sellerSizer — скрейпер витрины продавца: умеет узнать размер выдачи и свой
+// потолок (CAP). Реализует *scraper.WildberriesSellerScraper.
+type sellerSizer interface {
+	SellerTotal(ctx context.Context, rawURL string) (int, error)
+	MaxItems() int
+}
+
+// checkSellerCap — гейт размера витрины продавца. Возвращает false (и отвечает
+// юзеру), если магазин пуст или товаров больше CAP. Для обычных поиск-ссылок —
+// no-op (true). Сбой запроса размера не блокирует: пропускаем (true).
+func (b *Bot) checkSellerCap(ctx context.Context, chatID int64, ss interface{}, rawURL string) bool {
+	sz, ok := ss.(sellerSizer)
+	if !ok {
+		return true // не витрина продавца — гейт не нужен
+	}
+	total, err := sz.SellerTotal(ctx, rawURL)
+	if err != nil {
+		b.log.Error("seller total", "err", err)
+		return true // best-effort: не валим подключение из-за сбоя проверки
+	}
+	if total == 0 {
+		b.reply(chatID, "🏬 В этом магазине по такой ссылке нет товаров. Проверь ссылку или ослабь фильтры.")
+		return false
+	}
+	if limit := sz.MaxItems(); total > limit {
+		b.reply(chatID, fmt.Sprintf(
+			"🏬 В выдаче <b>%d</b> товаров — это больше лимита (<b>%d</b>).\n\n"+
+				"Сузь выбор фильтрами на сайте (категория, бренд, модель) и пришли ссылку снова. "+
+				"Можно также добавить в конец ссылки <code>&tb_q=текст</code> — я оставлю только карточки с этим текстом в названии.",
+			total, limit))
+		return false
+	}
+	return true
 }
 
 // ── Выбор типа триггера (callback strack:<qid>:<type>) ────────────────────────
