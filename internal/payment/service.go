@@ -25,15 +25,19 @@ type ConsentLogger interface {
 type Service struct {
 	provider  Provider
 	payments  paymentCreator
-	discounts discountReader // nil → скидки не применяем (нет Redis)
-	consents  ConsentLogger  // лог согласия на подписку; nil → не логируем
+	promos    promoCapacityChecker // nil → гейт скидки пропускаем (старое поведение)
+	discounts discountReader       // nil → скидки не применяем (нет Redis)
+	consents  ConsentLogger        // лог согласия на подписку; nil → не логируем
 	log       *slog.Logger
 }
 
-func NewService(provider Provider, payments *postgres.PaymentRepo, discounts *redisrepo.DiscountStore, consents ConsentLogger, log *slog.Logger) *Service {
+func NewService(provider Provider, payments *postgres.PaymentRepo, promos *postgres.PromoRepo, discounts *redisrepo.DiscountStore, consents ConsentLogger, log *slog.Logger) *Service {
 	s := &Service{provider: provider, payments: payments, consents: consents, log: log}
 	// Только реально не-nil зависимости (typed-nil в интерфейсе != nil — сломал бы
-	// nil-проверки на discounts/consents).
+	// nil-проверки на promos/discounts/consents).
+	if promos != nil {
+		s.promos = promos
+	}
 	if discounts != nil {
 		s.discounts = discounts
 	}
@@ -97,7 +101,7 @@ func (s *Service) checkout(ctx context.Context, u *domain.User, plan, email, kin
 	if s.discounts != nil {
 		if d, found, err := s.discounts.Get(ctx, u.ID); err != nil {
 			s.log.Warn("checkout: read pending discount", "user_id", u.ID, "err", err)
-		} else if found && d.Pct > 0 {
+		} else if found && d.Pct > 0 && s.discountUsable(ctx, d.CodeID) {
 			amount = domain.DiscountedKopecks(amount, d.Pct)
 			id := d.CodeID
 			promoCodeID = &id
@@ -141,4 +145,24 @@ func (s *Service) checkout(ctx context.Context, u *domain.User, plan, email, kin
 	}
 	out.ConfirmationURL = res.URL
 	return out, nil
+}
+
+// discountUsable — пригоден ли discount-код к применению прямо сейчас (есть
+// свободные активации). Гонка не страшна: между этой проверкой и гашением после
+// оплаты код может исчерпаться — окончательный лимит держит RedeemDiscount, а
+// здесь мы лишь не показываем скидку по очевидно исчерпанному коду. Нет чекера
+// или сбой запроса → считаем пригодным (best-effort, не валим оплату из-за БД).
+func (s *Service) discountUsable(ctx context.Context, codeID int64) bool {
+	if s.promos == nil {
+		return true
+	}
+	ok, err := s.promos.Redeemable(ctx, codeID)
+	if err != nil {
+		s.log.Warn("checkout: check discount capacity", "code_id", codeID, "err", err)
+		return true
+	}
+	if !ok {
+		s.log.Info("checkout: discount code exhausted, skipping", "code_id", codeID)
+	}
+	return ok
 }

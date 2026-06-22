@@ -57,3 +57,9 @@ type paymentCreator interface {
 type discountReader interface {
 	Get(ctx context.Context, userID int64) (redisrepo.PendingDiscount, bool, error)
 }
+
+// promoCapacityChecker — есть ли у discount-кода свободные активации (гейт скидки
+// на checkout, до оплаты). *postgres.PromoRepo удовлетворяет.
+type promoCapacityChecker interface {
+	Redeemable(ctx context.Context, codeID int64) (bool, error)
+}

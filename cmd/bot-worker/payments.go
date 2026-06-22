@@ -42,7 +42,7 @@ func setupPayments(
 		return nil
 	}
 
-	svc := payment.NewService(provider, paymentRepo, discounts, billingRepo, log)
+	svc := payment.NewService(provider, paymentRepo, promoRepo, discounts, billingRepo, log)
 	tgBot.SetPayments(svc)
 	tgBot.SetBilling(billingRepo)
 	if vkBot != nil {

@@ -64,6 +64,17 @@ func (f *fakeDiscountReader) Get(_ context.Context, _ int64) (redisrepo.PendingD
 	return f.d, f.found, f.err
 }
 
+type fakePromoChecker struct {
+	ok    bool
+	err   error
+	calls int
+}
+
+func (f *fakePromoChecker) Redeemable(_ context.Context, _ int64) (bool, error) {
+	f.calls++
+	return f.ok, f.err
+}
+
 type fakeConsent struct {
 	calls int
 	err   error
@@ -128,6 +139,70 @@ func TestStart_WithPendingDiscount(t *testing.T) {
 	}
 	if cr.lastPayment.PromoCodeID == nil || *cr.lastPayment.PromoCodeID != 55 {
 		t.Errorf("promo_code_id=%v; хотим 55", cr.lastPayment.PromoCodeID)
+	}
+}
+
+// Скидка по исчерпанному коду НЕ применяется: чекер ёмкости говорит «нет
+// активаций» → сумма = полная цена, промо в строку платежа не пишется.
+func TestStart_DiscountSkippedWhenExhausted(t *testing.T) {
+	prov := &fakeProvider{name: "robokassa", res: CheckoutResult{URL: "u", ExternalID: "7"}}
+	cr := &fakeCreator{id: 7}
+	dr := &fakeDiscountReader{found: true, d: redisrepo.PendingDiscount{CodeID: 55, Pct: 20}}
+	pc := &fakePromoChecker{ok: false}
+	s := &Service{provider: prov, payments: cr, promos: pc, discounts: dr, log: quietLog()}
+
+	out, err := s.Start(context.Background(), &domain.User{ID: 1}, "pro", "e@x.ru")
+	if err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	full := domain.PriceKopecks("pro")
+	if out.AmountKopecks != full || out.DiscountPct != 0 {
+		t.Errorf("checkout amount=%d pct=%d; хотим %d/0 (скидка не применяется)", out.AmountKopecks, out.DiscountPct, full)
+	}
+	if cr.lastPayment.AmountKopecks != full || cr.lastPayment.PromoCodeID != nil {
+		t.Errorf("payments: amount=%d promo=%v; хотим %d/nil", cr.lastPayment.AmountKopecks, cr.lastPayment.PromoCodeID, full)
+	}
+	if pc.calls != 1 {
+		t.Errorf("Redeemable вызван %d раз; хотим 1", pc.calls)
+	}
+}
+
+// Скидка по живому коду применяется, когда чекер ёмкости подтверждает активации.
+func TestStart_DiscountAppliedWhenRedeemable(t *testing.T) {
+	prov := &fakeProvider{name: "robokassa", res: CheckoutResult{URL: "u", ExternalID: "7"}}
+	cr := &fakeCreator{id: 7}
+	dr := &fakeDiscountReader{found: true, d: redisrepo.PendingDiscount{CodeID: 55, Pct: 20}}
+	pc := &fakePromoChecker{ok: true}
+	s := &Service{provider: prov, payments: cr, promos: pc, discounts: dr, log: quietLog()}
+
+	out, err := s.Start(context.Background(), &domain.User{ID: 1}, "pro", "e@x.ru")
+	if err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	wantAmt := domain.DiscountedKopecks(domain.PriceKopecks("pro"), 20)
+	if out.AmountKopecks != wantAmt || out.DiscountPct != 20 {
+		t.Errorf("checkout amount=%d pct=%d; хотим %d/20", out.AmountKopecks, out.DiscountPct, wantAmt)
+	}
+	if cr.lastPayment.PromoCodeID == nil || *cr.lastPayment.PromoCodeID != 55 {
+		t.Errorf("promo_code_id=%v; хотим 55", cr.lastPayment.PromoCodeID)
+	}
+}
+
+// Сбой проверки ёмкости НЕ должен лишать платящего юзера скидки (best-effort):
+// при ошибке чекера скидка всё равно применяется.
+func TestStart_DiscountAppliedWhenCheckerErrors(t *testing.T) {
+	prov := &fakeProvider{name: "robokassa", res: CheckoutResult{URL: "u", ExternalID: "7"}}
+	cr := &fakeCreator{id: 7}
+	dr := &fakeDiscountReader{found: true, d: redisrepo.PendingDiscount{CodeID: 55, Pct: 20}}
+	pc := &fakePromoChecker{ok: false, err: errors.New("db down")}
+	s := &Service{provider: prov, payments: cr, promos: pc, discounts: dr, log: quietLog()}
+
+	out, err := s.Start(context.Background(), &domain.User{ID: 1}, "pro", "e@x.ru")
+	if err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	if out.DiscountPct != 20 {
+		t.Errorf("при сбое чекера скидка должна применяться; pct=%d", out.DiscountPct)
 	}
 }
 
