@@ -326,22 +326,31 @@ func TestScrapeSearch_PartialOnLatePageError(t *testing.T) {
 	}
 }
 
-func TestExtractSupplierID(t *testing.T) {
-	cases := []struct {
-		name, html, want string
-		ok               bool
-	}{
-		{"json key", `<script>window.__NEXT="{\"supplierId\":250021611,\"trademark\":\"КАПИБАРА\"}"</script>`, "250021611", true},
-		{"api param", `<link href="https://catalog.wb.ru/sellers/v4/catalog?supplier=4315173&dest=-1">`, "4315173", true},
-		{"seller href", `<a href="/seller/1234">магазин</a>`, "1234", true},
-		{"priority: supplierId over href", `{"supplierId":777} <a href="/seller/999">other</a>`, "777", true},
-		{"none", `<html>нет id</html>`, "", false},
-	}
-	for _, c := range cases {
-		got, ok := extractSupplierID([]byte(c.html))
-		if ok != c.ok || got != c.want {
-			t.Errorf("%s: extractSupplierID = %q,%v; want %q,%v", c.name, got, ok, c.want, c.ok)
+func TestResolveVanity(t *testing.T) {
+	s := NewWildberriesSellerScraper(nil, 5, 0)
+	s.fetch = func(_ context.Context, apiURL string) ([]byte, error) {
+		if !strings.Contains(apiURL, "constructor-api/shops/v3/moderndevice.json") {
+			return nil, fmt.Errorf("unexpected url %s", apiURL)
 		}
+		return []byte(`{"urlPath":"moderndevice","supplierID":768659,"logo":"x"}`), nil
+	}
+	id, err := s.ResolveVanity(context.Background(), "moderndevice")
+	if err != nil {
+		t.Fatalf("ResolveVanity: %v", err)
+	}
+	if id != "768659" {
+		t.Errorf("supplierID = %q, want 768659", id)
+	}
+}
+
+func TestResolveVanity_NotFound(t *testing.T) {
+	s := NewWildberriesSellerScraper(nil, 5, 0)
+	// нет кастомной витрины → 404 от fetch.
+	s.fetch = func(context.Context, string) ([]byte, error) {
+		return nil, fmt.Errorf("seller catalog status 404")
+	}
+	if _, err := s.ResolveVanity(context.Background(), "nope"); err == nil {
+		t.Error("ожидалась ошибка при 404 на слаг")
 	}
 }
 
