@@ -357,7 +357,6 @@ type wbSearchProduct struct {
 	ID             int64  `json:"id"`
 	Name           string `json:"name"`
 	Brand          string `json:"brand"`
-	Supplier       string `json:"supplier"` // имя продавца (есть в выдаче витрины)
 	FeedbackPoints int64  `json:"feedbackPoints"`
 	Sizes          []struct {
 		Price struct {

@@ -21,6 +21,10 @@ const (
 	wbSellerAPIBase  = "https://catalog.wb.ru/sellers/v4/catalog"
 	wbSellerPageSize = 100
 
+	// Открытый supplier-by-id: имя/реквизиты продавца. Поле trademark — бренд
+	// витрины (то, что видит юзер вверху страницы магазина).
+	wbSupplierInfoBase = "https://static-basket-01.wbbasket.ru/vol0/data/supplier-by-id"
+
 	// tbTextParam — наш «клиентский» текст-фильтр в ссылке подписки. Применяется
 	// на нашей стороне к name/brand карточек (для магазинов, где нет хороших
 	// фильтров WB); в WB-API НЕ уходит. Префикс tb_ — чтобы не пересечься с
@@ -176,26 +180,47 @@ func (s *WildberriesSellerScraper) ScrapeSearch(ctx context.Context, rawURL stri
 	return out, nil
 }
 
-// SellerInfo — размер выдачи (total) и имя магазина (из первой карточки) одной
-// страницей. Для гейта CAP при подключении (дёшево понять, укладывается ли
-// магазин+фильтры в лимит) и человекочитаемого ярлыка подписки.
-func (s *WildberriesSellerScraper) SellerInfo(ctx context.Context, rawURL string) (total int, supplier string, err error) {
+// SellerTotal — размер выдачи (одна страница, читаем total). Для гейта CAP при
+// подключении: дёшево понять, укладывается ли магазин+фильтры в лимит.
+func (s *WildberriesSellerScraper) SellerTotal(ctx context.Context, rawURL string) (int, error) {
 	supplierID, filters, _, err := s.parseSellerParams(rawURL)
 	if err != nil {
-		return 0, "", err
+		return 0, err
 	}
 	body, err := s.fetch(ctx, s.buildSellerAPIURL(supplierID, filters, 1))
 	if err != nil {
-		return 0, "", err
+		return 0, err
 	}
 	var parsed wbSearchResponse
 	if err := json.Unmarshal(body, &parsed); err != nil {
-		return 0, "", fmt.Errorf("decode seller info: %w", err)
+		return 0, fmt.Errorf("decode seller total: %w", err)
 	}
-	if len(parsed.Products) > 0 {
-		supplier = strings.TrimSpace(parsed.Products[0].Supplier)
+	return parsed.Total, nil
+}
+
+// SellerName — отображаемое имя магазина из открытого supplier-by-id: trademark
+// (бренд-витрина, напр. «КАПИБАРА»), фолбэк — supplierName (юрлицо). Пустая
+// строка, если имя не нашли. Для человекочитаемого ярлыка подписки.
+func (s *WildberriesSellerScraper) SellerName(ctx context.Context, rawURL string) (string, error) {
+	supplierID, _, _, err := s.parseSellerParams(rawURL)
+	if err != nil {
+		return "", err
 	}
-	return parsed.Total, supplier, nil
+	body, err := s.fetch(ctx, fmt.Sprintf("%s/%s.json", wbSupplierInfoBase, supplierID))
+	if err != nil {
+		return "", err
+	}
+	var info struct {
+		Trademark    string `json:"trademark"`
+		SupplierName string `json:"supplierName"`
+	}
+	if err := json.Unmarshal(body, &info); err != nil {
+		return "", fmt.Errorf("decode supplier info: %w", err)
+	}
+	if name := strings.TrimSpace(info.Trademark); name != "" {
+		return name, nil
+	}
+	return strings.TrimSpace(info.SupplierName), nil
 }
 
 // ── HTTP ─────────────────────────────────────────────────────────────────────

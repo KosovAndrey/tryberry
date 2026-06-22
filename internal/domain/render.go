@@ -116,6 +116,26 @@ func QueryTextFromNormalized(normalized string) string {
 // sellerPathRe — путь витрины продавца WB /seller/{id} (для ярлыка запроса).
 var sellerPathRe = regexp.MustCompile(`/seller/(\d+)`)
 
+// sellerVanityRe — ссылка на витрину продавца WB с произвольным слагом.
+var sellerVanityRe = regexp.MustCompile(`wildberries\.ru/seller/([^/?#\s]+)`)
+
+// IsSellerVanityURL — это ссылка на витрину продавца с БУКВЕННЫМ слагом
+// (/seller/moderndevice), а не числовым id. Такие пока не поддерживаются: резолв
+// слага → supplier_id требует обхода антибота WB. Числовой /seller/123 → false
+// (его обрабатывает обычный флоу).
+func IsSellerVanityURL(s string) bool {
+	m := sellerVanityRe.FindStringSubmatch(s)
+	if m == nil {
+		return false
+	}
+	for _, r := range m[1] {
+		if r < '0' || r > '9' {
+			return true
+		}
+	}
+	return false
+}
+
 // tbTextFilterParam — клиентский текст-фильтр в ссылке витрины продавца. Должен
 // совпадать с scraper.tbTextParam (там он применяется к выдаче).
 const tbTextFilterParam = "tb_q"

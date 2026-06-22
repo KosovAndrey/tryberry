@@ -251,25 +251,51 @@ func TestScrapeSearch_Pagination(t *testing.T) {
 	}
 }
 
-func TestSellerInfo(t *testing.T) {
+func TestSellerTotal(t *testing.T) {
 	var pages []string
 	s := NewWildberriesSellerScraper(nil, 5, 0)
-	prod := `{"id":111,"name":"Тренчкот","brand":"ELSY","supplier":"Галерея детской одежды ЗАО","sizes":[{"price":{"basic":120000,"product":99900}}]}`
-	s.fetch = stubFetch(map[string]string{"1": sellerPageJSON(42033, prod)}, &pages)
+	s.fetch = stubFetch(map[string]string{"1": sellerPageJSON(42033, prodApple17)}, &pages)
 
-	total, name, err := s.SellerInfo(context.Background(), "https://www.wildberries.ru/seller/250000206")
+	total, err := s.SellerTotal(context.Background(), "https://www.wildberries.ru/seller/250000206")
 	if err != nil {
-		t.Fatalf("SellerInfo: %v", err)
+		t.Fatalf("SellerTotal: %v", err)
 	}
 	if total != 42033 {
 		t.Errorf("total = %d, want 42033", total)
 	}
-	if name != "Галерея детской одежды ЗАО" {
-		t.Errorf("name = %q, want имя магазина из первой карточки", name)
-	}
 	// Только одна страница — гейт дешёвый.
 	if len(pages) != 1 || pages[0] != "1" {
 		t.Errorf("ожидался один запрос page=1, got %v", pages)
+	}
+}
+
+func TestSellerName(t *testing.T) {
+	// trademark — отображаемое имя (бренд витрины), приоритетнее supplierName (юрлицо).
+	s := NewWildberriesSellerScraper(nil, 5, 0)
+	s.fetch = func(_ context.Context, apiURL string) ([]byte, error) {
+		if !strings.Contains(apiURL, "supplier-by-id/250021611.json") {
+			return nil, fmt.Errorf("unexpected url %s", apiURL)
+		}
+		return []byte(`{"supplierId":250021611,"supplierName":"水豚香港有限公司","trademark":"КАПИБАРА"}`), nil
+	}
+	name, err := s.SellerName(context.Background(), "https://www.wildberries.ru/seller/250021611")
+	if err != nil {
+		t.Fatalf("SellerName: %v", err)
+	}
+	if name != "КАПИБАРА" {
+		t.Errorf("name = %q, want КАПИБАРА (trademark)", name)
+	}
+
+	// Пустой trademark → фолбэк на supplierName.
+	s.fetch = func(context.Context, string) ([]byte, error) {
+		return []byte(`{"supplierId":1,"supplierName":"ИП Иванов","trademark":""}`), nil
+	}
+	name, err = s.SellerName(context.Background(), "https://www.wildberries.ru/seller/1")
+	if err != nil {
+		t.Fatalf("SellerName fallback: %v", err)
+	}
+	if name != "ИП Иванов" {
+		t.Errorf("fallback name = %q, want «ИП Иванов»", name)
 	}
 }
 

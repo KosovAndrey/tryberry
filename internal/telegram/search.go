@@ -148,10 +148,10 @@ func (b *Bot) proceedSearchTrack(ctx context.Context, chatID int64, rawURL strin
 	}
 
 	// Для витрины продавца — человекочитаемый ярлык с именем магазина (вместо
-	// «Магазин #{id}» из URL). Имя берём из выдачи; сбой → URL-фолбэк.
+	// «Магазин #{id}» из URL). Имя берём из supplier-by-id; сбой → URL-фолбэк.
 	queryText := domain.QueryTextFromNormalized(normalized)
 	if sz, ok := ss.(sellerSizer); ok {
-		if _, name, err := sz.SellerInfo(ctx, rawURL); err == nil && name != "" {
+		if name, err := sz.SellerName(ctx, rawURL); err == nil && name != "" {
 			queryText = domain.SellerLabel(name, rawURL)
 		}
 	}
@@ -247,7 +247,8 @@ func (b *Bot) handleSellerSkipFilter(ctx context.Context, cb *tgbotapi.CallbackQ
 // sellerSizer — скрейпер витрины продавца: умеет узнать размер выдачи и свой
 // потолок (CAP). Реализует *scraper.WildberriesSellerScraper.
 type sellerSizer interface {
-	SellerInfo(ctx context.Context, rawURL string) (total int, name string, err error)
+	SellerTotal(ctx context.Context, rawURL string) (int, error)
+	SellerName(ctx context.Context, rawURL string) (string, error)
 	MaxItems() int
 }
 
@@ -259,9 +260,9 @@ func (b *Bot) checkSellerCap(ctx context.Context, chatID int64, ss interface{}, 
 	if !ok {
 		return true // не витрина продавца — гейт не нужен
 	}
-	total, _, err := sz.SellerInfo(ctx, rawURL)
+	total, err := sz.SellerTotal(ctx, rawURL)
 	if err != nil {
-		b.log.Error("seller info", "err", err)
+		b.log.Error("seller total", "err", err)
 		return true // best-effort: не валим подключение из-за сбоя проверки
 	}
 	if total == 0 {

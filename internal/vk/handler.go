@@ -312,6 +312,12 @@ func (b *Bot) handleMessage(ctx context.Context, vkID int64, text, payload strin
 			b.handleTrack(ctx, vkID, user, text)
 			return
 		}
+		// Витрина продавца с буквенной ссылкой (/seller/имя) — пока не поддерживаем.
+		if domain.IsSellerVanityURL(text) {
+			metrics.VKMessages.WithLabelValues("seller_vanity").Inc()
+			b.send(ctx, vkID, "🏬 Магазины с буквенной ссылкой (/seller/имя) пока не поддерживаю — нужна ссылка с числовым номером магазина (вида /seller/250021611). Обычно её даёт кнопка «Поделиться» на странице продавца в приложении WB.", kb)
+			return
+		}
 	}
 
 	if p.Cmd != "" {

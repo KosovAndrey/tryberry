@@ -46,6 +46,21 @@ func TestAppendTextFilter(t *testing.T) {
 	}
 }
 
+func TestIsSellerVanityURL(t *testing.T) {
+	cases := map[string]bool{
+		"https://www.wildberries.ru/seller/moderndevice":            true, // буквенный слаг
+		"https://www.wildberries.ru/seller/moderndevice?x=1":        true,
+		"https://www.wildberries.ru/seller/250021611":               false, // числовой — обычный флоу
+		"https://www.wildberries.ru/catalog/0/search.aspx?search=x": false,
+		"просто текст":                                              false,
+	}
+	for in, want := range cases {
+		if got := IsSellerVanityURL(in); got != want {
+			t.Errorf("IsSellerVanityURL(%q) = %v, want %v", in, got, want)
+		}
+	}
+}
+
 func TestSellerLabel(t *testing.T) {
 	base := "https://www.wildberries.ru/seller/100"
 	if got := SellerLabel("Купибара", base); got != "Купибара" {

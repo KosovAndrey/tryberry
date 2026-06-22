@@ -9,6 +9,7 @@ import (
 	tgbotapi "github.com/go-telegram-bot-api/telegram-bot-api/v5"
 	"github.com/redis/go-redis/v9"
 
+	"gitlab.com/KosovAndrey/tryberrybot/internal/domain"
 	"gitlab.com/KosovAndrey/tryberrybot/internal/payment"
 	"gitlab.com/KosovAndrey/tryberrybot/internal/repository/postgres"
 	redisrepo "gitlab.com/KosovAndrey/tryberrybot/internal/repository/redis"
@@ -205,6 +206,12 @@ func (b *Bot) handleMessage(ctx context.Context, msg *tgbotapi.Message) {
 	// 3. Ссылка на товар → существующая логика.
 	if _, err := b.registry.FindByURL(text); err == nil {
 		b.doTrack(ctx, msg.Chat.ID, text, user)
+		return
+	}
+
+	// 4. Витрина продавца с буквенной ссылкой (/seller/имя) — пока не поддерживаем.
+	if domain.IsSellerVanityURL(text) {
+		b.reply(msg.Chat.ID, "🏬 Магазины с буквенной ссылкой (<code>/seller/имя</code>) пока не поддерживаю — нужна ссылка с числовым номером магазина (вида <code>/seller/250021611</code>). Обычно её даёт кнопка «Поделиться» на странице продавца в приложении WB.")
 		return
 	}
 

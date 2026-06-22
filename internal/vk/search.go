@@ -113,7 +113,7 @@ func (b *Bot) proceedSearchTrack(ctx context.Context, vkID int64, user *domain.U
 	// Витрина продавца → ярлык с именем магазина (вместо «Магазин #{id}»).
 	queryText := domain.QueryTextFromNormalized(normalized)
 	if sz, ok := ss.(sellerSizer); ok {
-		if _, name, err := sz.SellerInfo(ctx, rawURL); err == nil && name != "" {
+		if name, err := sz.SellerName(ctx, rawURL); err == nil && name != "" {
 			queryText = domain.SellerLabel(name, rawURL)
 		}
 	}
@@ -185,7 +185,8 @@ func searchTriggerPayload(queryID int64, kind string) string {
 
 // sellerSizer — скрейпер витрины продавца WB: размер выдачи + потолок (CAP).
 type sellerSizer interface {
-	SellerInfo(ctx context.Context, rawURL string) (total int, name string, err error)
+	SellerTotal(ctx context.Context, rawURL string) (int, error)
+	SellerName(ctx context.Context, rawURL string) (string, error)
 	MaxItems() int
 }
 
@@ -197,9 +198,9 @@ func (b *Bot) checkSellerCap(ctx context.Context, vkID int64, kb *Keyboard, ss i
 	if !ok {
 		return true
 	}
-	total, _, err := sz.SellerInfo(ctx, rawURL)
+	total, err := sz.SellerTotal(ctx, rawURL)
 	if err != nil {
-		b.log.Error("vk: seller info", "err", err)
+		b.log.Error("vk: seller total", "err", err)
 		return true
 	}
 	if total == 0 {
