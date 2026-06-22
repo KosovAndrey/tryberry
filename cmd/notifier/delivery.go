@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"math"
@@ -96,6 +97,14 @@ func (d *deliverer) deliver(ctx context.Context, userID, telegramID int64, sendT
 		if vkErr != nil {
 			d.log.Error("deliver: vk failed (tg ok)", "user_id", userID, "err", vkErr)
 		}
+		return nil
+	}
+	// Не доставлено. Перманентную ошибку TG (битая картинка, бан, чат не найден)
+	// НЕ ретраим — иначе одно сообщение зацикливает kafka-консьюмер и копит лаг.
+	// Транзиентные (429/сеть, любые VK) — отдаём наверх для ретрая.
+	if errors.Is(tgErr, telegram.ErrTelegramPermanent) && vkErr == nil {
+		d.log.Error("deliver: tg permanent, skipping (no kafka retry)", "user_id", userID, "err", tgErr)
+		metrics.NotificationsDelivered.WithLabelValues("tg", "skipped").Inc()
 		return nil
 	}
 	if tgErr != nil {

@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"html"
 	"math"
@@ -11,6 +12,11 @@ import (
 	"strings"
 	"time"
 )
+
+// ErrTelegramPermanent — Telegram отверг запрос ПЕРМАНЕНТНО (HTTP 4xx, кроме 429):
+// битая картинка («wrong type of the web page content»), юзер заблокировал бота
+// (403), чат не найден и т.п. Ретрай не поможет — звать на нём кафку-петлю нельзя.
+var ErrTelegramPermanent = errors.New("telegram permanent error")
 
 type Notifier struct {
 	token  string
@@ -77,9 +83,16 @@ func (n *Notifier) SendPriceAlert(ctx context.Context, a PriceAlert) error {
 		},
 	}
 
-	// Если есть картинка — sendPhoto, иначе sendMessage
+	// Если есть картинка — sendPhoto, иначе sendMessage.
 	if a.ImageURL != "" {
-		return n.sendPhoto(ctx, a.ChatID, a.ImageURL, caption, keyboard)
+		err := n.sendPhoto(ctx, a.ChatID, a.ImageURL, caption, keyboard)
+		// Картинку Telegram не принял (битый/недоступный URL — частый кейс для
+		// трансграничных товаров без basket-картинки, «wrong type of the web page
+		// content») → шлём текстом, чтобы алерт всё равно дошёл.
+		if errors.Is(err, ErrTelegramPermanent) {
+			return n.sendMessage(ctx, a.ChatID, caption, keyboard)
+		}
+		return err
 	}
 	return n.sendMessage(ctx, a.ChatID, caption, keyboard)
 }
@@ -253,6 +266,11 @@ func (n *Notifier) call(ctx context.Context, method string, payload any) error {
 		return fmt.Errorf("decode response: %w", err)
 	}
 	if !tgResp.OK {
+		// 4xx (кроме 429) — перманентно: запрос некорректен / недоставляем. Ретрай
+		// бесполезен, помечаем sentinel'ом, чтобы выше не зациклить кафку.
+		if resp.StatusCode >= 400 && resp.StatusCode < 500 && resp.StatusCode != http.StatusTooManyRequests {
+			return fmt.Errorf("%w: telegram error: %s", ErrTelegramPermanent, tgResp.Description)
+		}
 		return fmt.Errorf("telegram error: %s", tgResp.Description)
 	}
 	return nil
