@@ -176,23 +176,26 @@ func (s *WildberriesSellerScraper) ScrapeSearch(ctx context.Context, rawURL stri
 	return out, nil
 }
 
-// SellerTotal — размер выдачи (одна страница, читаем total). Для гейта CAP при
-// подключении: дёшево понять, укладывается ли магазин+фильтры в лимит, не
-// скрейпя все страницы.
-func (s *WildberriesSellerScraper) SellerTotal(ctx context.Context, rawURL string) (int, error) {
+// SellerInfo — размер выдачи (total) и имя магазина (из первой карточки) одной
+// страницей. Для гейта CAP при подключении (дёшево понять, укладывается ли
+// магазин+фильтры в лимит) и человекочитаемого ярлыка подписки.
+func (s *WildberriesSellerScraper) SellerInfo(ctx context.Context, rawURL string) (total int, supplier string, err error) {
 	supplierID, filters, _, err := s.parseSellerParams(rawURL)
 	if err != nil {
-		return 0, err
+		return 0, "", err
 	}
 	body, err := s.fetch(ctx, s.buildSellerAPIURL(supplierID, filters, 1))
 	if err != nil {
-		return 0, err
+		return 0, "", err
 	}
 	var parsed wbSearchResponse
 	if err := json.Unmarshal(body, &parsed); err != nil {
-		return 0, fmt.Errorf("decode seller total: %w", err)
+		return 0, "", fmt.Errorf("decode seller info: %w", err)
 	}
-	return parsed.Total, nil
+	if len(parsed.Products) > 0 {
+		supplier = strings.TrimSpace(parsed.Products[0].Supplier)
+	}
+	return parsed.Total, supplier, nil
 }
 
 // ── HTTP ─────────────────────────────────────────────────────────────────────

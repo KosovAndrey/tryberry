@@ -120,6 +120,22 @@ var sellerPathRe = regexp.MustCompile(`/seller/(\d+)`)
 // совпадать с scraper.tbTextParam (там он применяется к выдаче).
 const tbTextFilterParam = "tb_q"
 
+// SellerLabel — человекочитаемый ярлык витрины продавца: имя магазина (+ текст-
+// фильтр tb_q, если задан). Пустое имя → «Магазин». Используется как QueryText
+// подписки (показывается в списке и уведомлениях).
+func SellerLabel(name, rawURL string) string {
+	label := strings.TrimSpace(name)
+	if label == "" {
+		label = "Магазин"
+	}
+	if u, err := url.Parse(rawURL); err == nil {
+		if tq := strings.TrimSpace(u.Query().Get(tbTextFilterParam)); tq != "" {
+			label += " · " + tq
+		}
+	}
+	return label
+}
+
 // HasTextFilter — есть ли уже клиентский текст-фильтр (tb_q) в ссылке.
 func HasTextFilter(rawURL string) bool {
 	u, err := url.Parse(rawURL)

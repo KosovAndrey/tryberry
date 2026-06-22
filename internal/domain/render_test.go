@@ -46,6 +46,19 @@ func TestAppendTextFilter(t *testing.T) {
 	}
 }
 
+func TestSellerLabel(t *testing.T) {
+	base := "https://www.wildberries.ru/seller/100"
+	if got := SellerLabel("Купибара", base); got != "Купибара" {
+		t.Errorf("SellerLabel без фильтра = %q, want «Купибара»", got)
+	}
+	if got := SellerLabel("Купибара", base+"?tb_q=iphone+17"); got != "Купибара · iphone 17" {
+		t.Errorf("SellerLabel с фильтром = %q", got)
+	}
+	if got := SellerLabel("", base); got != "Магазин" {
+		t.Errorf("SellerLabel без имени = %q, want «Магазин»", got)
+	}
+}
+
 func TestQueryTextFromNormalized(t *testing.T) {
 	cases := map[string]string{
 		// WB: параметр search=

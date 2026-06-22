@@ -251,17 +251,21 @@ func TestScrapeSearch_Pagination(t *testing.T) {
 	}
 }
 
-func TestSellerTotal(t *testing.T) {
+func TestSellerInfo(t *testing.T) {
 	var pages []string
 	s := NewWildberriesSellerScraper(nil, 5, 0)
-	s.fetch = stubFetch(map[string]string{"1": sellerPageJSON(42033, prodApple17)}, &pages)
+	prod := `{"id":111,"name":"Тренчкот","brand":"ELSY","supplier":"Галерея детской одежды ЗАО","sizes":[{"price":{"basic":120000,"product":99900}}]}`
+	s.fetch = stubFetch(map[string]string{"1": sellerPageJSON(42033, prod)}, &pages)
 
-	total, err := s.SellerTotal(context.Background(), "https://www.wildberries.ru/seller/250000206")
+	total, name, err := s.SellerInfo(context.Background(), "https://www.wildberries.ru/seller/250000206")
 	if err != nil {
-		t.Fatalf("SellerTotal: %v", err)
+		t.Fatalf("SellerInfo: %v", err)
 	}
 	if total != 42033 {
 		t.Errorf("total = %d, want 42033", total)
+	}
+	if name != "Галерея детской одежды ЗАО" {
+		t.Errorf("name = %q, want имя магазина из первой карточки", name)
 	}
 	// Только одна страница — гейт дешёвый.
 	if len(pages) != 1 || pages[0] != "1" {
