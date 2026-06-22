@@ -1,4 +1,3 @@
-camoenv/
+out/
 __pycache__/
 *.pyc
-out/
