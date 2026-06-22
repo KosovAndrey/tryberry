@@ -18,21 +18,20 @@
 
 Реальный браузер **camoufox** (headful в Xvfb) проходит X5SEC прозрачно, как у
 Ozon с FAB. Тогда цену берём из отрендеренного DOM и/или перехваченного API-ответа.
-Тестируем **с датацентр-IP VPS, без прокси** — нужный прод-сценарий.
+Тестируем **с датацентр-IP VPS, БЕЗ прокси** — нужный прод-сценарий (Ozon ходит
+ЧЕРЕЗ прокси, Ali — напрямую, поэтому это РАЗНЫЕ образы/сервисы, не общий).
 
 ## Как запустить (на VPS)
 
-Проб гоняется **внутри образа ozon-miner** — там уже camoufox + Xvfb + все либы,
-поэтому никаких ручных `apt`/`libgtk`/`xvfb` на хосте (об это спотыкался venv).
+Проб собирает **отдельный образ `ali-probe`** (свой `Dockerfile`: camoufox+Xvfb+
+либы через `playwright install-deps firefox`, без Ozon и без прокси). Никаких
+ручных `apt`/`libgtk`/`xvfb` на хосте — об это спотыкался venv.
 
 ```bash
 # на VPS, в репо:
 git fetch origin && git checkout feat/aliexpress-camoufox
 
-# образ camoufox должен быть собран (если ещё нет):
-docker compose build ozon-miner
-
-# запуск проба (без прокси, чистый датацентр-IP):
+# собирает образ ali-probe и запускает проб (без прокси, датацентр-IP):
 bash experiments/aliexpress/run.sh
 ```
 
@@ -54,8 +53,9 @@ bash experiments/aliexpress/run.sh
 
 ## Если проб проходит — план
 
-Скрейпер AliExpress = **сайдкар `ali-miner`** (клон `ozon-miner`: aiohttp +
-пул camoufox-дорожек, `GET /scrape?id=<id>`) + Go-обёртка `AliexpressScraper`,
-реализующая `scraper.MarketplaceScraper` и ходящая в сайдкар (как `fetchViaBrowser`
-у Ozon). `marketplace` в БД — `TEXT`, миграция не нужна; точки интеграции — как у
-Ozon (`cmd/scraper/main.go` registry, `internal/telegram/bot.go` coming-soon).
+Скрейпер AliExpress = **отдельный сайдкар `ali-miner`** (по образцу `ozon-miner`,
+но СВОЙ сервис/образ и БЕЗ прокси: aiohttp + пул camoufox-дорожек, `GET /scrape?id=`)
++ Go-обёртка `AliexpressScraper`, реализующая `scraper.MarketplaceScraper` и
+ходящая в сайдкар (как `fetchViaBrowser` у Ozon). Этот `Dockerfile` — заготовка
+его образа. `marketplace` в БД — `TEXT`, миграция не нужна; точки интеграции — как
+у Ozon (`cmd/scraper/main.go` registry, `internal/telegram/bot.go` coming-soon).
