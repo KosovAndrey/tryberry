@@ -10,6 +10,7 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"golang.org/x/time/rate"
@@ -261,15 +262,29 @@ func (s *WildberriesScraper) fetchFromBasket(ctx context.Context, articleID stri
 	return nil, fmt.Errorf("basket price: %w", ErrProductNotFound)
 }
 
-// tryBasket — попытка получить цену (+ карточку) с конкретного шарда.
+// tryBasket — попытка получить цену (+ карточку) с конкретного шарда. Цену и
+// карточку тянем ПАРАЛЛЕЛЬНО (два независимых запроса) — это вдвое срезает
+// латентность скрейпа на горячем пути (резолв из кэша), а значит и пропускную
+// последовательного консьюмера. Для проигрышных шардов карточка бежит параллельно
+// с price-404, так что по времени не дороже.
 func (s *WildberriesScraper) tryBasket(ctx context.Context, vol, part int64, articleID string, basket int64) (*Result, error) {
 	base := fmt.Sprintf("https://basket-%02d.wbbasket.ru/vol%d/part%d/%s/info",
 		basket, vol, part, articleID)
-	price, err := s.fetchBasketPrice(ctx, base)
-	if err != nil {
-		return nil, err
+
+	var (
+		price          float64
+		priceErr       error
+		name, imageURL string
+		wg             sync.WaitGroup
+	)
+	wg.Add(2)
+	go func() { defer wg.Done(); price, priceErr = s.fetchBasketPrice(ctx, base) }()
+	go func() { defer wg.Done(); name, imageURL = s.fetchBasketCard(ctx, base, articleID, basket, vol, part) }()
+	wg.Wait()
+
+	if priceErr != nil {
+		return nil, priceErr
 	}
-	name, imageURL := s.fetchBasketCard(ctx, base, articleID, basket, vol, part)
 	return &Result{Name: name, Price: price, ImageURL: imageURL, InStock: true}, nil
 }
 
