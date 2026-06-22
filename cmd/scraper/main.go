@@ -143,6 +143,11 @@ func run(log *slog.Logger) error {
 	if redisClient != nil {
 		wbCard.SetBasketResolver(redisrepo.NewBasketCache(redisClient))
 	}
+	// u-card-fallback (трансграничные товары) через прокси: с прямого RU-IP воркера
+	// u-card отдаёт 403, зарубежный/чистый выход (xray) — принимает.
+	if err := wbCard.SetUCardProxy(getEnv("WB_UCARD_PROXY_URL", "")); err != nil {
+		log.Warn("bad WB_UCARD_PROXY_URL, u-card fallback uses direct egress", "err", err)
+	}
 	registry := scraper.NewRegistry(
 		wbCard,
 		scraper.NewOzonScraper(scraper.OzonOptions{

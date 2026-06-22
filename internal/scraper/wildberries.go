@@ -3,8 +3,10 @@ package scraper
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
+	neturl "net/url"
 	"regexp"
 	"strconv"
 	"strings"
@@ -24,15 +26,18 @@ type BasketResolver interface {
 
 type WildberriesScraper struct {
 	http    *http.Client
+	ucard   *http.Client // клиент для u-card-fallback; по умолчанию = http
 	limiter *rate.Limiter
 	baskets BasketResolver // nilable
 }
 
 func NewWildberriesScraper(rps float64) *WildberriesScraper {
+	c := &http.Client{Timeout: 8 * time.Second}
 	return &WildberriesScraper{
 		// basket CDN отвечает за доли секунды; 8s — щедрый потолок на случай
 		// сетевых задержек, но при норме мы укладываемся в <1s
-		http:    &http.Client{Timeout: 8 * time.Second},
+		http:    c,
+		ucard:   c,
 		limiter: rate.NewLimiter(rate.Limit(rps), 1),
 	}
 }
@@ -40,6 +45,25 @@ func NewWildberriesScraper(rps float64) *WildberriesScraper {
 // SetBasketResolver подключает кэш vol→basket (опционально; сервисы передают
 // redisrepo.BasketCache). Без него скрейпер всё равно работает — пробой формулы+соседей.
 func (s *WildberriesScraper) SetBasketResolver(r BasketResolver) { s.baskets = r }
+
+// SetUCardProxy направляет запросы u-card-fallback через прокси. Нужно там, где
+// прямой egress 403-ится антиботом u-card (датацентровый RU-IP воркера): прокси
+// с зарубежным/чистым выходом (напр. xray) запрос принимает. Пустой URL — оставить
+// дефолтный клиент (он сам может ходить через HTTPS_PROXY, как у бота).
+func (s *WildberriesScraper) SetUCardProxy(proxyURL string) error {
+	if proxyURL == "" {
+		return nil
+	}
+	u, err := neturl.Parse(proxyURL)
+	if err != nil {
+		return fmt.Errorf("ucard proxy url: %w", err)
+	}
+	s.ucard = &http.Client{
+		Timeout:   8 * time.Second,
+		Transport: &http.Transport{Proxy: http.ProxyURL(u)},
+	}
+	return nil
+}
 
 func (s *WildberriesScraper) Marketplace() Marketplace {
 	return MarketplaceWildberries
@@ -62,15 +86,13 @@ func ExtractArticleID(url string) (string, error) {
 
 // Scrape получает данные о товаре Wildberries.
 //
-// Основной источник — u-card.wb.ru/cards/v4/list (открытый, без токена): даёт
-// REAL-TIME цену (поле price.product), не требует перебора basket-шардов и видит
-// трансграничные товары («Находки из Китая»), которых нет в basket-CDN.
+// Основной источник — basket-CDN price-history.json: быстрый, доступен с прямого
+// egress, без антибота. Цена может отставать на часы — компромисс ради простоты.
 //
-// Fallback — basket-CDN price-history.json (прежний путь): на случай, если
-// u-card не ответил. Его цена может отставать на часы, зато источник независим.
-//
-// (Историческая справка: до u-card единственным путём был basket — card.wb.ru
-// тогда отдавал 404. Новый хост u-card.wb.ru ожил и отдаёт цену напрямую.)
+// Fallback — u-card.wb.ru/cards/v4/list (real-time): включается, ТОЛЬКО когда
+// товара нет в basket-CDN (удалён / трансграничный «Находки из Китая»). u-card
+// 403-ит датацентровый RU-IP, поэтому fallback ходит через прокси (SetUCardProxy,
+// напр. xray) — но лишь для редких трансграничных, нагрузка на прокси минимальна.
 func (s *WildberriesScraper) Scrape(ctx context.Context, url string) (*Result, error) {
 	articleID, err := ExtractArticleID(url)
 	if err != nil {
@@ -81,20 +103,25 @@ func (s *WildberriesScraper) Scrape(ctx context.Context, url string) (*Result, e
 		return nil, err
 	}
 
-	if r, err := s.fetchFromUCard(ctx, articleID); err == nil {
-		metrics.WBPriceSource.WithLabelValues("ucard").Inc()
-		return r, nil
-	}
 	r, err := s.fetchFromBasket(ctx, articleID)
 	if err == nil {
 		metrics.WBPriceSource.WithLabelValues("basket").Inc()
+		return r, nil
+	}
+	// Нет в basket-CDN (трансгран/удалён) → пробуем real-time u-card.
+	if errors.Is(err, ErrProductNotFound) {
+		if ur, uerr := s.fetchFromUCard(ctx, articleID); uerr == nil {
+			metrics.WBPriceSource.WithLabelValues("ucard").Inc()
+			return ur, nil
+		}
 	}
 	return r, err
 }
 
-// fetchFromUCard берёт карточку с u-card.wb.ru/cards/v4/list — открытый real-time
-// эндпоинт. Форма ответа совпадает с поисковой выдачей (products[].sizes[].price),
-// поэтому переиспользуем wbSearchResponse.
+// fetchFromUCard берёт карточку с u-card.wb.ru/cards/v4/list — real-time эндпоинт.
+// Форма ответа совпадает с поисковой выдачей (products[].sizes[].price), поэтому
+// переиспользуем wbSearchResponse. Ходит через s.ucard (может быть с прокси, см.
+// SetUCardProxy — u-card 403-ит прямой RU-IP).
 func (s *WildberriesScraper) fetchFromUCard(ctx context.Context, articleID string) (*Result, error) {
 	id, err := strconv.ParseInt(articleID, 10, 64)
 	if err != nil {
@@ -104,7 +131,7 @@ func (s *WildberriesScraper) fetchFromUCard(ctx context.Context, articleID strin
 	apiURL := wbUCardBase + "?appType=1&curr=rub&dest=-1257786&spp=30&nm=" + articleID
 	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, apiURL, nil)
 	req.Header.Set("User-Agent", wbUserAgent)
-	resp, err := s.http.Do(req)
+	resp, err := s.ucard.Do(req)
 	if err != nil {
 		return nil, err
 	}

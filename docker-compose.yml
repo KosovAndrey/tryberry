@@ -248,6 +248,10 @@ services:
       TELEGRAM_BOT_TOKEN: "${TELEGRAM_BOT_TOKEN}"
       SCRAPER_RATE_LIMIT_RPS: "5"
       SCRAPER_RATE_LIMIT_RPS_OZON: "1"
+      # u-card-fallback (трансграничные WB-товары, basket-CDN их не видит) через
+      # xray: u-card 403-ит прямой RU-IP воркера, зарубежный exit принимает. Нагрузка
+      # копеечная — только редкие трансграничные. Пусто → fallback идёт напрямую (403).
+      WB_UCARD_PROXY_URL: "${WB_UCARD_PROXY_URL:-http://xray:8888}"
       # Мобильный РФ-прокси Ozon (путь B: аккаунт-сессия проходит FAB через
       # доверенный IP). Sticky/ротация 0. Секрет — в .env.
       OZON_PROXY_URL: "${OZON_PROXY_URL:-}"
