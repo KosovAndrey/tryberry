@@ -29,6 +29,7 @@ Camoufox-проб для aliexpress.ru.
 """
 import asyncio
 import os
+import shutil
 import sys
 
 from camoufox.async_api import AsyncCamoufox
@@ -47,7 +48,14 @@ API_HINTS = ("mtop", "aer-api", "/pdp", "pdp.pc", "price", "/fn/", "detail")
 def _headless_value():
     m = HEADLESS_MODE.lower()
     if m == "virtual":
-        return "virtual"
+        # virtual-режим требует Xvfb; если его нет — авто-фолбэк на нативный
+        # headless, чтобы проб не падал (скрытность чуть ниже, но для проверки
+        # «проходит ли вообще» годится).
+        if shutil.which("Xvfb"):
+            return "virtual"
+        print("  [!] Xvfb не найден → фолбэк на нативный headless "
+              "(для лучшей скрытности: sudo apt-get install -y xvfb)")
+        return True
     if m == "false":
         return False
     return True

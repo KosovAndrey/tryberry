@@ -23,13 +23,17 @@ DOM либо из перехваченного API-ответа. Тестиру�
 ## Как запустить (на VPS, НЕ через vless)
 
 ```bash
-# системные либы для Firefox + Xvfb (один раз, нужен sudo):
+# системные либы для Firefox + Xvfb (один раз, нужен sudo).
+# ВНИМАНИЕ Ubuntu 24.04: пакеты с суффиксом t64 (libasound2 — виртуальный):
 sudo apt-get update && sudo apt-get install -y \
-  libgtk-3-0 libx11-xcb1 libasound2 libdbus-glib-1-2 libxtst6 libxt6 xvfb
+  libgtk-3-0t64 libx11-xcb1 libasound2t64 libdbus-glib-1-2 libxtst6 libxt6t64 xvfb
 
 # поставить и запустить проб:
 bash experiments/aliexpress/run_probe.sh
 ```
+
+Если Xvfb не поставлен — проб сам сфолбэчится на нативный headless (чуть менее
+скрытно). Для полноценного virtual-режима хватает одного пакета: `sudo apt-get install -y xvfb`.
 
 Без xvfb — нативный headless (чуть менее скрытно):
 
