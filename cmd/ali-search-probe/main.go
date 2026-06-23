@@ -45,10 +45,13 @@ func main() {
 		fmt.Fprintln(os.Stderr, "FATAL: ALI_PROXY_URL/OZON_PROXY_URL не задан")
 		os.Exit(2)
 	}
-	query := "футболка"
+	arg := "футболка"
 	if len(os.Args) > 1 {
-		query = os.Args[1]
+		arg = os.Args[1]
 	}
+
+	// Режим витрины магазина: arg = URL /store/<id> или "store:<id>".
+	storeID := extractStoreID(arg)
 
 	jar := tls_client.NewCookieJar()
 	direct := mkClient("", jar)
@@ -56,16 +59,23 @@ func main() {
 	seedLocale(direct, jar)
 
 	ctx := context.Background()
-	fmt.Printf("query: %q\n", query)
 
-	// Прогрев: GET страницы выдачи через прокси — проходит X5SEC и кладёт aer-cookie
-	// в общий jar. Затем POST к API (direct, fallback proxy).
-	warmURL := aliBase + "/wholesale?SearchText=" + url.QueryEscape(query)
+	var warmURL string
+	var body []byte
+	if storeID != "" {
+		fmt.Printf("store: %s\n", storeID)
+		warmURL = aliBase + "/store/" + storeID
+		body = []byte(fmt.Sprintf(`{"page":1,"searchText":"","source":"store","storeIds":[%q],"catId":"","pgChildren":[],"aeBrainIds":[],"mainFilters":"","searchTrigger":"","g":"y"}`, storeID))
+	} else {
+		fmt.Printf("query: %q\n", arg)
+		warmURL = aliBase + "/wholesale?SearchText=" + url.QueryEscape(arg)
+		body = []byte(fmt.Sprintf(`{"page":1,"searchText":%q,"source":"direct","catId":"","storeIds":[],"pgChildren":[],"aeBrainIds":[],"mainFilters":"","searchTrigger":"search_bar","g":"y"}`, arg))
+	}
+
+	// Прогрев: GET страницы через прокси — проходит X5SEC и кладёт aer-cookie в jar.
 	ws, wb := do(ctx, proxy, fhttp.MethodGet, warmURL, nil, warmURL)
 	fmt.Printf("warmup(proxy): status=%d blocked=%s len=%d cookies=%d\n", ws, yn(isBlocked(wb)), len(wb), cookieCount(proxy))
 	time.Sleep(1200 * time.Millisecond)
-
-	body := []byte(fmt.Sprintf(`{"page":1,"searchText":%q,"source":"direct","catId":"","storeIds":[],"pgChildren":[],"aeBrainIds":[],"mainFilters":"","searchTrigger":"search_bar","g":"y"}`, query))
 	status, resp := do(ctx, direct, fhttp.MethodPost, searchAPI, body, warmURL)
 	src := "direct"
 	if status != 200 || isBlocked(resp) {
@@ -189,6 +199,26 @@ func snippet(b []byte, n int) string {
 		b = b[:n]
 	}
 	return strings.Join(strings.Fields(string(b)), " ")
+}
+
+// extractStoreID достаёт числовой id из "store:<id>" или URL /store/<id>.
+func extractStoreID(arg string) string {
+	s := arg
+	if i := strings.Index(s, "/store/"); i >= 0 {
+		s = s[i+len("/store/"):]
+	} else if strings.HasPrefix(s, "store:") {
+		s = s[len("store:"):]
+	} else {
+		return ""
+	}
+	digits := ""
+	for _, r := range s {
+		if r < '0' || r > '9' {
+			break
+		}
+		digits += string(r)
+	}
+	return digits
 }
 
 func yn(b bool) string {
