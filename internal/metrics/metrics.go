@@ -237,6 +237,19 @@ var (
 		[]string{"source"},
 	)
 
+	// AliPriceSource — каким путём взята цена AliExpress. direct — основной (запрос
+	// к aer-jsonapi напрямую с датацентр-IP по сессионной cookie, без прокси); proxy
+	// — fallback-рефреш (cookie протухла → один запрос через RU-прокси, он же
+	// обновляет jar). Рост доли proxy = чаще платим за прокси / короче TTL cookie.
+	AliPriceSource = promauto.NewCounterVec(
+		prometheus.CounterOpts{
+			Namespace: namespace,
+			Name:      "ali_price_source_total",
+			Help:      "Which path served the AliExpress product price (direct vs proxy-refresh)",
+		},
+		[]string{"source"},
+	)
+
 	// MaxActiveSubsPerUser — максимум активных товарных подписок у одного юзера.
 	// Сигнал «пора делать бандлинг алертов»: пока мало (единицы) — пачек уведомлений
 	// за цикл почти нет; когда вырастет (~15+) или появятся reseller-юзеры — за цикл
