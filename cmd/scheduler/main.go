@@ -196,14 +196,12 @@ func productSchedulerTick(
 		// антибот незачем, скрейпим обычным WB-кадансом (вкл. reseller-планы).
 		isOzon := strings.Contains(lurl, "ozon.ru")
 		plan := domain.EffectivePlanFor(r.OwnerPlan, r.PlanExpiresAt, now)
-		// Reseller-планы на Ozon не тянут: такой подписчик не вносит вклад в товар.
-		// На WB и Я.Маркете он работает как обычно.
-		if isOzon && domain.IsResellerPlan(plan.Name) {
-			continue
-		}
 		iv := plan.EffectiveInterval(defaultInterval)
 		if isOzon {
-			// Тарифный каданс WB, но в ozonMult раз реже, с полом ozonMinInterval.
+			// Ozon троттлим: тарифный каданс × ozonMult, с полом ozonMinInterval.
+			// Reseller-планы (1 мин) идут этим же путём → их Ozon-каданс = пол 20м
+			// (раньше Ozon перекупам был НЕДОСТУПЕН; решение — дать доступ на
+			// троттл-кадансе, docs/SCRAPE-CADENCE.md; больше дорожек Ozon — позже).
 			iv *= time.Duration(ozonMult)
 			if ozonMinInterval > 0 && iv < ozonMinInterval {
 				iv = ozonMinInterval
