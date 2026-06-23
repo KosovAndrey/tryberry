@@ -14,21 +14,31 @@ import (
 	tls_client "github.com/bogdanfinn/tls-client"
 	"github.com/bogdanfinn/tls-client/profiles"
 	"golang.org/x/time/rate"
+
+	"gitlab.com/KosovAndrey/tryberrybot/internal/metrics"
 )
 
 // YandexMarketScraper получает цену/название/картинку товара Я.Маркета по URL
 // карточки — БЕЗ аккаунта (цена публичная, в отличие от Ozon).
 //
 // Почему так, а не чистый net/http: market.yandex.ru закрыт SmartCaptcha, который
-// на «голом» Go-TLS-отпечатке + датацентровом IP отдаёт страницу капчи вместо
-// карточки (из-за этого старую реализацию пришлось выключить, коммит 86b1712).
-// Рабочий рецепт — тот же, что вытащил Ozon: хороший TLS-отпечаток
-// (bogdanfinn/tls-client, профиль Chrome) + RU-мобильный/резидентский прокси.
-// Аккаунт не нужен — мы берём публичную карточку и парсим встроенный JSON-LD
-// (<script type="application/ld+json"> → @type:Product → offers.price), как и
-// раньше; меняется только транспорт.
+// на «голом» Go-TLS-отпечатке отдаёт страницу капчи вместо карточки (из-за этого
+// старую реализацию пришлось выключить, коммит 86b1712). Рабочий рецепт — хороший
+// TLS-отпечаток (bogdanfinn/tls-client, профиль Chrome). Аккаунт не нужен — берём
+// публичную карточку и парсим встроенный JSON-LD (<script type="application/
+// ld+json"> → @type:Product → offers.price) с фолбэком на стейт marketfront.
+//
+// Транспорт — схема direct+proxy с ОБЩИМ cookie-jar (как у AliExpress):
+//   - direct (без прокси, датацентр-IP) — основной путь. Probe-эксперимент показал:
+//     с хорошим TLS-отпечатком датацентр-IP держит поток карточек без капчи и без
+//     прогрева cookie (100/100 запросов, 0 блоков — см. docs/YANDEX-WARMED-COOKIES.md).
+//   - proxy (RU-мобильный/резидентский) — fallback ТОЛЬКО когда direct упёрся в
+//     SmartCaptcha: один запрос через прокси проходит антибот и попутно обновляет
+//     cookie в общем jar. Дальше снова direct. Прокси опционален: без него работает
+//     только direct (если IP однажды заблокируют — скрейпер начнёт отдавать blocked).
 type YandexMarketScraper struct {
-	client     tls_client.HttpClient // nil → не сконфигурён (только Matches)
+	direct     tls_client.HttpClient // без прокси — основной путь (датацентр-IP)
+	proxy      tls_client.HttpClient // через RU-прокси — fallback на капчу (общий jar); nil без прокси
 	limiter    *rate.Limiter
 	log        *slog.Logger
 	configured bool
@@ -37,10 +47,10 @@ type YandexMarketScraper struct {
 // YandexMarketOptions — конфигурация скрейпера. Нулевое значение даёт «облегчённый»
 // скрейпер: Matches работает (нужно боту/api для разбора URL), а Scrape вернёт
 // ErrNotImplemented. Реальный скрейп включается всегда, когда удаётся поднять
-// tls-client (аккаунт не требуется); ProxyURL опционален, но без RU-прокси
-// SmartCaptcha почти наверняка зарежет.
+// tls-client (аккаунт не требуется). ProxyURL опционален: direct — основной путь,
+// прокси нужен лишь как fallback, если датацентр-IP однажды начнёт ловить капчу.
 type YandexMarketOptions struct {
-	ProxyURL string  // http://user:pass@host:port RU-мобильного/резидентского прокси
+	ProxyURL string  // http://user:pass@host:port RU-прокси (fallback на капчу; опционален)
 	RPS      float64 // лимит запросов к Я.Маркету (один IP → держим низким), 0 → 1
 	Logger   *slog.Logger
 }
@@ -60,30 +70,43 @@ func NewYandexMarketScraper(opts YandexMarketOptions) *YandexMarketScraper {
 		log:     log,
 	}
 
-	client, err := newYandexTLSClient(opts.ProxyURL)
+	direct, proxy, err := newYandexTLSClients(opts.ProxyURL)
 	if err != nil {
 		log.Error("yandex market: tls-client init failed, scraper disabled", "err", err)
 		return s
 	}
-	s.client = client
+	s.direct = direct
+	s.proxy = proxy
 	s.configured = true
-	log.Info("yandex market scraper configured", "proxy", opts.ProxyURL != "")
+	log.Info("yandex market scraper configured", "transport", "direct+proxy-fallback", "proxy", proxy != nil)
 	return s
 }
 
-// newYandexTLSClient — Chrome-профиль TLS (карточку отдаёт web), таймаут с запасом
-// под тяжёлый HTML (~2.5 МБ) и редиректы. Прокси опционален.
-func newYandexTLSClient(proxyURL string) (tls_client.HttpClient, error) {
+// newYandexTLSClients — Chrome-профиль TLS (карточку отдаёт web), таймаут с запасом
+// под тяжёлый HTML (~2.5 МБ) и редиректы. Два клиента с ОБЩИМ cookie-jar: direct
+// (основной) и proxy (fallback на капчу). Общий jar — чтобы cookie, добытые через
+// прокси при обходе SmartCaptcha, сразу были видны direct-клиенту. proxy == nil,
+// если ProxyURL пуст (тогда работает только direct).
+func newYandexTLSClients(proxyURL string) (direct, proxy tls_client.HttpClient, err error) {
 	jar := tls_client.NewCookieJar()
-	options := []tls_client.HttpClientOption{
-		tls_client.WithTimeoutSeconds(25),
-		tls_client.WithClientProfile(profiles.Chrome_146),
-		tls_client.WithCookieJar(jar),
+	base := func() []tls_client.HttpClientOption {
+		return []tls_client.HttpClientOption{
+			tls_client.WithTimeoutSeconds(25),
+			tls_client.WithClientProfile(profiles.Chrome_146),
+			tls_client.WithCookieJar(jar),
+		}
+	}
+	direct, err = tls_client.NewHttpClient(tls_client.NewNoopLogger(), base()...)
+	if err != nil {
+		return nil, nil, err
 	}
 	if proxyURL != "" {
-		options = append(options, tls_client.WithProxyUrl(proxyURL))
+		proxy, err = tls_client.NewHttpClient(tls_client.NewNoopLogger(), append(base(), tls_client.WithProxyUrl(proxyURL))...)
+		if err != nil {
+			return nil, nil, err
+		}
 	}
-	return tls_client.NewHttpClient(tls_client.NewNoopLogger(), options...)
+	return direct, proxy, nil
 }
 
 func (s *YandexMarketScraper) Marketplace() Marketplace { return MarketplaceYandexMarket }
@@ -100,39 +123,13 @@ func (s *YandexMarketScraper) Scrape(ctx context.Context, url string) (*Result, 
 		return nil, err
 	}
 
-	req, err := fhttp.NewRequestWithContext(ctx, fhttp.MethodGet, url, nil)
+	status, body, source, err := s.getWithFallback(ctx, url, ymCardHeader(), 6<<20)
 	if err != nil {
 		return nil, err
 	}
-	// Браузерные заголовки + порядок — под Chrome-профиль TLS (см. ozon web-ветку).
-	req.Header = fhttp.Header{
-		"accept":                    {"text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8"},
-		"accept-language":           {"ru,en;q=0.9"},
-		"sec-ch-ua":                 {`"Chromium";v="148", "Google Chrome";v="148", "Not.A/Brand";v="24"`},
-		"sec-ch-ua-mobile":          {"?0"},
-		"sec-ch-ua-platform":        {`"Linux"`},
-		"sec-fetch-dest":            {"document"},
-		"sec-fetch-mode":            {"navigate"},
-		"sec-fetch-site":            {"none"},
-		"sec-fetch-user":            {"?1"},
-		"upgrade-insecure-requests": {"1"},
-		"user-agent":                {"Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/148.0.0.0 Safari/537.36"},
-		fhttp.HeaderOrderKey: {
-			"accept", "accept-language", "sec-ch-ua", "sec-ch-ua-mobile",
-			"sec-ch-ua-platform", "sec-fetch-dest", "sec-fetch-mode",
-			"sec-fetch-site", "sec-fetch-user", "upgrade-insecure-requests", "user-agent",
-		},
-	}
+	metrics.YandexPriceSource.WithLabelValues(source).Inc()
 
-	resp, err := s.client.Do(req)
-	if err != nil {
-		return nil, fmt.Errorf("yandex market request: %w", err)
-	}
-	defer resp.Body.Close()
-	// HTML карточки тяжёлый (~2.5 МБ) — ограничиваем разумным потолком.
-	body, _ := io.ReadAll(io.LimitReader(resp.Body, 6<<20))
-
-	if resp.StatusCode == 404 {
+	if status == 404 {
 		return nil, ErrProductNotFound
 	}
 
@@ -155,11 +152,11 @@ func (s *YandexMarketScraper) Scrape(ctx context.Context, url string) (*Result, 
 	// Товар не распарсился — различаем блок антибота и «нет данных».
 	if isYandexCaptcha(body) {
 		s.log.Warn("yandex market: SmartCaptcha block",
-			"status", resp.StatusCode, "url", url, "body", snippet(body, 200))
+			"status", status, "source", source, "url", url, "body", snippet(body, 200))
 		return nil, ErrMarketplaceBlocked
 	}
-	if resp.StatusCode != 200 {
-		return nil, fmt.Errorf("yandex market status %d", resp.StatusCode)
+	if status != 200 {
+		return nil, fmt.Errorf("yandex market status %d", status)
 	}
 	// 200 + реальная страница, но цены не нашли: диагностика структуры (есть ли
 	// JSON-LD, где лежит price) — чтобы поправить парсер под актуальную вёрстку.
@@ -172,6 +169,65 @@ func (s *YandexMarketScraper) Scrape(ctx context.Context, url string) (*Result, 
 	// status="parse_error" (а не not_found): антибот пройден, но цены нет —
 	// видно на дашборде как отдельный сигнал дрейфа вёрстки.
 	return nil, ErrParseFailed
+}
+
+// getWithFallback — GET по схеме direct+proxy с общим jar. Основной путь — direct
+// (датацентр-IP, прокси не тратим). Если direct упирается в SmartCaptcha, а прокси
+// сконфигурён — один запрос через прокси: он проходит антибот, обновляет cookie в
+// общем jar и отдаёт страницу. Возвращает источник ("direct"/"proxy") для метрики.
+// Без прокси остаёмся на direct-ответе (выше распознаётся как blocked).
+func (s *YandexMarketScraper) getWithFallback(ctx context.Context, url string, header fhttp.Header, bodyCap int64) (int, []byte, string, error) {
+	status, body, err := s.do(ctx, s.direct, url, header, bodyCap)
+	if err != nil {
+		return 0, nil, "", err
+	}
+	if status != 404 && isYandexCaptcha(body) && s.proxy != nil {
+		s.log.Info("yandex market: direct hit SmartCaptcha, retrying via proxy", "url", url)
+		status, body, err = s.do(ctx, s.proxy, url, header, bodyCap)
+		if err != nil {
+			return 0, nil, "", err
+		}
+		return status, body, "proxy", nil
+	}
+	return status, body, "direct", nil
+}
+
+// do — низкоуровневый GET переданным клиентом с заданными заголовками и лимитом тела.
+func (s *YandexMarketScraper) do(ctx context.Context, client tls_client.HttpClient, url string, header fhttp.Header, bodyCap int64) (int, []byte, error) {
+	req, err := fhttp.NewRequestWithContext(ctx, fhttp.MethodGet, url, nil)
+	if err != nil {
+		return 0, nil, err
+	}
+	req.Header = header
+	resp, err := client.Do(req)
+	if err != nil {
+		return 0, nil, fmt.Errorf("yandex market request: %w", err)
+	}
+	defer resp.Body.Close()
+	body, _ := io.ReadAll(io.LimitReader(resp.Body, bodyCap))
+	return resp.StatusCode, body, nil
+}
+
+// ymCardHeader — браузерные заголовки + порядок под Chrome-профиль TLS для карточки.
+func ymCardHeader() fhttp.Header {
+	return fhttp.Header{
+		"accept":                    {"text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8"},
+		"accept-language":           {"ru,en;q=0.9"},
+		"sec-ch-ua":                 {`"Chromium";v="148", "Google Chrome";v="148", "Not.A/Brand";v="24"`},
+		"sec-ch-ua-mobile":          {"?0"},
+		"sec-ch-ua-platform":        {`"Linux"`},
+		"sec-fetch-dest":            {"document"},
+		"sec-fetch-mode":            {"navigate"},
+		"sec-fetch-site":            {"none"},
+		"sec-fetch-user":            {"?1"},
+		"upgrade-insecure-requests": {"1"},
+		"user-agent":                {"Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/148.0.0.0 Safari/537.36"},
+		fhttp.HeaderOrderKey: {
+			"accept", "accept-language", "sec-ch-ua", "sec-ch-ua-mobile",
+			"sec-ch-ua-platform", "sec-fetch-dest", "sec-fetch-mode",
+			"sec-fetch-site", "sec-fetch-user", "upgrade-insecure-requests", "user-agent",
+		},
+	}
 }
 
 // ymCurrencyContext возвращает фрагмент вокруг первого вхождения кода валюты

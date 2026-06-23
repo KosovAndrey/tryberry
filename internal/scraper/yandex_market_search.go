@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"io"
 	"net/url"
 	"regexp"
 	"strings"
@@ -93,30 +92,24 @@ var ymSearchPriceRe = regexp.MustCompile(`"price":\{"value":"(\d+(?:\.\d+)?)","c
 // подтверждена на живой странице (локально антибот), поэтому парсер минимальный
 // (цены из сниппетов) + диагностика в лог для доводки по проду. См. ymSearchDiag.
 func (s *YandexMarketSearchScraper) ScrapeSearch(ctx context.Context, rawURL string) (*SearchResultSet, error) {
-	if s.YandexMarketScraper == nil || s.client == nil {
+	if s.YandexMarketScraper == nil || s.direct == nil {
 		return nil, fmt.Errorf("%w: yandex search scraper not configured", ErrNotImplemented)
 	}
 	if err := s.limiter.Wait(ctx); err != nil {
 		return nil, err
 	}
 
-	req, err := fhttp.NewRequestWithContext(ctx, fhttp.MethodGet, rawURL, nil)
-	if err != nil {
-		return nil, err
-	}
-	req.Header = fhttp.Header{
+	// Тот же транспорт direct+proxy-fallback, что у карточки (общий jar).
+	header := fhttp.Header{
 		"accept":             {"text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8"},
 		"accept-language":    {"ru,en;q=0.9"},
 		"user-agent":         {"Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/148.0.0.0 Safari/537.36"},
 		fhttp.HeaderOrderKey: {"accept", "accept-language", "user-agent"},
 	}
-
-	resp, err := s.client.Do(req)
+	status, body, _, err := s.getWithFallback(ctx, rawURL, header, 8<<20)
 	if err != nil {
 		return nil, fmt.Errorf("yandex search request: %w", err)
 	}
-	defer resp.Body.Close()
-	body, _ := io.ReadAll(io.LimitReader(resp.Body, 8<<20))
 
 	if isYandexCaptcha(body) {
 		return nil, ErrMarketplaceBlocked
@@ -126,7 +119,7 @@ func (s *YandexMarketSearchScraper) ScrapeSearch(ctx context.Context, rawURL str
 	if len(out.Items) == 0 {
 		// Диагностика для доводки парсера по прод-логам (как у карточки).
 		s.log.Warn("yandex search: no items parsed",
-			"url", rawURL, "status", resp.StatusCode, "len", len(body),
+			"url", rawURL, "status", status, "len", len(body),
 			"price_hits", len(ymSearchPriceRe.FindAllStringIndex(string(body), -1)),
 			"price_ctx", ymPriceContext(body),
 			"cur_ctx", ymCurrencyContext(body))
