@@ -100,6 +100,10 @@ func QueryTextFromNormalized(normalized string) string {
 			}
 			return label
 		}
+		// Витрина продавца Я.Маркета (/business--<slug>/{id}) — ярлык «Магазин #id».
+		if m := ymBusinessPathRe.FindStringSubmatch(u.Path); len(m) == 2 {
+			return "Магазин #" + m[1]
+		}
 		// Текст запроса лежит в query-параметре: у WB это search=, у Я.Маркета text=.
 		// Берём первый непустой — не зависим от формата маркетплейса и порядка
 		// параметров.
@@ -115,6 +119,9 @@ func QueryTextFromNormalized(normalized string) string {
 
 // sellerPathRe — путь витрины продавца WB /seller/{id} (для ярлыка запроса).
 var sellerPathRe = regexp.MustCompile(`/seller/(\d+)`)
+
+// ymBusinessPathRe — путь витрины продавца Я.Маркета /business--<slug>/{id}.
+var ymBusinessPathRe = regexp.MustCompile(`/business--[^/]+/(\d+)`)
 
 // sellerVanityRe — ссылка на витрину продавца WB с произвольным слагом.
 var sellerVanityRe = regexp.MustCompile(`wildberries\.ru/seller/([^/?#\s]+)`)
