@@ -102,24 +102,37 @@ func runFlusher(ctx context.Context, log *slog.Logger, store pendingAlertStore, 
 				log.Info("flusher cleanup", "deleted", n)
 			}
 		case <-tick.C:
-			if n, err := store.CountUnsent(ctx); err == nil {
-				metrics.PendingAlertsDepth.Set(float64(n))
-			}
-			rows, err := store.FetchDue(ctx, cfg.batch, cfg.maxAttempts)
-			if err != nil {
-				log.Warn("flusher fetch", "err", err)
-				continue
-			}
-			groups, order := groupByUser(rows)
-			for _, uid := range order {
-				// Глобальный лимит: один токен на юзера (= одно сообщение).
-				if err := limiter.Wait(ctx); err != nil {
+			if err := flushDue(ctx, log, store, sender, limiter, cfg.batch, cfg.maxAttempts); err != nil {
+				if ctx.Err() != nil {
 					return
 				}
-				deliverGroup(ctx, log, store, sender, groups[uid], cfg.maxAttempts)
+				log.Warn("flusher pass", "err", err)
 			}
 		}
 	}
+}
+
+// flushDue — один проход разгребания очереди: обновляет метрику глубины, берёт
+// созревшие строки, группирует по юзеру и доставляет (1 токен лимитера на
+// юзера). Вынесено из runFlusher ради тестируемости. Возвращает ошибку fetch
+// или отмену ctx (через limiter.Wait).
+func flushDue(ctx context.Context, log *slog.Logger, store pendingAlertStore, sender alertDeliverer, limiter *rate.Limiter, batch, maxAttempts int) error {
+	if n, err := store.CountUnsent(ctx); err == nil {
+		metrics.PendingAlertsDepth.Set(float64(n))
+	}
+	rows, err := store.FetchDue(ctx, batch, maxAttempts)
+	if err != nil {
+		return err
+	}
+	groups, order := groupByUser(rows)
+	for _, uid := range order {
+		// Глобальный лимит: один токен на юзера (= одно сообщение).
+		if err := limiter.Wait(ctx); err != nil {
+			return err
+		}
+		deliverGroup(ctx, log, store, sender, groups[uid], maxAttempts)
+	}
+	return nil
 }
 
 // groupByUser группирует строки по user_id, сохраняя порядок первого появления
