@@ -138,10 +138,76 @@ func report(body []byte) {
 	}
 
 	first, _ := json.MarshalIndent(found[0].sample, "  ", "  ")
-	if len(first) > 3000 {
-		first = append(first[:3000], []byte(" …(обрезано)")...)
+	if len(first) > 1500 {
+		first = append(first[:1500], []byte(" …(обрезано)")...)
 	}
 	fmt.Printf("  первый элемент самого длинного (%s):\n  %s\n", found[0].path, first)
+
+	// «Товароподобные» объекты где угодно в дереве (title/name + цена) — на случай,
+	// если карточки лежат не плоским массивом, а отдельными виджет-нодами.
+	var prod []objArray
+	collectProductLike(root, "$", &prod)
+	fmt.Printf("  товароподобные объекты: %d\n", len(prod))
+	if len(prod) > 0 {
+		ps, _ := json.MarshalIndent(prod[0].sample, "  ", "  ")
+		if len(ps) > 2500 {
+			ps = append(ps[:2500], []byte(" …(обрезано)")...)
+		}
+		fmt.Printf("  пример (%s):\n  %s\n", prod[0].path, ps)
+	}
+
+	// Кандидаты API-эндпоинтов выдачи (если товары грузятся XHR'ом).
+	eps := endpointRe.FindAllString(string(body), -1)
+	uniq := map[string]bool{}
+	fmt.Printf("  эндпоинты-кандидаты (aer-api/aer-jsonapi/search):\n")
+	for _, e := range eps {
+		if !uniq[e] {
+			uniq[e] = true
+			fmt.Printf("    %s\n", e)
+		}
+	}
+}
+
+var endpointRe = regexp.MustCompile(`/aer-[a-z]+/[a-zA-Z0-9/_.-]*search[a-zA-Z0-9/_.-]*|/aer-[a-z]+/v[0-9][a-zA-Z0-9/_.-]*`)
+
+// collectProductLike собирает объекты, похожие на карточку товара: есть ключ
+// названия (title/name/subject) И ключ цены (price/salePrice/minPrice/…).
+func collectProductLike(v interface{}, path string, out *[]objArray) {
+	switch t := v.(type) {
+	case map[string]interface{}:
+		if hasKeyLike(t, titleKeys) && hasKeyLike(t, priceKeys) {
+			keys := make([]string, 0, len(t))
+			for k := range t {
+				keys = append(keys, k)
+			}
+			sort.Strings(keys)
+			*out = append(*out, objArray{path: path, n: 1, keys: keys, sample: t})
+		}
+		for k, val := range t {
+			collectProductLike(val, path+"."+k, out)
+		}
+	case []interface{}:
+		for i, val := range t {
+			collectProductLike(val, fmt.Sprintf("%s[%d]", path, i), out)
+		}
+	}
+}
+
+var (
+	titleKeys = []string{"title", "name", "subject", "producttitle", "displaytitle"}
+	priceKeys = []string{"price", "saleprice", "minprice", "formattedprice", "amount", "cost", "displayprice", "mult_minprice"}
+)
+
+func hasKeyLike(m map[string]interface{}, cands []string) bool {
+	for k := range m {
+		lk := strings.ToLower(k)
+		for _, c := range cands {
+			if strings.Contains(lk, c) {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 var aerDataRe = regexp.MustCompile(`(?s)<script id="__AER_DATA__"[^>]*>(.*?)</script>`)
