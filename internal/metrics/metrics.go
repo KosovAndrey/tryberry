@@ -261,6 +261,27 @@ var (
 			Help:      "Max active product subscriptions held by a single user (bundling-need signal)",
 		},
 	)
+
+	// PendingAlertsDepth — глубина outbox-очереди доставки (недоставленные строки
+	// pending_alerts). Растёт = флашер не успевает слать (упёрлись в Telegram-лимит
+	// / egress лёг). См. docs/SCALING-NOTIFIER-DELIVERY.md.
+	PendingAlertsDepth = promauto.NewGauge(
+		prometheus.GaugeOpts{
+			Namespace: namespace,
+			Name:      "pending_alerts_depth",
+			Help:      "Undelivered rows in the pending_alerts delivery outbox",
+		},
+	)
+
+	// PendingAlertsDelivered — исход доставки строки из outbox (флашер).
+	PendingAlertsDelivered = promauto.NewCounterVec(
+		prometheus.CounterOpts{
+			Namespace: namespace,
+			Name:      "pending_alerts_delivered_total",
+			Help:      "Outbox delivery attempts by outcome",
+		},
+		[]string{"outcome"}, // sent | failed
+	)
 )
 
 // ── Kafka ────────────────────────────────────────────────────────────────────

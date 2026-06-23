@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"log/slog"
 	"os"
@@ -83,6 +84,7 @@ func run(log *slog.Logger) error {
 	// ── Репозитории ──────────────────────────────────────────────────────────
 	subRepo := postgres.NewSubscriptionRepo(pool)
 	notifRepo := postgres.NewNotificationRepo(pool)
+	pendingRepo := postgres.NewPendingAlertRepo(pool)
 	priceHistoryRepo := postgres.NewPriceHistoryRepo(pool)
 	searchNotifRepo := postgres.NewSearchNotificationRepo(pool)
 	searchSubRepo := postgres.NewSearchSubscriptionRepo(pool)
@@ -156,7 +158,12 @@ func run(log *slog.Logger) error {
 
 	// Дефолт-фолбэк интервала проверки для тарифов без своего Interval.
 	defaultInterval := time.Duration(getEnvInt("SCRAPE_INTERVAL_MINUTES", 15)) * time.Minute
-	handler := makeHandler(log, subRepo, notifRepo, priceHistoryRepo, priceCache, sender, defaultInterval)
+	// Singleton-доставщик: разгребает durable-outbox (pending_alerts) с глобальным
+	// rate-limit и ретраями. Расцепляет консьюмер price-events от медленной
+	// Telegram-отправки. См. docs/SCALING-NOTIFIER-DELIVERY.md.
+	go runFlusher(ctx, log, pendingRepo, sender, defaultFlusherConfig())
+
+	handler := makeHandler(log, subRepo, notifRepo, pendingRepo, priceHistoryRepo, priceCache, sender, defaultInterval)
 
 	log.Info("notifier started, waiting for price events...")
 	return consumer.Run(ctx, handler)
@@ -476,6 +483,7 @@ func makeHandler(
 	log *slog.Logger,
 	subRepo *postgres.SubscriptionRepo,
 	notifRepo *postgres.NotificationRepo,
+	pendingRepo *postgres.PendingAlertRepo,
 	priceHistoryRepo *postgres.PriceHistoryRepo,
 	priceCache *redisrepo.PriceCache,
 	sender alertSender,
@@ -614,8 +622,13 @@ func makeHandler(
 				hl = honest()
 			}
 
-			// Отправляем уведомление (роутинг по каналам — внутри sender)
-			err = sender.SendPriceAlert(ctx, telegram.PriceAlert{
+			// Кладём в durable-outbox (pending_alerts) вместо синхронной отправки:
+			// горячий путь консьюмера не блокируется медленным Telegram-egress,
+			// доставку гарантирует флашер ретраями (at-least-once). Стейт подписки
+			// (baseline/notified) двигаем вперёд здесь, на решении — доставка
+			// случится позже, но решение уже принято и зафиксировано.
+			// См. docs/SCALING-NOTIFIER-DELIVERY.md.
+			payload, err := json.Marshal(telegram.PriceAlert{
 				ChatID:         sub.TelegramID,
 				UserID:         sub.UserID,
 				SubscriptionID: sub.ID,
@@ -628,7 +641,16 @@ func makeHandler(
 				HonestLine:     hl,
 			})
 			if err != nil {
-				return fmt.Errorf("send telegram notification: %w", err)
+				return fmt.Errorf("marshal alert payload: %w", err)
+			}
+			if _, err := pendingRepo.Insert(ctx, &domain.PendingAlert{
+				UserID:         sub.UserID,
+				SubscriptionID: sub.ID,
+				ProductID:      sub.ProductID,
+				IdemKey:        iKey,
+				Payload:        payload,
+			}); err != nil {
+				return fmt.Errorf("enqueue pending alert: %w", err)
 			}
 
 			// Фиксируем цену последнего уведомления (+ notified=TRUE)
@@ -659,7 +681,7 @@ func makeHandler(
 			}
 			markEval()
 			metrics.NotificationsSent.WithLabelValues(event.Marketplace).Inc()
-			log.Info("notification sent",
+			log.Info("notification enqueued",
 				"subscription_id", sub.ID,
 				"user_id", sub.UserID,
 				"trigger", string(sub.TriggerType),
