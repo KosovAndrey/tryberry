@@ -31,6 +31,37 @@ func TestYandexSearch_MatchesSearch(t *testing.T) {
 	}
 }
 
+func TestYandexSeller_Storefront(t *testing.T) {
+	s := newYMSearch()
+	// Распознавание витрины продавца (business-URL и merchant/shopInShop search).
+	match := map[string]bool{
+		"https://market.yandex.ru/business--yandex-fabrika/83022309":                       true,
+		"https://market.yandex.ru/business--x/83022309":                                    true,
+		"https://market.yandex.ru/search?generalContext=t%3Dmerchant%3Bmrch%3D83022309%3B": true,
+		"https://market.yandex.ru/business--befree/1001084?generalContext=t%3DshopInShop%3Bi%3D1%3Bbi%3D1001084%3B": true,
+	}
+	for u, want := range match {
+		if got := s.MatchesSearch(u); got != want {
+			t.Errorf("MatchesSearch(%q) = %v, want %v", u, got, want)
+		}
+	}
+	// Обе формы одного продавца → один ключ /business--m/<id>.
+	want := "https://market.yandex.ru/business--m/83022309"
+	for _, u := range []string{
+		"https://market.yandex.ru/business--yandex-fabrika/83022309",
+		"https://market.yandex.ru/business--x/83022309?foo=bar",
+		"https://market.yandex.ru/search?generalContext=t%3Dmerchant%3Bmrch%3D83022309%3B&rs=abc",
+	} {
+		got, err := s.NormalizeSearchURL(u)
+		if err != nil {
+			t.Fatalf("Normalize(%q): %v", u, err)
+		}
+		if got != want {
+			t.Errorf("Normalize(%q) = %q, want %q", u, got, want)
+		}
+	}
+}
+
 func TestYandexSearch_NormalizeSearchURL(t *testing.T) {
 	s := newYMSearch()
 	// text нормализуется (lower + схлопывание пробелов), hid сохраняется. Сравниваем

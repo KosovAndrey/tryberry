@@ -44,9 +44,32 @@ func NewYandexMarketSearchScraper(base *YandexMarketScraper, maxItems int) *Yand
 	}
 }
 
-// MatchesSearch — ссылка на выдачу Я.Маркета: market.yandex.ru с /search в пути
-// или параметром text. Карточка (market.yandex.ru/card/...) сюда НЕ попадает —
-// её разбирает обычный Scrape.
+// ymBusinessPathRe — путь витрины продавца /business--<slug>/<id> (id — то же,
+// что mrch/bi в generalContext; слаг для YM не важен, резолв по id).
+var ymBusinessPathRe = regexp.MustCompile(`/business--[^/]+/(\d+)`)
+
+// ymMerchantCtxRe — id продавца в generalContext: t=merchant;mrch=<id> или
+// t=shopInShop;...;bi=<id>.
+var ymMerchantCtxRe = regexp.MustCompile(`(?:mrch|bi)=(\d+)`)
+
+// ymSellerID — id продавца из ссылки витрины: путь /business--*/<id> либо
+// generalContext (merchant/shopInShop). "" если это не витрина.
+func ymSellerID(u *url.URL) string {
+	if m := ymBusinessPathRe.FindStringSubmatch(u.Path); len(m) == 2 {
+		return m[1]
+	}
+	gc := u.Query().Get("generalContext") // Query() уже декодирует %3D/%3B
+	if strings.Contains(gc, "merchant") || strings.Contains(gc, "shopInShop") {
+		if m := ymMerchantCtxRe.FindStringSubmatch(gc); len(m) == 2 {
+			return m[1]
+		}
+	}
+	return ""
+}
+
+// MatchesSearch — ссылка на выдачу Я.Маркета: /search (или параметр text), либо
+// витрина продавца (/business--*/<id> или generalContext с merchant/shopInShop).
+// Карточка (market.yandex.ru/card/...) сюда НЕ попадает — её разбирает Scrape.
 func (s *YandexMarketSearchScraper) MatchesSearch(rawURL string) bool {
 	u, err := url.Parse(rawURL)
 	if err != nil {
@@ -58,6 +81,9 @@ func (s *YandexMarketSearchScraper) MatchesSearch(rawURL string) bool {
 	if strings.HasPrefix(u.Path, "/card") || strings.Contains(u.Path, "/product") {
 		return false // это карточка, не выдача
 	}
+	if ymSellerID(u) != "" {
+		return true // витрина продавца
+	}
 	return strings.Contains(u.Path, "/search") || strings.TrimSpace(u.Query().Get("text")) != ""
 }
 
@@ -68,6 +94,12 @@ func (s *YandexMarketSearchScraper) NormalizeSearchURL(rawURL string) (string, e
 	u, err := url.Parse(rawURL)
 	if err != nil {
 		return "", fmt.Errorf("%w: %v", ErrInvalidURL, err)
+	}
+	// Витрина продавца → канонический ключ по id (слаг для YM не важен, резолв по
+	// id — проверено probe'ом: /business--<любой>/<id> отдаёт те же товары). Обе
+	// формы (business-страница и /search?generalContext=merchant) схлопываются.
+	if id := ymSellerID(u); id != "" {
+		return "https://market.yandex.ru/business--m/" + id, nil
 	}
 	text := strings.TrimSpace(u.Query().Get("text"))
 	if text == "" {
