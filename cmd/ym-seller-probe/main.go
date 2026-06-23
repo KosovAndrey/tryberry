@@ -32,11 +32,11 @@ const userAgent = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 
 var ymProductStartRe = regexp.MustCompile(`\{"id":\d+,"entity":"product"`)
 
 var (
-	titleRe     = regexp.MustCompile(`(?s)<title>(.*?)</title>`)
-	canonicalRe = regexp.MustCompile(`<link[^>]+rel="canonical"[^>]+href="([^"]+)"`)
-	ogTitleRe   = regexp.MustCompile(`<meta[^>]+property="og:title"[^>]+content="([^"]+)"`)
-	ogSiteRe    = regexp.MustCompile(`<meta[^>]+property="og:site_name"[^>]+content="([^"]+)"`)
+	h1Re     = regexp.MustCompile(`(?s)<h1[^>]*>(.*?)</h1>`)
+	tagStrip = regexp.MustCompile(`<[^>]+>`)
 )
+
+func stripTags(s string) string { return tagStrip.ReplaceAllString(s, "") }
 
 func main() {
 	proxyURL := os.Getenv("YANDEX_PROXY_URL")
@@ -69,17 +69,39 @@ func main() {
 		fmt.Printf("  %s: status=%d captcha=%s len=%d product-models=%d\n",
 			src, status, yn(isCaptcha(body)), len(body), len(models))
 
-		// Источники имени: финальный URL (после редиректа — там реальный слаг),
-		// canonical и og-теги.
 		fmt.Printf("  final URL: %s\n", finalURL)
-		for name, re := range map[string]*regexp.Regexp{
-			"<title>":      titleRe,
-			"canonical":    canonicalRe,
-			"og:title":     ogTitleRe,
-			"og:site_name": ogSiteRe,
-		} {
-			if m := re.FindStringSubmatch(string(body)); len(m) == 2 {
-				fmt.Printf("  %-12s %s\n", name+":", strings.TrimSpace(m[1]))
+		bs := string(body)
+
+		// Заголовки H1 — частое место имени магазина в SSR.
+		for _, m := range h1Re.FindAllStringSubmatch(bs, 5) {
+			txt := strings.TrimSpace(stripTags(m[1]))
+			if txt != "" {
+				fmt.Printf("  <h1>: %s\n", txt)
+			}
+		}
+
+		// Контекст вокруг известного имени (NAME_HINT=befree) — найти HTML-элемент.
+		if hint := os.Getenv("NAME_HINT"); hint != "" {
+			low := strings.ToLower(bs)
+			lh := strings.ToLower(hint)
+			shown := 0
+			for off := 0; shown < 4; {
+				i := strings.Index(low[off:], lh)
+				if i < 0 {
+					break
+				}
+				p := off + i
+				start := p - 90
+				if start < 0 {
+					start = 0
+				}
+				end := p + len(hint) + 50
+				if end > len(bs) {
+					end = len(bs)
+				}
+				fmt.Printf("  [hint] …%s…\n", strings.ReplaceAll(bs[start:end], "\n", " "))
+				off = p + len(hint)
+				shown++
 			}
 		}
 		fmt.Println()
