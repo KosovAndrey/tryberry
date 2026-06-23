@@ -138,16 +138,19 @@ groups:
           description: "p95 латентности > 10s в течение 5 минут (текущее: {{ $value | humanizeDuration }})"
 
       # WB: товар не нашёлся ни на одном basket-шарде (удалён / трансгран. Ali не в
-      # CDN / баскет за окном проб). На старте — per-event (видеть всё и чинить).
-      # Когда вырастет объём — заменить на rate/долю (см. README мониторинга).
+      # CDN / баскет за окном проб). Раньше per-event (increase>0, for:0m) — пейджил
+      # на каждый удалённый артикул, который скрейпится каждый цикл (это «норма» по
+      # аннотации). Загрублено (2026-06-23): порог >5 за 15м + for:5m — одиночные
+      # удалённые товары молчат, а реальный сбой резолва (формула уехала / шард лёг,
+      # десятки not_found) ловится. Дрейф формулы отдельно ловит WBBasketFormulaDrift.
       - alert: WBBasketNotFound
-        expr: increase(tryberrybot_wb_basket_resolve_total{outcome="not_found"}[5m]) > 0
-        for: 0m
+        expr: increase(tryberrybot_wb_basket_resolve_total{outcome="not_found"}[15m]) > 5
+        for: 5m
         labels:
           severity: warning
         annotations:
-          summary: "WB: товар(ы) не найдены в basket-CDN"
-          description: "За последние 5 мин были WB-товары, не найденные ни на одном basket-шарде. Артикулы: docker logs pt_scraper pt_bot_worker | grep -iE 'scrape|basket'. Для удалённых/трансграничных (Ali) — норма; всплеск = проблема резолва."
+          summary: "WB: всплеск товаров не найденных в basket-CDN"
+          description: "За 15 мин >5 WB-товаров не найдены ни на одном basket-шарде. Артикулы: docker logs pt_scraper pt_bot_worker | grep -iE 'scrape|basket'. Единичные удалённые/трансграничные (Ali) — норма; всплеск = проблема резолва."
 
       # WB: формула баскета сильно промахнулась (нашли далёким перебором >±4) —
       # пора расширить таблицу/окно в wbBasketNumber.
@@ -163,15 +166,21 @@ groups:
   - name: tryberrybot_kafka
     interval: 30s
     rules:
-      # Consumer не успевает обрабатывать
+      # Consumer не успевает обрабатывать.
+      # Порог/окно подняты (2026-06-23): при текущем объёме (~4k price-events/сут,
+      # хендлер ~53мс) lag>100 на 5м ловил самозаживающий всплеск — пачка
+      # уведомлений на одной партиции (ключ=product_id) упиралась в медленный
+      # Telegram-egress и за минуты рассасывалась. Реальную хронику (egress лёг /
+      # консьюмер встал) видно как устойчивый lag>300 дольше 15м; severe ловит
+      # CriticalKafkaConsumerLag (>1000). Структурный фикс — задача «Бандлинг».
       - alert: HighKafkaConsumerLag
-        expr: kafka_consumergroup_lag > 100
-        for: 5m
+        expr: kafka_consumergroup_lag > 300
+        for: 15m
         labels:
           severity: warning
         annotations:
           summary: "Высокий consumer lag в {{ $labels.topic }}"
-          description: "Группа {{ $labels.consumergroup }} отстаёт на {{ $value }} сообщений в топике {{ $labels.topic }}"
+          description: "Группа {{ $labels.consumergroup }} отстаёт на {{ $value }} сообщений в топике {{ $labels.topic }} дольше 15 минут"
 
       # Сообщения копятся очень сильно
       - alert: CriticalKafkaConsumerLag
