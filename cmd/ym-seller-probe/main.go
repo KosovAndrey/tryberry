@@ -31,7 +31,12 @@ const userAgent = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 
 // ymProductStartRe — тот же якорь товарной модели, что в yandex_market_search.go.
 var ymProductStartRe = regexp.MustCompile(`\{"id":\d+,"entity":"product"`)
 
-var titleRe = regexp.MustCompile(`(?s)<title>(.*?)</title>`)
+var (
+	h1Re     = regexp.MustCompile(`(?s)<h1[^>]*>(.*?)</h1>`)
+	tagStrip = regexp.MustCompile(`<[^>]+>`)
+)
+
+func stripTags(s string) string { return tagStrip.ReplaceAllString(s, "") }
 
 func main() {
 	proxyURL := os.Getenv("YANDEX_PROXY_URL")
@@ -54,54 +59,59 @@ func main() {
 	ctx := context.Background()
 	for i, u := range urls {
 		fmt.Printf("════════ [%d/%d] %s\n", i+1, len(urls), u)
-		status, body := get(ctx, direct, u)
+		status, body, finalURL := get(ctx, direct, u)
 		src := "direct"
 		if proxy != nil && (status != 200 || isCaptcha(body)) {
-			status, body = get(ctx, proxy, u)
+			status, body, finalURL = get(ctx, proxy, u)
 			src = "proxy"
 		}
 		models := ymProductStartRe.FindAllStringIndex(string(body), -1)
-		fmt.Printf("  %s: status=%d captcha=%s len=%d product-models=%d marketfront=%s\n",
-			src, status, yn(isCaptcha(body)), len(body), len(models),
-			yn(strings.Contains(string(body), "@marketfront/")))
+		fmt.Printf("  %s: status=%d captcha=%s len=%d product-models=%d\n",
+			src, status, yn(isCaptcha(body)), len(body), len(models))
 
-		// Имя магазина: дамп контекста вокруг shop/business-маркеров в стейте.
-		if m := titleRe.FindStringSubmatch(string(body)); len(m) == 2 {
-			fmt.Printf("  <title>: %s\n", strings.TrimSpace(m[1]))
-		}
+		fmt.Printf("  final URL: %s\n", finalURL)
 		bs := string(body)
-		for _, marker := range []string{
-			`"entity":"shop"`, `"entity":"business"`, `"entity":"shopInShop"`,
-			`"shopInShop"`, `"businessName"`, `"shopName"`, `"shop":{`, `"business":{`,
-		} {
-			if i := strings.Index(bs, marker); i >= 0 {
-				start := i - 80
+
+		// Заголовки H1 — частое место имени магазина в SSR.
+		for _, m := range h1Re.FindAllStringSubmatch(bs, 5) {
+			txt := strings.TrimSpace(stripTags(m[1]))
+			if txt != "" {
+				fmt.Printf("  <h1>: %s\n", txt)
+			}
+		}
+
+		// Контекст вокруг известного имени (NAME_HINT=befree) — найти HTML-элемент.
+		if hint := os.Getenv("NAME_HINT"); hint != "" {
+			low := strings.ToLower(bs)
+			lh := strings.ToLower(hint)
+			shown := 0
+			for off := 0; shown < 4; {
+				i := strings.Index(low[off:], lh)
+				if i < 0 {
+					break
+				}
+				p := off + i
+				start := p - 90
 				if start < 0 {
 					start = 0
 				}
-				end := i + 360
+				end := p + len(hint) + 50
 				if end > len(bs) {
 					end = len(bs)
 				}
-				fmt.Printf("  [%s] …%s…\n", marker, bs[start:end])
+				fmt.Printf("  [hint] …%s…\n", strings.ReplaceAll(bs[start:end], "\n", " "))
+				off = p + len(hint)
+				shown++
 			}
-		}
-		if len(models) > 0 {
-			loc := models[0]
-			end := loc[0] + 320
-			if end > len(body) {
-				end = len(body)
-			}
-			fmt.Printf("  первая модель:\n  %s\n", string(body[loc[0]:end]))
 		}
 		fmt.Println()
 	}
 }
 
-func get(ctx context.Context, client tls_client.HttpClient, target string) (int, []byte) {
+func get(ctx context.Context, client tls_client.HttpClient, target string) (int, []byte, string) {
 	req, err := fhttp.NewRequestWithContext(ctx, fhttp.MethodGet, target, nil)
 	if err != nil {
-		return 0, nil
+		return 0, nil, ""
 	}
 	req.Header = fhttp.Header{
 		"accept":             {"text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8"},
@@ -112,11 +122,15 @@ func get(ctx context.Context, client tls_client.HttpClient, target string) (int,
 	resp, err := client.Do(req)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "request:", err)
-		return 0, nil
+		return 0, nil, ""
 	}
 	defer resp.Body.Close()
 	b, _ := io.ReadAll(io.LimitReader(resp.Body, 8<<20))
-	return resp.StatusCode, b
+	finalURL := target
+	if resp.Request != nil && resp.Request.URL != nil {
+		finalURL = resp.Request.URL.String()
+	}
+	return resp.StatusCode, b, finalURL
 }
 
 func mkClient(proxyURL string, jar tls_client.CookieJar) tls_client.HttpClient {

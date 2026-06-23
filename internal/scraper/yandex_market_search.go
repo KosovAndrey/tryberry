@@ -70,20 +70,66 @@ func ymSellerID(u *url.URL) string {
 // ymBusinessSlugRe — слаг витрины из /business--<slug>/<id>.
 var ymBusinessSlugRe = regexp.MustCompile(`/business--([^/]+)/\d+`)
 
-// SellerName — имя витрины из слага ссылки (/business--<slug>/<id>):
-// "yandex-fabrika" → "Yandex Fabrika". Для merchant-формы (/search?generalContext)
-// слага нет → "" (ярлык останется «Магазин #id»). Сети не требует. Настоящее
-// кириллическое имя зашито в schema-сжатый стейт marketfront — отдельная задача.
-func (s *YandexMarketSearchScraper) SellerName(_ context.Context, rawURL string) (string, error) {
-	u, err := url.Parse(rawURL)
-	if err != nil {
-		return "", err
+// ymOgTitleRe — og:title из head-блока витрины: "<Имя> – купить товары…".
+// В HTML это JSON-описание тега ({"property":"og:title","content":"…"}), а не
+// настоящий <meta>, поэтому матчим JSON-форму.
+var ymOgTitleRe = regexp.MustCompile(`"property":"og:title","content":"([^"]+)"`)
+
+// ymH1Re — заголовок витрины (фолбэк к og:title).
+var ymH1Re = regexp.MustCompile(`(?s)<h1[^>]*>(.*?)</h1>`)
+
+// ymTagRe — для очистки <h1> от вложенных тегов.
+var ymTagRe = regexp.MustCompile(`<[^>]+>`)
+
+// ymNameSepRe — разделитель «Имя – купить…»/«Имя — …»/«Имя - …».
+var ymNameSepRe = regexp.MustCompile(`\s+[–—-]\s+`)
+
+// SellerName — настоящее имя витрины: фетчим страницу магазина (по
+// нормализованному /business--m/<id>) и берём имя из og:title (head, читаем ~1 МБ)
+// или <h1>. Работает для обеих форм ссылки (business и merchant). Фолбэк — слаг
+// ссылки (/business--<slug>/<id>). "" если ничего не вышло → ярлык «Магазин #id».
+func (s *YandexMarketSearchScraper) SellerName(ctx context.Context, rawURL string) (string, error) {
+	if norm, err := s.NormalizeSearchURL(rawURL); err == nil {
+		if status, body, _, e := s.getWithFallback(ctx, norm, ymCardHeader(), 1<<20); e == nil && status == 200 {
+			if name := ymExtractSellerName(body); name != "" {
+				return name, nil
+			}
+		}
 	}
-	m := ymBusinessSlugRe.FindStringSubmatch(u.Path)
-	if len(m) != 2 || m[1] == "" || m[1] == "m" {
-		return "", nil
+	// Фолбэк: слаг из ссылки (для business-формы), если фетч/парс не дал имени.
+	if u, err := url.Parse(rawURL); err == nil {
+		if m := ymBusinessSlugRe.FindStringSubmatch(u.Path); len(m) == 2 && m[1] != "" && m[1] != "m" {
+			return prettifyYMSlug(m[1]), nil
+		}
 	}
-	return prettifyYMSlug(m[1]), nil
+	return "", nil
+}
+
+// ymExtractSellerName достаёт имя магазина из HTML витрины (og:title → <h1>),
+// отбрасывая хвост «– купить…» и мусорный «Яндекс Маркет».
+func ymExtractSellerName(body []byte) string {
+	if m := ymOgTitleRe.FindSubmatch(body); len(m) == 2 {
+		if name := ymCleanSellerName(string(m[1])); name != "" {
+			return name
+		}
+	}
+	if m := ymH1Re.FindSubmatch(body); len(m) == 2 {
+		if name := ymCleanSellerName(ymTagRe.ReplaceAllString(string(m[1]), "")); name != "" {
+			return name
+		}
+	}
+	return ""
+}
+
+func ymCleanSellerName(s string) string {
+	if parts := ymNameSepRe.Split(s, 2); len(parts) > 0 {
+		s = parts[0]
+	}
+	s = strings.TrimSpace(s)
+	if s == "" || strings.EqualFold(s, "Яндекс Маркет") {
+		return ""
+	}
+	return s
 }
 
 // prettifyYMSlug: "yandex-fabrika" → "Yandex Fabrika".

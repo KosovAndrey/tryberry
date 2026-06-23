@@ -62,21 +62,28 @@ func TestYandexSeller_Storefront(t *testing.T) {
 	}
 }
 
-func TestYandexSeller_Name(t *testing.T) {
-	s := newYMSearch()
+func TestYandexSeller_ExtractName(t *testing.T) {
 	cases := map[string]string{
-		"https://market.yandex.ru/business--yandex-fabrika/83022309": "Yandex Fabrika",
-		"https://market.yandex.ru/business--befree/1001084":          "Befree",
-		"https://market.yandex.ru/business--m/1001084":               "", // синтетический слаг → нет имени
-		"https://market.yandex.ru/search?generalContext=t%3Dmerchant%3Bmrch%3D1001084%3B": "", // merchant-форма без слага
+		// og:title (JSON-описание тега в head) → имя до «– купить…».
+		`x{"property":"og:title","content":"Befree – купить товары в каталоге на Яндекс Маркете"}y`: "Befree",
+		`{"property":"og:title","content":"Яндекс Фабрика – купить товары"}`:                        "Яндекс Фабрика",
+		// og:title мусорный → фолбэк на <h1>.
+		`{"property":"og:title","content":"Яндекс Маркет"} <h1 class="z">Магазин КАПИБАРА</h1>`: "Магазин КАПИБАРА",
+		// ничего → "".
+		`<div>нет имени</div>`: "",
 	}
-	for u, want := range cases {
-		got, err := s.SellerName(nil, u)
-		if err != nil {
-			t.Fatalf("SellerName(%q): %v", u, err)
+	for body, want := range cases {
+		if got := ymExtractSellerName([]byte(body)); got != want {
+			t.Errorf("ymExtractSellerName(%q) = %q, want %q", body, got, want)
 		}
-		if got != want {
-			t.Errorf("SellerName(%q) = %q, want %q", u, got, want)
+	}
+}
+
+func TestYandexSeller_PrettifySlug(t *testing.T) {
+	cases := map[string]string{"yandex-fabrika": "Yandex Fabrika", "befree": "Befree"}
+	for slug, want := range cases {
+		if got := prettifyYMSlug(slug); got != want {
+			t.Errorf("prettifyYMSlug(%q) = %q, want %q", slug, got, want)
 		}
 	}
 }
