@@ -216,6 +216,10 @@ services:
       # код фолбэчит на OZON_PROXY_URL (тот же мобильный IP). Дележ IP ускоряет
       # его выгорание (см. OZON-STATUS) — при росте нагрузки задать отдельный.
       YANDEX_PROXY_URL: "${YANDEX_PROXY_URL:-}"
+      # AliExpress: бот при /track скрейпит сразу. Прокси нужен для рефреша cookie
+      # (с датацентра cold-сессия = капча), дальше запросы напрямую. Пусто → фолбэк
+      # на OZON_PROXY_URL (дележ IP жжёт его — при нагрузке задать отдельный).
+      ALI_PROXY_URL: "${ALI_PROXY_URL:-}"
     depends_on:
       postgres:
         condition: service_healthy

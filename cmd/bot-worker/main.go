@@ -134,11 +134,20 @@ func run(log *slog.Logger) error {
 		RPS:      2,
 		Logger:   log,
 	})
+	// AliExpress: только карточка (поиска нет) — добавляем как обычный скрейпер.
+	// Прокси нужен для рефреша cookie (с датацентра cold-сессия = капча); дальше
+	// запросы идут напрямую. Фолбэк на OZON_PROXY_URL, как у Я.Маркета.
+	aliexpressCard := scraper.NewAliexpressScraper(scraper.AliexpressOptions{
+		ProxyURL: getEnv("ALI_PROXY_URL", getEnv("OZON_PROXY_URL", "")),
+		RPS:      1,
+		Logger:   log,
+	})
 	registry := scraper.NewRegistry(
 		wbSearch,
 		wbSeller,
 		scraper.NewOzonSearchScraper(ozonCard, 60),
 		scraper.NewYandexMarketSearchScraper(yandexCard, 60),
+		aliexpressCard,
 	)
 
 	// getMe ходит наружу (через HTTPS_PROXY). Ретраим старт.
