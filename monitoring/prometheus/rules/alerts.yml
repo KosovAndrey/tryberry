@@ -207,3 +207,18 @@ groups:
         annotations:
           summary: "Нет уведомлений за 6 часов"
           description: "Активных подписок: {{ with query \"tryberrybot_active_subscriptions\" }}{{ . | first | value }}{{ end }}, но за 6 часов ноль уведомлений. Возможно цены не падают, но проверь воркер."
+
+      # Outbox доставки не разгребается: флашер не успевает слать. В норме глубина
+      # ~0 (флашер ~25/с = 1500/мин, всплеск сливается за секунды). Устойчивая
+      # глубина >100 дольше 10м = доставка встала: Telegram-egress лёг / жёсткий
+      # 429-троттл / осели исчерпанные строки (юзер заблокировал бота, attempts на
+      # потолке). Не критично для приёма команд, но юзеры не получают алерты.
+      # См. docs/SCALING-NOTIFIER-DELIVERY.md.
+      - alert: PendingAlertsBacklog
+        expr: tryberrybot_pending_alerts_depth > 100
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Очередь доставки уведомлений не разгребается"
+          description: "Недоставленных pending_alerts: {{ $value }} (>100) дольше 10 мин. Флашер не успевает: проверь egress в Telegram (xray/wg-proxy) и долю failed — docker logs pt_notifier | grep flusher; rate(tryberrybot_pending_alerts_delivered_total{outcome=\"failed\"}[5m])."
