@@ -67,6 +67,23 @@ func (b *Bot) isSearchURL(text string) bool {
 	return err == nil
 }
 
+// firstSearchURL возвращает поисковую ссылку из текста: сначала среди извлечённых
+// http(s)-ссылок (сообщение может содержать текст вокруг), затем — весь текст,
+// если он сам распознан как поисковая ссылка («голая» ссылка без схемы). "" если
+// поисковой ссылки в тексте нет.
+func (b *Bot) firstSearchURL(text string) string {
+	for _, u := range bulkURLRe.FindAllString(text, -1) {
+		u = strings.TrimRight(u, ".,);]")
+		if b.isSearchURL(u) {
+			return u
+		}
+	}
+	if b.isSearchURL(text) {
+		return text
+	}
+	return ""
+}
+
 // ── Меню «Поиск по ссылке» ────────────────────────────────────────────────────
 
 func (b *Bot) sendSearchMenu(chatID int64, messageID int) {
@@ -431,16 +448,19 @@ func (b *Bot) buildSearchListView(subs []*domain.SearchSubscription) (string, tg
 
 	var rows [][]tgbotapi.InlineKeyboardButton
 	for i, s := range subs {
-		rows = append(rows, tgbotapi.NewInlineKeyboardRow(
-			tgbotapi.NewInlineKeyboardButtonURL(
-				fmt.Sprintf("🔗 #%d %s", i+1, truncate(s.QueryText, 18)),
-				s.NormalizedURL,
-			),
-			tgbotapi.NewInlineKeyboardButtonData(
-				fmt.Sprintf("❌ Отменить #%d", i+1),
-				fmt.Sprintf("suntrack:%d", s.ID),
-			),
-		))
+		cancel := tgbotapi.NewInlineKeyboardButtonData(
+			fmt.Sprintf("❌ Отменить #%d", i+1),
+			fmt.Sprintf("suntrack:%d", s.ID),
+		)
+		// Битый URL не должен ронять всю клавиатуру (см. safeButtonURL).
+		if u := safeButtonURL(s.NormalizedURL); u != "" {
+			rows = append(rows, tgbotapi.NewInlineKeyboardRow(
+				tgbotapi.NewInlineKeyboardButtonURL(fmt.Sprintf("🔗 #%d %s", i+1, truncate(s.QueryText, 18)), u),
+				cancel,
+			))
+		} else {
+			rows = append(rows, tgbotapi.NewInlineKeyboardRow(cancel))
+		}
 	}
 	rows = append(rows, tgbotapi.NewInlineKeyboardRow(
 		tgbotapi.NewInlineKeyboardButtonData("◀️ В меню", "menu:main"),
