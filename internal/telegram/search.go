@@ -167,8 +167,8 @@ func (b *Bot) proceedSearchTrack(ctx context.Context, chatID int64, rawURL strin
 	// Для витрины продавца — человекочитаемый ярлык с именем магазина (вместо
 	// «Магазин #{id}» из URL). Имя берём из supplier-by-id; сбой → URL-фолбэк.
 	queryText := domain.QueryTextFromNormalized(normalized)
-	if sz, ok := ss.(sellerSizer); ok {
-		if name, err := sz.SellerName(ctx, rawURL); err == nil && name != "" {
+	if n, ok := ss.(sellerNamer); ok {
+		if name, err := n.SellerName(ctx, rawURL); err == nil && name != "" {
 			queryText = domain.SellerLabel(name, rawURL)
 		}
 	}
@@ -267,6 +267,12 @@ type sellerSizer interface {
 	SellerTotal(ctx context.Context, rawURL string) (int, error)
 	SellerName(ctx context.Context, rawURL string) (string, error)
 	MaxItems() int
+}
+
+// sellerNamer — витрина, умеющая отдать имя магазина для ярлыка (без CAP-гейта).
+// Удовлетворяют и WB-seller (через trademark), и YM-витрина (через слаг ссылки).
+type sellerNamer interface {
+	SellerName(ctx context.Context, rawURL string) (string, error)
 }
 
 // checkSellerCap — гейт размера витрины продавца. Возвращает false (и отвечает

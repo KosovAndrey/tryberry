@@ -33,15 +33,6 @@ var ymProductStartRe = regexp.MustCompile(`\{"id":\d+,"entity":"product"`)
 
 var titleRe = regexp.MustCompile(`(?s)<title>(.*?)</title>`)
 
-// nameFieldRes — кандидаты полей с именем магазина в стейте.
-var nameFieldRes = []*regexp.Regexp{
-	regexp.MustCompile(`"businessName":"[^"]{1,60}"`),
-	regexp.MustCompile(`"shopName":"[^"]{1,60}"`),
-	regexp.MustCompile(`"entity":"shop"[^}]{0,200}"name":"[^"]{1,60}"`),
-	regexp.MustCompile(`"entity":"business"[^}]{0,200}"name":"[^"]{1,60}"`),
-	regexp.MustCompile(`"slug":"[^"]{1,40}","entity":"shop"`),
-}
-
 func main() {
 	proxyURL := os.Getenv("YANDEX_PROXY_URL")
 	if proxyURL == "" {
@@ -74,13 +65,25 @@ func main() {
 			src, status, yn(isCaptcha(body)), len(body), len(models),
 			yn(strings.Contains(string(body), "@marketfront/")))
 
-		// Имя магазина: <title> + кандидаты полей в стейте.
+		// Имя магазина: дамп контекста вокруг shop/business-маркеров в стейте.
 		if m := titleRe.FindStringSubmatch(string(body)); len(m) == 2 {
 			fmt.Printf("  <title>: %s\n", strings.TrimSpace(m[1]))
 		}
-		for _, re := range nameFieldRes {
-			if m := re.FindStringSubmatch(string(body)); len(m) == 2 {
-				fmt.Printf("  %s\n", strings.TrimSpace(m[0]))
+		bs := string(body)
+		for _, marker := range []string{
+			`"entity":"shop"`, `"entity":"business"`, `"entity":"shopInShop"`,
+			`"shopInShop"`, `"businessName"`, `"shopName"`, `"shop":{`, `"business":{`,
+		} {
+			if i := strings.Index(bs, marker); i >= 0 {
+				start := i - 80
+				if start < 0 {
+					start = 0
+				}
+				end := i + 360
+				if end > len(bs) {
+					end = len(bs)
+				}
+				fmt.Printf("  [%s] …%s…\n", marker, bs[start:end])
 			}
 		}
 		if len(models) > 0 {
