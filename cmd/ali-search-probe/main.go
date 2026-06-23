@@ -92,61 +92,28 @@ func report(body []byte) {
 		fmt.Printf("top-level keys: %s\n", strings.Join(keys, ", "))
 	}
 
-	var found []objArray
-	collectObjArrays(root, "$", &found)
-	sort.Slice(found, func(i, j int) bool { return found[i].n > found[j].n })
-	fmt.Printf("массивы объектов (путь × длина × ключи):\n")
-	for i, fa := range found {
-		if i >= 6 {
-			break
+	// Товары лежат в data.productsFeed.productsV2[] — печатаем первый ЦЕЛИКОМ.
+	if items := dig(root, "data", "productsFeed", "productsV2"); items != nil {
+		if arr, ok := items.([]interface{}); ok && len(arr) > 0 {
+			fmt.Printf("productsFeed.productsV2: %d позиций\n\nПЕРВАЯ ПОЗИЦИЯ ЦЕЛИКОМ:\n", len(arr))
+			pretty, _ := json.MarshalIndent(arr[0], "", "  ")
+			fmt.Println(string(pretty))
+			return
 		}
-		fmt.Printf("  %-40s ×%-3d {%s}\n", fa.path, fa.n, strings.Join(fa.keys, ","))
 	}
-	if len(found) == 0 {
-		fmt.Printf("  нет массивов объектов; тело:\n%s\n", snippet(body, 1500))
-		return
-	}
-	first, _ := json.MarshalIndent(found[0].sample, "", "  ")
-	if len(first) > 3500 {
-		first = append(first[:3500], []byte(" …(обрезано)")...)
-	}
-	fmt.Printf("\nпервый элемент самого длинного (%s):\n%s\n", found[0].path, first)
+	fmt.Printf("productsV2 не найден; начало ответа:\n%s\n", snippet(body, 1500))
 }
 
-type objArray struct {
-	path   string
-	n      int
-	keys   []string
-	sample map[string]interface{}
-}
-
-func collectObjArrays(v interface{}, path string, out *[]objArray) {
-	switch t := v.(type) {
-	case map[string]interface{}:
-		for k, val := range t {
-			collectObjArrays(val, path+"."+k, out)
+// dig спускается по ключам объектов: dig(root,"data","productsFeed","productsV2").
+func dig(v interface{}, keys ...string) interface{} {
+	for _, k := range keys {
+		m, ok := v.(map[string]interface{})
+		if !ok {
+			return nil
 		}
-	case []interface{}:
-		if first, ok := firstObj(t); ok {
-			keys := make([]string, 0, len(first))
-			for k := range first {
-				keys = append(keys, k)
-			}
-			sort.Strings(keys)
-			*out = append(*out, objArray{path: path, n: len(t), keys: keys, sample: first})
-		}
-		for i, val := range t {
-			collectObjArrays(val, fmt.Sprintf("%s[%d]", path, i), out)
-		}
+		v = m[k]
 	}
-}
-
-func firstObj(arr []interface{}) (map[string]interface{}, bool) {
-	if len(arr) == 0 {
-		return nil, false
-	}
-	m, ok := arr[0].(map[string]interface{})
-	return m, ok
+	return v
 }
 
 func do(ctx context.Context, client tls_client.HttpClient, method, target string, body []byte, referer string) (int, []byte) {
