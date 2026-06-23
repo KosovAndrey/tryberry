@@ -6,6 +6,7 @@ import (
 	"net/url"
 	"strings"
 	"testing"
+	"time"
 )
 
 func newTestSellerScraper() *WildberriesSellerScraper {
@@ -360,5 +361,14 @@ func TestMaxItems(t *testing.T) {
 	}
 	if got := NewWildberriesSellerScraper(nil, 3, 0).MaxItems(); got != 300 {
 		t.Errorf("MaxItems = %d, want 300", got)
+	}
+}
+
+func TestSellerBackoff(t *testing.T) {
+	cases := map[int]time.Duration{1: time.Second, 2: 2 * time.Second, 3: 4 * time.Second, 4: 8 * time.Second, 5: maxBackoffDelay}
+	for attempt, want := range cases {
+		if got := sellerBackoff(attempt); got != want {
+			t.Errorf("sellerBackoff(%d) = %v, want %v", attempt, got, want)
+		}
 	}
 }

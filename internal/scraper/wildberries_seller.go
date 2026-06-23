@@ -252,28 +252,61 @@ func (s *WildberriesSellerScraper) SellerName(ctx context.Context, rawURL string
 
 // ── HTTP ─────────────────────────────────────────────────────────────────────
 
+// sellerFetchAttempts — попыток на страницу. catalog.wb.ru отдаёт 429 как burst-
+// лимит по IP (особенно на reseller-кадансе 1 мин и общем egress с текстовым
+// поиском); обычно проходит со 2-й попытки. Прокси у открытого каталога нет —
+// лечим бэкоффом.
+const sellerFetchAttempts = 3
+
 func (s *WildberriesSellerScraper) fetchSellerPage(ctx context.Context, apiURL string) ([]byte, error) {
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, apiURL, nil)
-	if err != nil {
-		return nil, err
-	}
-	req.Header.Set("User-Agent", wbUserAgent)
-	req.Header.Set("Accept", "*/*")
+	var lastErr error
+	for attempt := 0; attempt < sellerFetchAttempts; attempt++ {
+		if attempt > 0 {
+			// Экспоненциальный бэкофф 1с→2с (cap 4с) перед повтором.
+			s.sleep(ctx, sellerBackoff(attempt))
+			if ctx.Err() != nil {
+				return nil, ctx.Err()
+			}
+		}
 
-	resp, err := s.client.Do(req)
-	if err != nil {
-		return nil, fmt.Errorf("%w: seller catalog request: %v", ErrMarketplaceBlocked, err)
-	}
-	defer resp.Body.Close()
+		req, err := http.NewRequestWithContext(ctx, http.MethodGet, apiURL, nil)
+		if err != nil {
+			return nil, err
+		}
+		req.Header.Set("User-Agent", wbUserAgent)
+		req.Header.Set("Accept", "*/*")
 
-	switch {
-	case resp.StatusCode == http.StatusOK:
-		return io.ReadAll(io.LimitReader(resp.Body, maxSearchBodyBytes))
-	case resp.StatusCode == http.StatusTooManyRequests:
-		return nil, fmt.Errorf("%w: 429 from seller catalog", ErrMarketplaceBlocked)
-	default:
-		return nil, fmt.Errorf("seller catalog status %d", resp.StatusCode)
+		resp, err := s.client.Do(req)
+		if err != nil {
+			lastErr = fmt.Errorf("%w: seller catalog request: %v", ErrMarketplaceBlocked, err)
+			continue // транзиентная сетевая ошибка — повторяем
+		}
+
+		switch {
+		case resp.StatusCode == http.StatusOK:
+			body, rerr := io.ReadAll(io.LimitReader(resp.Body, maxSearchBodyBytes))
+			resp.Body.Close()
+			return body, rerr
+		case resp.StatusCode == http.StatusTooManyRequests:
+			resp.Body.Close()
+			lastErr = fmt.Errorf("%w: 429 from seller catalog", ErrMarketplaceBlocked)
+			continue // burst-лимит — бэкофф и повтор
+		default:
+			status := resp.StatusCode
+			resp.Body.Close()
+			return nil, fmt.Errorf("seller catalog status %d", status)
+		}
 	}
+	return nil, lastErr
+}
+
+// sellerBackoff — 1с, 2с, 4с… с потолком maxBackoffDelay.
+func sellerBackoff(attempt int) time.Duration {
+	d := time.Second << (attempt - 1)
+	if d > maxBackoffDelay {
+		return maxBackoffDelay
+	}
+	return d
 }
 
 func (s *WildberriesSellerScraper) sleep(ctx context.Context, d time.Duration) {
