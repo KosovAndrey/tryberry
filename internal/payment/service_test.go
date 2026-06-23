@@ -70,7 +70,7 @@ type fakePromoChecker struct {
 	calls int
 }
 
-func (f *fakePromoChecker) Redeemable(_ context.Context, _ int64) (bool, error) {
+func (f *fakePromoChecker) Redeemable(_ context.Context, _, _ int64) (bool, error) {
 	f.calls++
 	return f.ok, f.err
 }

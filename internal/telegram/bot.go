@@ -484,7 +484,7 @@ func (b *Bot) handleCallback(ctx context.Context, cb *tgbotapi.CallbackQuery) {
 		b.handleSubCancel(ctx, cb.From.ID, chatID, messageID)
 
 	case cb.Data == "menu:promo":
-		b.sendPromoMenu(chatID, messageID)
+		b.promptCheckoutPromo(ctx, cb.From.ID, chatID, messageID, "")
 
 	case cb.Data == "menu:help":
 		b.sendHelpMenu(chatID, messageID, true)

@@ -98,10 +98,16 @@ func (b *Bot) sendPlanCard(ctx context.Context, tgID, chatID int64, messageID in
 	} else {
 		rows = append(rows, tgbotapi.NewInlineKeyboardRow(tgbotapi.NewInlineKeyboardButtonData(buyLabel, "plan:buy:"+p.Name)))
 	}
-	// «Промокод» в платёжном флоу — только когда оплата реально доступна.
-	if b.payments != nil && pct == 0 {
+	// «Промокод» в платёжном флоу — когда оплата реально доступна. При уже
+	// применённой скидке кнопка остаётся (даёт сменить код на другой — discount
+	// гасится только после оплаты, так что перезапись бесплатна).
+	if b.payments != nil {
+		promoLabel := "🎟 У меня есть промокод"
+		if pct > 0 {
+			promoLabel = "🎟 Сменить промокод"
+		}
 		rows = append(rows, tgbotapi.NewInlineKeyboardRow(
-			tgbotapi.NewInlineKeyboardButtonData("🎟 У меня есть промокод", "plan:promo:"+p.Name),
+			tgbotapi.NewInlineKeyboardButtonData(promoLabel, "plan:promo:"+p.Name),
 		))
 	}
 	rows = append(rows, tgbotapi.NewInlineKeyboardRow(

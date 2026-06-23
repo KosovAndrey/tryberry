@@ -15,44 +15,16 @@ import (
 
 // ── /promo CODE (и /start promo_CODE) ────────────────────────────────────────
 
+// handlePromo — точка входа /promo КОД, deep-link start=promo_КОД и кнопки «🎟
+// Промокод» в меню. Без кода (голый /promo или кнопка меню) запускаем диалог ввода;
+// с кодом — сразу применяем через общий applyPromoCode (grant → дни, discount →
+// ожидающая скидка + переход к оплате).
 func (b *Bot) handlePromo(ctx context.Context, chatID int64, user *domain.User, codeArg string) {
-	code := domain.NormalizePromoCode(codeArg)
-	if code == "" {
-		b.reply(chatID, "Введи код вместе с командой:\n<code>/promo КОД</code>")
+	if domain.NormalizePromoCode(codeArg) == "" {
+		b.promptCheckoutPromo(ctx, user.TelegramID, chatID, 0, "")
 		return
 	}
-
-	promo, err := b.promoRepo.GetActiveByCode(ctx, code)
-	if err != nil {
-		if errors.Is(err, domain.ErrNotFound) {
-			b.reply(chatID, "🎟 Такого промокода нет, либо он уже не действует.")
-			return
-		}
-		b.log.Error("promo: get code", "err", err)
-		b.reply(chatID, "Произошла ошибка, попробуй позже.")
-		return
-	}
-
-	switch promo.Kind {
-	case domain.PromoKindGrant:
-		b.applyGrantPromo(ctx, chatID, user, promo)
-	case domain.PromoKindDiscount:
-		// Скидочный код запоминаем как «ожидающую скидку» (Redis, TTL): применится
-		// автоматически к ближайшей оплате тарифа. Погашается только после успешного
-		// платежа (RedeemDiscount в консьюмере).
-		if b.discounts != nil {
-			if err := b.discounts.Put(ctx, user.ID, promo.ID, promo.DiscountPct); err != nil {
-				b.log.Error("promo: store pending discount", "user_id", user.ID, "err", err)
-			}
-		}
-		b.reply(chatID, fmt.Sprintf(
-			"🎟 Код <b>%s</b> даёт скидку <b>%d%%</b> на оплату тарифа.\n\n"+
-				"Скидка применится автоматически при оплате — открой «💳 Тарифы» и выбери тариф.",
-			htmlEscape(promo.Code), promo.DiscountPct))
-	default:
-		b.log.Error("promo: unknown kind", "kind", promo.Kind, "code", promo.Code)
-		b.reply(chatID, "Произошла ошибка, попробуй позже.")
-	}
+	b.applyPromoCode(ctx, chatID, user.TelegramID, user, codeArg, "")
 }
 
 func (b *Bot) applyGrantPromo(ctx context.Context, chatID int64, user *domain.User, promo *domain.PromoCode) {
@@ -91,15 +63,6 @@ func (b *Bot) applyGrantPromo(ctx context.Context, chatID int64, user *domain.Us
 			"Действует до <b>%s</b>.\n\n"+
 			"Подробнее — /myplan",
 		plan.Title, plan.MaxProduct, plan.MaxSearch, expiresAt.Format(dateLayout)))
-}
-
-// sendPromoMenu — экран «Промокод» из меню (в том же сообщении).
-func (b *Bot) sendPromoMenu(chatID int64, messageID int) {
-	text := "🎟 <b>Промокод</b>\n\n" +
-		"Есть код? Отправь его командой:\n" +
-		"<code>/promo КОД</code>\n\n" +
-		"Промокоды дают дни тарифа бесплатно или скидку на оплату."
-	b.showView(chatID, messageID, text, backToMenuKeyboard())
 }
 
 // ── Админка ──────────────────────────────────────────────────────────────────
