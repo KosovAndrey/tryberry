@@ -95,6 +95,30 @@ func (r *PendingAlertRepo) MarkFailed(ctx context.Context, id int64, errMsg stri
 	return err
 }
 
+// MarkSentBatch помечает доставленными все строки бандла одним запросом.
+func (r *PendingAlertRepo) MarkSentBatch(ctx context.Context, ids []int64) error {
+	if len(ids) == 0 {
+		return nil
+	}
+	const q = `UPDATE pending_alerts SET sent_at = now() WHERE id = ANY($1)`
+	_, err := r.db.Exec(ctx, q, ids)
+	return err
+}
+
+// MarkFailedBatch инкрементит attempts и двигает deliver_after на бэкофф для
+// всех строк бандла одним запросом.
+func (r *PendingAlertRepo) MarkFailedBatch(ctx context.Context, ids []int64, errMsg string, nextAfter time.Time) error {
+	if len(ids) == 0 {
+		return nil
+	}
+	const q = `
+		UPDATE pending_alerts
+		SET attempts = attempts + 1, last_error = $2, deliver_after = $3
+		WHERE id = ANY($1)`
+	_, err := r.db.Exec(ctx, q, ids, errMsg, nextAfter)
+	return err
+}
+
 // CountUnsent — глубина очереди (для метрики).
 func (r *PendingAlertRepo) CountUnsent(ctx context.Context) (int, error) {
 	const q = `SELECT count(*) FROM pending_alerts WHERE sent_at IS NULL`

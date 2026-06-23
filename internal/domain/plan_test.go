@@ -5,6 +5,29 @@ import (
 	"time"
 )
 
+func TestBundleWindow(t *testing.T) {
+	cases := map[string]time.Duration{
+		"free":           15 * time.Minute,
+		"basic":          15 * time.Minute,
+		"lite":           10 * time.Minute,
+		"pro":            5 * time.Minute,
+		"trial":          5 * time.Minute,
+		"reseller_start": 0,
+		"reseller_pro":   0,
+		"reseller":       0,
+		"unlimited":      0,
+	}
+	for name, want := range cases {
+		if got := Plans[name].BundleWindow(); got != want {
+			t.Errorf("BundleWindow(%s) = %v, want %v", name, got, want)
+		}
+	}
+	// Неизвестный план → дефолт 15м.
+	if got := (Plan{Name: "???"}).BundleWindow(); got != 15*time.Minute {
+		t.Errorf("unknown plan BundleWindow = %v, want 15m", got)
+	}
+}
+
 func TestEffectiveInterval(t *testing.T) {
 	const def = 15 * time.Minute
 

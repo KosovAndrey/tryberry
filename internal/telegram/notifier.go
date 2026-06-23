@@ -97,6 +97,76 @@ func (n *Notifier) SendPriceAlert(ctx context.Context, a PriceAlert) error {
 	return n.sendMessage(ctx, a.ChatID, caption, keyboard)
 }
 
+// ── Бандлинг: пачка товарных алертов одного юзера одним сообщением ────────────
+
+// maxBundleItems — сколько позиций показываем в бандл-сообщении; остальные
+// сворачиваем в «и ещё N». Telegram-сообщение влезает в 4096 символов.
+const maxBundleItems = 15
+
+type BundledAlertItem struct {
+	ProductName string
+	ProductURL  string
+	OldPrice    float64
+	NewPrice    float64
+	BackInStock bool // снова в наличии (а не снижение цены)
+}
+
+// BundledAlert — несколько товарных обновлений одного юзера в одном сообщении
+// (гибрид: вызывается только при ≥2 позициях; одиночный алерт идёт богатым
+// SendPriceAlert с фото). См. docs/SCALING-NOTIFIER-DELIVERY.md.
+type BundledAlert struct {
+	ChatID int64 // telegram_id (0 — TG не привязан, доставка только в VK)
+	UserID int64 // users.id — роутинг по notify_channel в deliverer
+	Items  []BundledAlertItem
+}
+
+func (n *Notifier) SendBundledAlert(ctx context.Context, a BundledAlert) error {
+	if len(a.Items) == 0 {
+		return nil
+	}
+
+	hasBack := false
+	for _, it := range a.Items {
+		if it.BackInStock {
+			hasBack = true
+			break
+		}
+	}
+
+	var sb strings.Builder
+	if hasBack {
+		fmt.Fprintf(&sb, "🔔 Обновления по вашим товарам (%d):\n\n", len(a.Items))
+	} else {
+		fmt.Fprintf(&sb, "📉 По вашим товарам снизилась цена (%d):\n\n", len(a.Items))
+	}
+
+	shown := a.Items
+	if len(shown) > maxBundleItems {
+		shown = shown[:maxBundleItems]
+	}
+	for _, it := range shown {
+		name := html.EscapeString(it.ProductName)
+		if it.BackInStock {
+			fmt.Fprintf(&sb, "🔔 <a href=\"%s\">%s</a>\n    снова в наличии — <b>%.0f ₽</b>\n\n",
+				it.ProductURL, name, it.NewPrice)
+			continue
+		}
+		fmt.Fprintf(&sb, "📉 <a href=\"%s\">%s</a>\n", it.ProductURL, name)
+		if it.OldPrice > it.NewPrice && it.OldPrice > 0 {
+			pct := math.Round((it.OldPrice - it.NewPrice) / it.OldPrice * 100)
+			fmt.Fprintf(&sb, "    <b>%.0f ₽</b>  (было %.0f ₽, -%.0f%%)\n\n", it.NewPrice, it.OldPrice, pct)
+		} else {
+			fmt.Fprintf(&sb, "    <b>%.0f ₽</b>\n\n", it.NewPrice)
+		}
+	}
+	if len(a.Items) > maxBundleItems {
+		fmt.Fprintf(&sb, "…и ещё %d — смотри /list\n\n", len(a.Items)-maxBundleItems)
+	}
+	sb.WriteString("Управлять отслеживанием — /list")
+
+	return n.sendMessage(ctx, a.ChatID, sb.String(), nil)
+}
+
 // ── Search-подписки: батч подешевевших товаров по одному запросу ─────────────
 
 type SearchAlertItem struct {

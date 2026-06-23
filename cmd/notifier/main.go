@@ -553,7 +553,8 @@ func makeHandler(
 			// Throttle: оцениваем подписку не чаще интервала её тарифа. PriceEvent
 			// шлётся на каждом скрейпе (= MIN-интервал по подписчикам товара), но
 			// доставку каждому держим строго по его плану.
-			iv := domain.EffectivePlanFor(sub.OwnerPlan, sub.OwnerPlanExpiresAt, now).EffectiveInterval(defaultInterval)
+			plan := domain.EffectivePlanFor(sub.OwnerPlan, sub.OwnerPlanExpiresAt, now)
+			iv := plan.EffectiveInterval(defaultInterval)
 			if !shouldEvaluate(sub.LastEvaluatedAt, iv, now) {
 				continue
 			}
@@ -643,12 +644,15 @@ func makeHandler(
 			if err != nil {
 				return fmt.Errorf("marshal alert payload: %w", err)
 			}
+			// Окно бандлинга по тарифу: до deliver_after флашер копит алерты юзера
+			// и отправит их одним сообщением (≥2) либо богатым алертом (1).
 			if _, err := pendingRepo.Insert(ctx, &domain.PendingAlert{
 				UserID:         sub.UserID,
 				SubscriptionID: sub.ID,
 				ProductID:      sub.ProductID,
 				IdemKey:        iKey,
 				Payload:        payload,
+				DeliverAfter:   now.Add(plan.BundleWindow()),
 			}); err != nil {
 				return fmt.Errorf("enqueue pending alert: %w", err)
 			}

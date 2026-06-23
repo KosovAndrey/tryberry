@@ -89,6 +89,23 @@ func (p Plan) EffectiveInterval(def time.Duration) time.Duration {
 	return def
 }
 
+// BundleWindow — окно коалесинга алертов перед отправкой одним сообщением
+// (бандлинг доставки, Phase 1b — см. docs/SCALING-NOTIFIER-DELIVERY.md). Дорогие
+// тарифы получают уведомления быстрее (короче окно), free сильнее склеивается;
+// reseller/unlimited — без задержки (0). Подбор по тарифу, не по интервалу.
+func (p Plan) BundleWindow() time.Duration {
+	switch {
+	case IsResellerPlan(p.Name), p.Name == "unlimited":
+		return 0
+	case p.Name == "pro" || p.Name == "trial":
+		return 5 * time.Minute
+	case p.Name == "lite":
+		return 10 * time.Minute
+	default: // free, basic (legacy), неизвестный
+		return 15 * time.Minute
+	}
+}
+
 // EffectivePlanFor — действующий план по имени и сроку (без полного User).
 // Удобно планировщику/воркеру, у которых на руках только plan + plan_expires_at.
 func EffectivePlanFor(name string, expiresAt *time.Time, now time.Time) Plan {
