@@ -12,6 +12,7 @@ const (
 	MarketplaceWildberries  Marketplace = "wildberries"
 	MarketplaceOzon         Marketplace = "ozon"
 	MarketplaceYandexMarket Marketplace = "yandex_market"
+	MarketplaceAliexpress   Marketplace = "aliexpress"
 )
 
 // Result — единый формат данных о товаре, независимый от маркетплейса

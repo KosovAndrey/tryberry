@@ -216,6 +216,10 @@ services:
       # код фолбэчит на OZON_PROXY_URL (тот же мобильный IP). Дележ IP ускоряет
       # его выгорание (см. OZON-STATUS) — при росте нагрузки задать отдельный.
       YANDEX_PROXY_URL: "${YANDEX_PROXY_URL:-}"
+      # AliExpress: бот при /track скрейпит сразу. Прокси нужен для рефреша cookie
+      # (с датацентра cold-сессия = капча), дальше запросы напрямую. Пусто → фолбэк
+      # на OZON_PROXY_URL (дележ IP жжёт его — при нагрузке задать отдельный).
+      ALI_PROXY_URL: "${ALI_PROXY_URL:-}"
     depends_on:
       postgres:
         condition: service_healthy
@@ -269,6 +273,11 @@ services:
       # Я.Маркет: без аккаунта, хороший TLS + RU-прокси. Пусто → код фолбэчит на
       # OZON_PROXY_URL. При росте нагрузки задать отдельный (дележ IP жжёт его).
       YANDEX_PROXY_URL: "${YANDEX_PROXY_URL:-}"
+      SCRAPER_RATE_LIMIT_RPS_ALI: "${SCRAPER_RATE_LIMIT_RPS_ALI:-1}"
+      # AliExpress: внутренний JSON-API (aer-jsonapi), без браузера. X5SEC решает
+      # репутация IP → нужен RU-резидентский/мобильный прокси (датацентр = капча).
+      # Пусто → фолбэк на OZON_PROXY_URL (дележ IP жжёт его — при нагрузке отдельный).
+      ALI_PROXY_URL: "${ALI_PROXY_URL:-}"
       SCRAPER_HEALTH_PORT: "8090"
       OTLP_ENDPOINT: "jaeger:4317"
     depends_on:
