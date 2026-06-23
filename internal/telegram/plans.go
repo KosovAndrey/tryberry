@@ -134,7 +134,8 @@ func discountedRub(fullRub, pct int) string {
 	return domain.KopecksToRubString(domain.DiscountedKopecks(int64(fullRub)*100, pct))
 }
 
-// pendingDiscountPct — процент ожидающей скидки юзера (0, если нет/недоступно).
+// pendingDiscountPct — процент ожидающей скидки юзера для превью (по telegram_id).
+// 0, если скидки нет ИЛИ она уже не применится на оплате (см. usablePendingDiscount).
 func (b *Bot) pendingDiscountPct(ctx context.Context, tgID int64) int {
 	if b.discounts == nil {
 		return 0
@@ -143,9 +144,26 @@ func (b *Bot) pendingDiscountPct(ctx context.Context, tgID int64) int {
 	if err != nil {
 		return 0
 	}
-	d, ok, err := b.discounts.Get(ctx, user.ID)
-	if err != nil || !ok {
+	return b.usablePendingDiscount(ctx, user.ID)
+}
+
+// usablePendingDiscount — ожидающая скидка юзера, ПРИГОДНАЯ к оплате прямо сейчас:
+// тот же гейт, что и на checkout (Redeemable — код жив, не исчерпан, юзер его не
+// гасил). Возвращает 0, если скидки нет или она уже не сработает — чтобы превью
+// (список/карточка/сумма к оплате) не обещало скидку, которой не будет на форме
+// оплаты. Best-effort: при ошибке БД скидку показываем (как checkout её бы применил).
+func (b *Bot) usablePendingDiscount(ctx context.Context, userID int64) int {
+	if b.discounts == nil {
 		return 0
+	}
+	d, ok, err := b.discounts.Get(ctx, userID)
+	if err != nil || !ok || d.Pct <= 0 {
+		return 0
+	}
+	if b.promoRepo != nil {
+		if usable, err := b.promoRepo.Redeemable(ctx, d.CodeID, userID); err == nil && !usable {
+			return 0
+		}
 	}
 	return d.Pct
 }
@@ -229,13 +247,11 @@ func (b *Bot) handlePlanBuy(ctx context.Context, telegramID, chatID int64, messa
 }
 
 // previewAmount — сумма к оплате с учётом ожидающей скидки (для текста запроса
-// email, до создания платежа). Ошибки игнорируем — покажем полную цену.
+// email, до создания платежа). Через тот же гейт, что список/карточка/checkout,
+// чтобы не показать заниженную сумму по уже негодному коду.
 func (b *Bot) previewAmount(ctx context.Context, userID int64, full int64) int64 {
-	if b.discounts == nil {
-		return full
-	}
-	if d, ok, err := b.discounts.Get(ctx, userID); err == nil && ok && d.Pct > 0 {
-		return domain.DiscountedKopecks(full, d.Pct)
+	if pct := b.usablePendingDiscount(ctx, userID); pct > 0 {
+		return domain.DiscountedKopecks(full, pct)
 	}
 	return full
 }
