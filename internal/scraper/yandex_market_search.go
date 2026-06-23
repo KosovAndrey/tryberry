@@ -67,6 +67,36 @@ func ymSellerID(u *url.URL) string {
 	return ""
 }
 
+// ymBusinessSlugRe — слаг витрины из /business--<slug>/<id>.
+var ymBusinessSlugRe = regexp.MustCompile(`/business--([^/]+)/\d+`)
+
+// SellerName — имя витрины из слага ссылки (/business--<slug>/<id>):
+// "yandex-fabrika" → "Yandex Fabrika". Для merchant-формы (/search?generalContext)
+// слага нет → "" (ярлык останется «Магазин #id»). Сети не требует. Настоящее
+// кириллическое имя зашито в schema-сжатый стейт marketfront — отдельная задача.
+func (s *YandexMarketSearchScraper) SellerName(_ context.Context, rawURL string) (string, error) {
+	u, err := url.Parse(rawURL)
+	if err != nil {
+		return "", err
+	}
+	m := ymBusinessSlugRe.FindStringSubmatch(u.Path)
+	if len(m) != 2 || m[1] == "" || m[1] == "m" {
+		return "", nil
+	}
+	return prettifyYMSlug(m[1]), nil
+}
+
+// prettifyYMSlug: "yandex-fabrika" → "Yandex Fabrika".
+func prettifyYMSlug(slug string) string {
+	parts := strings.Split(slug, "-")
+	for i, p := range parts {
+		if p != "" {
+			parts[i] = strings.ToUpper(p[:1]) + p[1:]
+		}
+	}
+	return strings.Join(parts, " ")
+}
+
 // MatchesSearch — ссылка на выдачу Я.Маркета: /search (или параметр text), либо
 // витрина продавца (/business--*/<id> или generalContext с merchant/shopInShop).
 // Карточка (market.yandex.ru/card/...) сюда НЕ попадает — её разбирает Scrape.

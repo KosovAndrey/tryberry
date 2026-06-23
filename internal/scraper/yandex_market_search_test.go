@@ -62,6 +62,25 @@ func TestYandexSeller_Storefront(t *testing.T) {
 	}
 }
 
+func TestYandexSeller_Name(t *testing.T) {
+	s := newYMSearch()
+	cases := map[string]string{
+		"https://market.yandex.ru/business--yandex-fabrika/83022309": "Yandex Fabrika",
+		"https://market.yandex.ru/business--befree/1001084":          "Befree",
+		"https://market.yandex.ru/business--m/1001084":               "", // синтетический слаг → нет имени
+		"https://market.yandex.ru/search?generalContext=t%3Dmerchant%3Bmrch%3D1001084%3B": "", // merchant-форма без слага
+	}
+	for u, want := range cases {
+		got, err := s.SellerName(nil, u)
+		if err != nil {
+			t.Fatalf("SellerName(%q): %v", u, err)
+		}
+		if got != want {
+			t.Errorf("SellerName(%q) = %q, want %q", u, got, want)
+		}
+	}
+}
+
 func TestYandexSearch_NormalizeSearchURL(t *testing.T) {
 	s := newYMSearch()
 	// text нормализуется (lower + схлопывание пробелов), hid сохраняется. Сравниваем
