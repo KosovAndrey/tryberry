@@ -185,10 +185,18 @@ func (s *AliexpressSearchScraper) searchWithFallback(ctx context.Context, body [
 	if err != nil {
 		return 0, nil, err
 	}
-	if status != 200 || isAliBlocked(b) {
+	// Холодная сессия: X5SEC иногда отдаёт 200 без товаров и без явного блок-маркера
+	// (cookie ещё не прогрета) — отсутствие snippetContainer трактуем как cold и
+	// идём через прокси (он проходит антибот и кладёт aer-cookie в общий jar).
+	if status != 200 || isAliBlocked(b) || !aliHasProducts(b) {
 		return s.fetchSearch(ctx, s.proxy, body, referer)
 	}
 	return status, b, nil
+}
+
+// aliHasProducts — быстрый признак непустой выдачи (без полного парса).
+func aliHasProducts(b []byte) bool {
+	return strings.Contains(string(b), `"snippetContainer"`)
 }
 
 func (s *AliexpressSearchScraper) fetchSearch(ctx context.Context, client tls_client.HttpClient, body []byte, referer string) (int, []byte, error) {
