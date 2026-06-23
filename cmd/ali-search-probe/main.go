@@ -60,22 +60,18 @@ func main() {
 
 	ctx := context.Background()
 
-	var warmURL string
-	var body []byte
 	if storeID != "" {
-		fmt.Printf("store: %s\n", storeID)
-		warmURL = aliBase + "/store/" + storeID
-		body = []byte(fmt.Sprintf(`{"page":1,"searchText":"","source":"store","storeIds":[%q],"catId":"","pgChildren":[],"aeBrainIds":[],"mainFilters":"","searchTrigger":"","g":"y"}`, storeID))
-	} else {
-		fmt.Printf("query: %q\n", arg)
-		warmURL = aliBase + "/wholesale?SearchText=" + url.QueryEscape(arg)
-		body = []byte(fmt.Sprintf(`{"page":1,"searchText":%q,"source":"direct","catId":"","storeIds":[],"pgChildren":[],"aeBrainIds":[],"mainFilters":"","searchTrigger":"search_bar","g":"y"}`, arg))
+		probeStore(ctx, direct, proxy, storeID)
+		return
 	}
 
-	// Прогрев: GET страницы через прокси — проходит X5SEC и кладёт aer-cookie в jar.
+	fmt.Printf("query: %q\n", arg)
+	warmURL := aliBase + "/wholesale?SearchText=" + url.QueryEscape(arg)
 	ws, wb := do(ctx, proxy, fhttp.MethodGet, warmURL, nil, warmURL)
 	fmt.Printf("warmup(proxy): status=%d blocked=%s len=%d cookies=%d\n", ws, yn(isBlocked(wb)), len(wb), cookieCount(proxy))
 	time.Sleep(1200 * time.Millisecond)
+
+	body := []byte(fmt.Sprintf(`{"page":1,"searchText":%q,"source":"direct","catId":"","storeIds":[],"pgChildren":[],"aeBrainIds":[],"mainFilters":"","searchTrigger":"search_bar","g":"y"}`, arg))
 	status, resp := do(ctx, direct, fhttp.MethodPost, searchAPI, body, warmURL)
 	src := "direct"
 	if status != 200 || isBlocked(resp) {
@@ -83,8 +79,50 @@ func main() {
 		src = "proxy"
 	}
 	fmt.Printf("search POST(%s): status=%d blocked=%s len=%d\n\n", src, status, yn(isBlocked(resp)), len(resp))
-
 	report(resp)
+}
+
+// probeStore перебирает варианты фильтра магазина в /aer-webapi/v1/search и
+// печатает resultsCount/productsV2 для каждого — чтобы найти правильный параметр.
+func probeStore(ctx context.Context, direct, proxy tls_client.HttpClient, id string) {
+	warmURL := aliBase + "/store/" + id
+	ws, wb := do(ctx, proxy, fhttp.MethodGet, warmURL, nil, warmURL)
+	fmt.Printf("store %s — warmup(proxy): status=%d blocked=%s len=%d\n\n", id, ws, yn(isBlocked(wb)), len(wb))
+	time.Sleep(1200 * time.Millisecond)
+
+	base := `"page":1,"searchText":"","catId":"","pgChildren":[],"aeBrainIds":[],"mainFilters":"","searchTrigger":"","g":"y"`
+	variants := []struct{ name, extra string }{
+		{"storeIds", fmt.Sprintf(`"storeIds":[%q],"source":"store"`, id)},
+		{"sellerIds", fmt.Sprintf(`"sellerIds":[%q],"source":"store"`, id)},
+		{"sellerId", fmt.Sprintf(`"sellerId":%q,"source":"store"`, id)},
+		{"storeId", fmt.Sprintf(`"storeId":%q,"source":"store"`, id)},
+		{"companyId", fmt.Sprintf(`"companyId":[%q],"source":"store"`, id)},
+		{"sellerAdminSeq", fmt.Sprintf(`"sellerAdminSeq":%q,"source":"store"`, id)},
+	}
+	var hitBody []byte
+	var hitName string
+	for _, v := range variants {
+		body := []byte("{" + base + "," + v.extra + "}")
+		status, resp := do(ctx, direct, fhttp.MethodPost, searchAPI, body, warmURL)
+		if status != 200 || isBlocked(resp) {
+			status, resp = do(ctx, proxy, fhttp.MethodPost, searchAPI, body, warmURL)
+		}
+		var root interface{}
+		_ = json.Unmarshal(resp, &root)
+		cnt := dig(root, "data", "breadcrumbs", "resultsCount")
+		prods, _ := dig(root, "data", "productsFeed", "productsV2").([]interface{})
+		fmt.Printf("  %-15s status=%d resultsCount=%v productsV2=%d\n", v.name, status, cnt, len(prods))
+		if len(prods) > 0 && hitBody == nil {
+			hitBody, hitName = resp, v.name
+		}
+		time.Sleep(600 * time.Millisecond)
+	}
+	if hitBody == nil {
+		fmt.Println("\nни один вариант не дал товаров — у магазина отдельный эндпоинт (нужен XHR со страницы /store/)")
+		return
+	}
+	fmt.Printf("\n✓ рабочий параметр: %s\n", hitName)
+	report(hitBody)
 }
 
 func report(body []byte) {
