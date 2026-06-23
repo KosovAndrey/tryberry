@@ -140,7 +140,7 @@ func (b *Bot) applyPromoCode(ctx context.Context, chatID, tgID int64, user *doma
 		if returnPlan != "" {
 			b.sendPlanCard(ctx, tgID, chatID, 0, returnPlan)
 		} else {
-			b.sendPlansMenu(chatID, 0)
+			b.sendPlansMenu(ctx, tgID, chatID, 0)
 		}
 		return true
 

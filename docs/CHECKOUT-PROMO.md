@@ -57,6 +57,11 @@ discount гасится только при оплате, ни один из в�
 **Смена кода:** кнопка на карточке больше не прячется — при активной скидке
 становится «🎟 Сменить промокод». Перезапись бесплатна (discount не потрачен).
 
+**Цены со скидкой везде:** и список тарифов (`sendPlansMenu`), и карточка показывают
+скидку — в списке зачёркнутая старая цена + новая рядом (`<s>499 ₽</s> 399.20 ₽`),
+в кнопках сумма уже со скидкой. `sendPlansMenu`/`sendPlanCard`/`sendSubConsent`/
+`sendPlanBuyStub` получили `ctx`/`tgID` для подстановки `pendingDiscountPct`.
+
 **Закрытие leak:** `PromoRepo.Redeemable` теперь принимает `userID` и добавляет
 `AND NOT EXISTS(SELECT 1 FROM promo_redemptions WHERE code_id=? AND user_id=?)`.
 Этот гейт стоит и на checkout (`discountUsable`, путь денег — общий для TG и VK),

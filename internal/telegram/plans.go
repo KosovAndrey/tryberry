@@ -16,10 +16,17 @@ import (
 // заменяется на создание платежа.
 
 // sendPlansMenu — список тарифов с ценами. messageID != 0 → в том же сообщении.
-func (b *Bot) sendPlansMenu(chatID int64, messageID int) {
+// При ожидающей скидке (промокод) цены в списке показываем зачёркнутой старой и
+// новой рядом, а в кнопках — уже со скидкой.
+func (b *Bot) sendPlansMenu(ctx context.Context, tgID, chatID int64, messageID int) {
+	pct := b.pendingDiscountPct(ctx, tgID)
+
 	var sb strings.Builder
 	sb.WriteString("💳 <b>Тарифы TryberryBot</b>\n\n" +
 		"Подписка открывает больше отслеживаемых товаров, поиск-подписки и частые проверки цен. Действует 30 дней с момента оплаты.\n\n")
+	if pct > 0 {
+		fmt.Fprintf(&sb, "🎟 Промокод на <b>%d%%</b> применён — цены ниже уже со скидкой.\n\n", pct)
+	}
 
 	var rows [][]tgbotapi.InlineKeyboardButton
 	for _, sp := range domain.PlanShowcase {
@@ -27,12 +34,18 @@ func (b *Bot) sendPlansMenu(chatID int64, messageID int) {
 		if !ok {
 			continue
 		}
-		fmt.Fprintf(&sb, "▫️ <b>%s</b> — %d ₽/мес · %s\n", p.Title, p.PriceRub, sp.Tagline)
+		priceStr := fmt.Sprintf("%d ₽/мес", p.PriceRub)
+		btnPrice := priceStr
+		if pct > 0 {
+			priceStr = fmt.Sprintf("<s>%d ₽</s> <b>%s ₽</b>/мес", p.PriceRub, discountedRub(p.PriceRub, pct))
+			btnPrice = fmt.Sprintf("%s ₽/мес", discountedRub(p.PriceRub, pct))
+		}
+		fmt.Fprintf(&sb, "▫️ <b>%s</b> — %s · %s\n", p.Title, priceStr, sp.Tagline)
 		fmt.Fprintf(&sb, "    📦 %d товаров · 🔎 %d поисков · ⏱ %s\n\n",
 			p.MaxProduct, p.MaxSearch, domain.IntervalPhrase(p.Interval))
 		rows = append(rows, tgbotapi.NewInlineKeyboardRow(
 			tgbotapi.NewInlineKeyboardButtonData(
-				fmt.Sprintf("%s — %d ₽/мес", p.Title, p.PriceRub),
+				fmt.Sprintf("%s — %s", p.Title, btnPrice),
 				"plan:view:"+p.Name,
 			),
 		))
@@ -51,7 +64,7 @@ func (b *Bot) sendPlansMenu(chatID int64, messageID int) {
 func (b *Bot) sendPlanCard(ctx context.Context, tgID, chatID int64, messageID int, name string) {
 	p, ok := domain.PlanByName(name)
 	if !ok || p.PriceRub <= 0 {
-		b.sendPlansMenu(chatID, messageID)
+		b.sendPlansMenu(ctx, tgID, chatID, messageID)
 		return
 	}
 	tagline := ""
@@ -178,12 +191,12 @@ func (b *Bot) sendSubConsent(ctx context.Context, tgID, chatID int64, messageID 
 // — заглушка как раньше.
 func (b *Bot) handlePlanBuy(ctx context.Context, telegramID, chatID int64, messageID int, name string) {
 	if b.payments == nil {
-		b.sendPlanBuyStub(chatID, messageID, name)
+		b.sendPlanBuyStub(ctx, telegramID, chatID, messageID, name)
 		return
 	}
 	p, ok := domain.PlanByName(name)
 	if !ok || p.PriceRub <= 0 {
-		b.sendPlansMenu(chatID, messageID)
+		b.sendPlansMenu(ctx, telegramID, chatID, messageID)
 		return
 	}
 
@@ -270,7 +283,7 @@ func (b *Bot) handleSubBuy(ctx context.Context, telegramID, chatID int64, messag
 	}
 	p, ok := domain.PlanByName(name)
 	if !ok || p.SubPriceRub <= 0 {
-		b.sendPlansMenu(chatID, messageID)
+		b.sendPlansMenu(ctx, telegramID, chatID, messageID)
 		return
 	}
 
@@ -345,10 +358,10 @@ func backToPlansKeyboard() tgbotapi.InlineKeyboardMarkup {
 
 // sendPlanBuyStub — экран оплаты-заглушки: ЮKassa ещё на подключении,
 // подписка не выдаётся.
-func (b *Bot) sendPlanBuyStub(chatID int64, messageID int, name string) {
+func (b *Bot) sendPlanBuyStub(ctx context.Context, tgID, chatID int64, messageID int, name string) {
 	p, ok := domain.PlanByName(name)
 	if !ok || p.PriceRub <= 0 {
-		b.sendPlansMenu(chatID, messageID)
+		b.sendPlansMenu(ctx, tgID, chatID, messageID)
 		return
 	}
 

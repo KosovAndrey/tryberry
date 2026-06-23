@@ -296,7 +296,7 @@ func (b *Bot) handleCommand(ctx context.Context, msg *tgbotapi.Message) {
 	case "list_search":
 		b.handleListSearch(ctx, msg.Chat.ID, user)
 	case "plans":
-		b.sendPlansMenu(msg.Chat.ID, 0)
+		b.sendPlansMenu(ctx, msg.From.ID, msg.Chat.ID, 0)
 	case "trial":
 		b.handleTrial(ctx, msg.Chat.ID, 0, user)
 	case "promo":
@@ -460,7 +460,7 @@ func (b *Bot) handleCallback(ctx context.Context, cb *tgbotapi.CallbackQuery) {
 		b.promptChangeEmail(ctx, cb.From.ID, chatID, messageID)
 
 	case cb.Data == "menu:plans":
-		b.sendPlansMenu(chatID, messageID)
+		b.sendPlansMenu(ctx, cb.From.ID, chatID, messageID)
 
 	case strings.HasPrefix(cb.Data, "plan:view:"):
 		b.sendPlanCard(ctx, cb.From.ID, chatID, messageID, strings.TrimPrefix(cb.Data, "plan:view:"))
