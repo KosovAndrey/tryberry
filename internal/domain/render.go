@@ -104,7 +104,7 @@ func QueryTextFromNormalized(normalized string) string {
 		// Берём первый непустой — не зависим от формата маркетплейса и порядка
 		// параметров.
 		q := u.Query()
-		for _, key := range []string{"search", "text"} {
+		for _, key := range []string{"search", "text", "SearchText"} {
 			if v := strings.TrimSpace(q.Get(key)); v != "" {
 				return v
 			}

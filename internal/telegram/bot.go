@@ -590,6 +590,8 @@ func marketplaceIcon(mp string) string {
 		return "🟡"
 	case "ozon":
 		return "🔵"
+	case "aliexpress":
+		return "🔴"
 	default:
 		return "📦"
 	}
