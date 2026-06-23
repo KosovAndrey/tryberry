@@ -217,9 +217,16 @@ func (b *Bot) handleMessage(ctx context.Context, msg *tgbotapi.Message) {
 		return
 	}
 
-	// 3. Ссылка на товар → существующая логика.
+	// 3. Ссылка на товар → существующая логика. В doTrack передаём ТОЛЬКО ссылку,
+	// извлечённую из текста, а не весь текст: иначе сообщение вида «Название\nссылка»
+	// целиком уедет в products.url и сломает inline-клавиатуру списка (Telegram
+	// отклоняет кнопку с невалидным URL → весь список не открывается).
 	if _, err := b.registry.FindByURL(text); err == nil {
-		b.doTrack(ctx, msg.Chat.ID, text, user)
+		rawURL := text
+		if prods := b.trackableProductURLs(text); len(prods) == 1 {
+			rawURL = prods[0]
+		}
+		b.doTrack(ctx, msg.Chat.ID, rawURL, user)
 		return
 	}
 

@@ -431,16 +431,19 @@ func (b *Bot) buildSearchListView(subs []*domain.SearchSubscription) (string, tg
 
 	var rows [][]tgbotapi.InlineKeyboardButton
 	for i, s := range subs {
-		rows = append(rows, tgbotapi.NewInlineKeyboardRow(
-			tgbotapi.NewInlineKeyboardButtonURL(
-				fmt.Sprintf("🔗 #%d %s", i+1, truncate(s.QueryText, 18)),
-				s.NormalizedURL,
-			),
-			tgbotapi.NewInlineKeyboardButtonData(
-				fmt.Sprintf("❌ Отменить #%d", i+1),
-				fmt.Sprintf("suntrack:%d", s.ID),
-			),
-		))
+		cancel := tgbotapi.NewInlineKeyboardButtonData(
+			fmt.Sprintf("❌ Отменить #%d", i+1),
+			fmt.Sprintf("suntrack:%d", s.ID),
+		)
+		// Битый URL не должен ронять всю клавиатуру (см. safeButtonURL).
+		if u := safeButtonURL(s.NormalizedURL); u != "" {
+			rows = append(rows, tgbotapi.NewInlineKeyboardRow(
+				tgbotapi.NewInlineKeyboardButtonURL(fmt.Sprintf("🔗 #%d %s", i+1, truncate(s.QueryText, 18)), u),
+				cancel,
+			))
+		} else {
+			rows = append(rows, tgbotapi.NewInlineKeyboardRow(cancel))
+		}
 	}
 	rows = append(rows, tgbotapi.NewInlineKeyboardRow(
 		tgbotapi.NewInlineKeyboardButtonData("◀️ В меню", "menu:main"),

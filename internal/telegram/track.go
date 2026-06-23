@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net/url"
 	"strconv"
 	"strings"
 	"time"
@@ -394,16 +395,21 @@ func (b *Bot) buildListView(subs []*domain.Subscription) (string, tgbotapi.Inlin
 
 	var rows [][]tgbotapi.InlineKeyboardButton
 	for i, sub := range subs {
-		rows = append(rows, tgbotapi.NewInlineKeyboardRow(
-			tgbotapi.NewInlineKeyboardButtonURL(
-				fmt.Sprintf("🔗 #%d %s", i+1, truncate(sub.ProductName, 20)),
-				sub.ProductURL,
-			),
-			tgbotapi.NewInlineKeyboardButtonData(
-				fmt.Sprintf("❌ Отменить #%d", i+1),
-				fmt.Sprintf("untrack:%d", sub.ID),
-			),
-		))
+		cancel := tgbotapi.NewInlineKeyboardButtonData(
+			fmt.Sprintf("❌ Отменить #%d", i+1),
+			fmt.Sprintf("untrack:%d", sub.ID),
+		)
+		// URL-кнопку добавляем ТОЛЬКО при валидной ссылке: Telegram отклоняет ВСЮ
+		// клавиатуру, если хоть один URL битый (в БД встречаются записи вида
+		// «Название\nссылка»). Битый URL → строка только с кнопкой отмены.
+		if u := safeButtonURL(sub.ProductURL); u != "" {
+			rows = append(rows, tgbotapi.NewInlineKeyboardRow(
+				tgbotapi.NewInlineKeyboardButtonURL(fmt.Sprintf("🔗 #%d %s", i+1, truncate(sub.ProductName, 20)), u),
+				cancel,
+			))
+		} else {
+			rows = append(rows, tgbotapi.NewInlineKeyboardRow(cancel))
+		}
 	}
 
 	rows = append(rows, tgbotapi.NewInlineKeyboardRow(
@@ -411,6 +417,29 @@ func (b *Bot) buildListView(subs []*domain.Subscription) (string, tgbotapi.Inlin
 	))
 
 	return sb.String(), tgbotapi.NewInlineKeyboardMarkup(rows...)
+}
+
+// safeButtonURL возвращает валидный http(s)-URL для inline-кнопки или "" если
+// ссылка битая. В БД встречаются записи, где в url попал весь текст сообщения
+// («Название\nhttps://…») — Telegram отклоняет ВСЮ клавиатуру из-за одной такой
+// кнопки, и весь список перестаёт открываться. Из строки с пробелами/переводами
+// вытаскиваем первую http(s)-ссылку; если её нет или схема не http(s) — "".
+func safeButtonURL(raw string) string {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return ""
+	}
+	if strings.ContainsAny(raw, " \t\r\n") {
+		raw = bulkURLRe.FindString(raw)
+		if raw == "" {
+			return ""
+		}
+	}
+	u, err := url.Parse(raw)
+	if err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" {
+		return ""
+	}
+	return raw
 }
 
 func (b *Bot) handleUntrack(ctx context.Context, msg *tgbotapi.Message) {
