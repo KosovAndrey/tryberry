@@ -249,15 +249,22 @@ func (b *Bot) handleMessage(ctx context.Context, vkID int64, text, payload strin
 	}
 
 	if p.Cmd != "" {
-		// Любая кнопка/команда прерывает незавершённый ввод порога и email.
+		// Любая кнопка/команда прерывает незавершённый ввод порога, email и промокода.
 		b.clearSearchFSM(ctx, vkID)
 		b.clearTrackFSM(ctx, vkID)
 		b.clearEmailFSM(ctx, vkID)
+		b.clearPromoFSM(ctx, vkID)
 	} else {
 		// Ждём email для чека 54-ФЗ перед оплатой? (сильный модальный режим).
 		if fsm, ok := b.getEmailFSM(ctx, vkID); ok {
 			metrics.VKMessages.WithLabelValues("email_input").Inc()
 			b.handleEmailInput(ctx, vkID, user, text, fsm)
+			return
+		}
+		// Ждём промокод (кнопка «Промокод» в меню/карточке)? Модальный режим.
+		if fsm, ok := b.getPromoFSM(ctx, vkID); ok {
+			metrics.VKMessages.WithLabelValues("promo_input").Inc()
+			b.handlePromoInput(ctx, vkID, user, text, fsm)
 			return
 		}
 		// «привязать <КОД>» / «link <КОД>» — предъявление кода, выданного в TG.
@@ -384,8 +391,9 @@ func (b *Bot) handleMessage(ctx context.Context, vkID int64, text, payload strin
 	case cmdTrial:
 		b.handleTrial(ctx, vkID, user)
 	case cmdPromo:
-		b.send(ctx, vkID, "🎟 Промокод\n\nЕсть код? Отправь его сообщением:\nпромокод КОД\n\n"+
-			"Промокоды дают дни тарифа бесплатно или скидку на оплату.", kb)
+		// Меню (k="") → ввод кода с возвратом в тарифы; карточка (k=план) → возврат
+		// на карточку. Запускаем диалог ввода кода (FSM).
+		b.promptPromo(ctx, vkID, user, p.Kind)
 	case cmdEmail:
 		b.promptChangeEmail(ctx, vkID, user)
 	case cmdRef:
