@@ -425,6 +425,9 @@ var fabIncidentRe = regexp.MustCompile(`fab_[A-Za-z0-9]+_[A-Za-z0-9]+`)
 
 type ozonEnvelope struct {
 	WidgetStates map[string]string `json:"widgetStates"`
+	// NextPage — inner-path следующей страницы выдачи/витрины (cursor-пагинация
+	// Ozon: layout_page_index/… ). Пустой на последней странице. Для пагинации.
+	NextPage string `json:"nextPage"`
 }
 
 func parseOzonWidgets(body []byte) (*Result, error) {

@@ -3,8 +3,6 @@ package scraper
 import (
 	"context"
 	"fmt"
-	"io"
-	"net/http"
 	"net/url"
 	"regexp"
 	"strings"
@@ -102,49 +100,6 @@ func (s *OzonSellerScraper) ScrapeSearch(ctx context.Context, rawURL string) (*S
 	if len(m) != 2 || m[1] == "" {
 		return nil, fmt.Errorf("%w: no seller segment", ErrInvalidURL)
 	}
-	if err := s.limiter.Wait(ctx); err != nil {
-		return nil, err
-	}
-
-	status, body, err := s.fetchSellerViaBrowser(ctx, m[1])
-	if err != nil {
-		return nil, err
-	}
-	if status == 403 || bytesHasFAB(body) {
-		s.log.Warn("ozon seller: FAB block", "status", status, "seg", m[1], "body", snippet(body, 300))
-		return nil, ErrMarketplaceBlocked
-	}
-	if status != 200 {
-		return nil, fmt.Errorf("ozon seller status %d", status)
-	}
-
-	out := s.parseSearch(body) // тот же tileGrid-парсер, что у выдачи
-	if len(out.Items) == 0 {
-		s.log.Warn("ozon seller: no items parsed",
-			"seg", m[1], "len", len(body),
-			"widgets", ozonWidgetNames(body), "sample", ozonSearchSample(body))
-		return out, ErrParseFailed
-	}
-	s.log.Info("ozon seller scraped", "seg", m[1], "items", len(out.Items))
-	return out, nil
-}
-
-// fetchSellerViaBrowser — сайдкар делает in-page fetch витрины из живой дорожки.
-func (s *OzonSellerScraper) fetchSellerViaBrowser(ctx context.Context, seg string) (int, []byte, error) {
-	api := s.browserURL + "/seller?path=" + url.QueryEscape(seg)
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, api, nil)
-	if err != nil {
-		return 0, nil, err
-	}
-	resp, err := s.browserClient.Do(req)
-	if err != nil {
-		return 0, nil, fmt.Errorf("ozon seller browser sidecar: %w", err)
-	}
-	defer resp.Body.Close()
-	body, _ := io.ReadAll(io.LimitReader(resp.Body, 8<<20))
-	if resp.StatusCode == http.StatusBadGateway || resp.StatusCode == http.StatusGatewayTimeout {
-		return 0, nil, fmt.Errorf("ozon seller sidecar unavailable: status %d: %s",
-			resp.StatusCode, snippet(body, 200))
-	}
-	return resp.StatusCode, body, nil
+	// Витрина = тот же widgetStates с tileGrid; пагинация по nextPage общим циклом.
+	return s.scrapePaginated(ctx, "/seller/"+m[1]+"/", "seller", m[1])
 }

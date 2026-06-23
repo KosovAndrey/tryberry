@@ -555,6 +555,25 @@ async def handle_seller(request: web.Request) -> web.Response:
                         headers={"X-Ozon-Lane": str(lane.idx)})
 
 
+async def handle_page(request: web.Request) -> web.Response:
+    """GET /page?path=<inner-path> → in-page fetch произвольного entrypoint-path
+    (для пагинации: Go передаёт nextPage из предыдущего ответа). path должен
+    начинаться с '/'. Возвращает сырой widgetStates."""
+    pool: Pool = request.app["pool"]
+    path = (request.query.get("path") or "").strip()
+    if not path.startswith("/"):
+        return web.json_response({"error": "path required (must start with /)"}, status=400)
+    lane = pool.pick_any()
+    if lane is None:
+        return web.Response(status=502, text="no healthy lanes")
+    status, body = await lane.fetch_path(path, f"page:{path[:60]}")
+    if status == 0:
+        return web.Response(status=502, text="lane fetch failed")
+    return web.Response(status=status, body=body,
+                        content_type="application/json",
+                        headers={"X-Ozon-Lane": str(lane.idx)})
+
+
 async def handle_health(request: web.Request) -> web.Response:
     pool: Pool = request.app["pool"]
     lanes = [{"idx": l.idx, "healthy": l.healthy, "egress_ip": l.egress_ip}
@@ -612,6 +631,7 @@ async def main():
     app.router.add_get("/scrape", handle_scrape)
     app.router.add_get("/search", handle_search)
     app.router.add_get("/seller", handle_seller)
+    app.router.add_get("/page", handle_page)
     app.router.add_get("/healthz", handle_health)
     app.router.add_get("/metrics", handle_metrics)
 

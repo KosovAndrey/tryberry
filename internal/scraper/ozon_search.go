@@ -79,7 +79,8 @@ func (s *OzonSearchScraper) NormalizeSearchURL(rawURL string) (string, error) {
 	return "https://www.ozon.ru/search/?" + canon.Encode(), nil
 }
 
-// ScrapeSearch — забрать выдачу через сайдкар ozon-miner (browser-пул).
+// ScrapeSearch — забрать выдачу через сайдкар ozon-miner (browser-пул), с
+// пагинацией по nextPage.
 func (s *OzonSearchScraper) ScrapeSearch(ctx context.Context, rawURL string) (*SearchResultSet, error) {
 	if s.OzonScraper == nil || s.mode != ozonModeBrowser || !s.configured {
 		return nil, fmt.Errorf("%w: ozon search требует browser-сайдкар (mode=browser + OZON_BROWSER_URL)", ErrMarketplaceBlocked)
@@ -92,51 +93,104 @@ func (s *OzonSearchScraper) ScrapeSearch(ctx context.Context, rawURL string) (*S
 	if text == "" {
 		return nil, fmt.Errorf("%w: no text in ozon search URL", ErrInvalidURL)
 	}
-	if err := s.limiter.Wait(ctx); err != nil {
-		return nil, err
-	}
+	// Inner-path выдачи; text не кодируем (encodeURIComponent в сайдкаре).
+	return s.scrapePaginated(ctx, "/search/?text="+text, "search", text)
+}
 
-	status, body, err := s.fetchSearchViaBrowser(ctx, text)
-	if err != nil {
-		return nil, err
-	}
-	if status == 403 || bytesHasFAB(body) {
-		s.log.Warn("ozon search: FAB block", "status", status, "text", text, "body", snippet(body, 300))
-		return nil, ErrMarketplaceBlocked
-	}
-	if status != 200 {
-		return nil, fmt.Errorf("ozon search status %d", status)
-	}
+// maxOzonPages — потолок страниц пагинации (по ~36 тайлов), чтобы не уходить в
+// бесконечную прокрутку.
+const maxOzonPages = 8
 
-	out := s.parseSearch(body)
+// scrapePaginated — общий цикл для выдачи и витрины: идём по nextPage из
+// widgetStates, складываем тайлы (дедуп по ArticleID) до maxItems/конца/потолка
+// страниц. Партиальный результат при сбое на поздних страницах — ок.
+func (s *OzonSearchScraper) scrapePaginated(ctx context.Context, initialPath, kind, what string) (*SearchResultSet, error) {
+	out := &SearchResultSet{}
+	seen := make(map[string]bool)
+	var lastBody []byte
+	path := initialPath
+	for page := 0; page < maxOzonPages && path != ""; page++ {
+		if err := s.limiter.Wait(ctx); err != nil {
+			if len(out.Items) > 0 {
+				break
+			}
+			return nil, err
+		}
+		status, body, err := s.fetchPageViaBrowser(ctx, path)
+		if err != nil {
+			if len(out.Items) > 0 {
+				break // частичный результат сохраняем
+			}
+			return nil, err
+		}
+		lastBody = body
+		if status == 403 || bytesHasFAB(body) {
+			if len(out.Items) > 0 {
+				break
+			}
+			s.log.Warn("ozon "+kind+": FAB block", "status", status, "what", what, "body", snippet(body, 300))
+			return nil, ErrMarketplaceBlocked
+		}
+		if status != 200 {
+			if len(out.Items) > 0 {
+				break
+			}
+			return nil, fmt.Errorf("ozon %s status %d", kind, status)
+		}
+		res := s.parseSearch(body)
+		for _, it := range res.Items {
+			if it.ArticleID == "" || seen[it.ArticleID] {
+				continue
+			}
+			seen[it.ArticleID] = true
+			it.Position = len(out.Items) + 1
+			out.Items = append(out.Items, it)
+			if len(out.Items) >= s.maxItems {
+				out.PagesRead = page + 1
+				out.TotalFound = len(out.Items)
+				s.log.Info("ozon "+kind+" scraped", "what", what, "items", len(out.Items), "pages", out.PagesRead)
+				return out, nil
+			}
+		}
+		out.PagesRead = page + 1
+		path = ozonNextPage(body)
+	}
+	out.TotalFound = len(out.Items)
 	if len(out.Items) == 0 {
-		// Диагностика для доводки парсера по прод-логам (как у Я.Маркета).
-		s.log.Warn("ozon search: no items parsed",
-			"text", text, "len", len(body),
-			"widgets", ozonWidgetNames(body),
-			"sample", ozonSearchSample(body))
+		s.log.Warn("ozon "+kind+": no items parsed",
+			"what", what, "len", len(lastBody),
+			"widgets", ozonWidgetNames(lastBody), "sample", ozonSearchSample(lastBody))
 		return out, ErrParseFailed
 	}
-	s.log.Info("ozon search scraped", "text", text, "items", len(out.Items))
+	s.log.Info("ozon "+kind+" scraped", "what", what, "items", len(out.Items), "pages", out.PagesRead)
 	return out, nil
 }
 
-// fetchSearchViaBrowser — просим сайдкар сделать поисковый in-page fetch из живой
-// дорожки. Зеркало fetchViaBrowser (карточка), но выдача тяжелее → лимит 8 МБ.
-func (s *OzonSearchScraper) fetchSearchViaBrowser(ctx context.Context, text string) (int, []byte, error) {
-	api := s.browserURL + "/search?text=" + url.QueryEscape(text)
+// ozonNextPage — inner-path следующей страницы из ответа (пусто на последней).
+func ozonNextPage(body []byte) string {
+	var env ozonEnvelope
+	if json.Unmarshal(body, &env) != nil {
+		return ""
+	}
+	return strings.TrimSpace(env.NextPage)
+}
+
+// fetchPageViaBrowser — in-page fetch произвольного inner-path через сайдкар
+// (GET /page?path=…). Выдача/витрина тяжёлые → лимит 8 МБ.
+func (s *OzonSearchScraper) fetchPageViaBrowser(ctx context.Context, path string) (int, []byte, error) {
+	api := s.browserURL + "/page?path=" + url.QueryEscape(path)
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, api, nil)
 	if err != nil {
 		return 0, nil, err
 	}
 	resp, err := s.browserClient.Do(req)
 	if err != nil {
-		return 0, nil, fmt.Errorf("ozon search browser sidecar: %w", err)
+		return 0, nil, fmt.Errorf("ozon page browser sidecar: %w", err)
 	}
 	defer resp.Body.Close()
 	body, _ := io.ReadAll(io.LimitReader(resp.Body, 8<<20))
 	if resp.StatusCode == http.StatusBadGateway || resp.StatusCode == http.StatusGatewayTimeout {
-		return 0, nil, fmt.Errorf("ozon search sidecar unavailable: status %d: %s",
+		return 0, nil, fmt.Errorf("ozon page sidecar unavailable: status %d: %s",
 			resp.StatusCode, snippet(body, 200))
 	}
 	return resp.StatusCode, body, nil
