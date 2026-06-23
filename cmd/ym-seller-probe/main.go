@@ -31,6 +31,17 @@ const userAgent = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 
 // ymProductStartRe — тот же якорь товарной модели, что в yandex_market_search.go.
 var ymProductStartRe = regexp.MustCompile(`\{"id":\d+,"entity":"product"`)
 
+var titleRe = regexp.MustCompile(`(?s)<title>(.*?)</title>`)
+
+// nameFieldRes — кандидаты полей с именем магазина в стейте.
+var nameFieldRes = []*regexp.Regexp{
+	regexp.MustCompile(`"businessName":"[^"]{1,60}"`),
+	regexp.MustCompile(`"shopName":"[^"]{1,60}"`),
+	regexp.MustCompile(`"entity":"shop"[^}]{0,200}"name":"[^"]{1,60}"`),
+	regexp.MustCompile(`"entity":"business"[^}]{0,200}"name":"[^"]{1,60}"`),
+	regexp.MustCompile(`"slug":"[^"]{1,40}","entity":"shop"`),
+}
+
 func main() {
 	proxyURL := os.Getenv("YANDEX_PROXY_URL")
 	if proxyURL == "" {
@@ -62,6 +73,16 @@ func main() {
 		fmt.Printf("  %s: status=%d captcha=%s len=%d product-models=%d marketfront=%s\n",
 			src, status, yn(isCaptcha(body)), len(body), len(models),
 			yn(strings.Contains(string(body), "@marketfront/")))
+
+		// Имя магазина: <title> + кандидаты полей в стейте.
+		if m := titleRe.FindStringSubmatch(string(body)); len(m) == 2 {
+			fmt.Printf("  <title>: %s\n", strings.TrimSpace(m[1]))
+		}
+		for _, re := range nameFieldRes {
+			if m := re.FindStringSubmatch(string(body)); len(m) == 2 {
+				fmt.Printf("  %s\n", strings.TrimSpace(m[0]))
+			}
+		}
 		if len(models) > 0 {
 			loc := models[0]
 			end := loc[0] + 320
