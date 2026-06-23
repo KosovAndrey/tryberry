@@ -172,6 +172,12 @@ def _search_path(text: str) -> str:
     return f"/search/?text={text}"
 
 
+def _seller_path(seg: str) -> str:
+    """Inner-path витрины продавца: /seller/<slug>-<id>/. seg — сегмент пути из
+    ссылки (slug с числовым id на хвосте). Тот же entrypoint-api, что и у выдачи."""
+    return f"/seller/{seg}/"
+
+
 def _parse_proxy(url: str):
     if not url:
         return None
@@ -530,6 +536,25 @@ async def handle_search(request: web.Request) -> web.Response:
                         headers={"X-Ozon-Lane": str(lane.idx)})
 
 
+async def handle_seller(request: web.Request) -> web.Response:
+    """GET /seller?path=<slug-id> → витрина продавца Ozon тем же in-page fetch.
+    path — сегмент из ссылки /seller/<slug-id>/. Возвращает сырой widgetStates
+    (Go парсит тем же tileGrid-парсером, что и выдачу)."""
+    pool: Pool = request.app["pool"]
+    seg = (request.query.get("path") or "").strip().strip("/")
+    if not seg:
+        return web.json_response({"error": "path required"}, status=400)
+    lane = pool.pick_any()
+    if lane is None:
+        return web.Response(status=502, text="no healthy lanes")
+    status, body = await lane.fetch_path(_seller_path(seg), f"seller:{seg[:40]}")
+    if status == 0:
+        return web.Response(status=502, text="lane fetch failed")
+    return web.Response(status=status, body=body,
+                        content_type="application/json",
+                        headers={"X-Ozon-Lane": str(lane.idx)})
+
+
 async def handle_health(request: web.Request) -> web.Response:
     pool: Pool = request.app["pool"]
     lanes = [{"idx": l.idx, "healthy": l.healthy, "egress_ip": l.egress_ip}
@@ -586,6 +611,7 @@ async def main():
     app["pool"] = pool
     app.router.add_get("/scrape", handle_scrape)
     app.router.add_get("/search", handle_search)
+    app.router.add_get("/seller", handle_seller)
     app.router.add_get("/healthz", handle_health)
     app.router.add_get("/metrics", handle_metrics)
 
