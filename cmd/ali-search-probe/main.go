@@ -20,6 +20,7 @@ import (
 	"io"
 	"net/url"
 	"os"
+	"regexp"
 	"sort"
 	"strings"
 	"time"
@@ -88,7 +89,11 @@ func probeStore(ctx context.Context, direct, proxy tls_client.HttpClient, id str
 	warmURL := aliBase + "/store/" + id
 	ws, wb := do(ctx, proxy, fhttp.MethodGet, warmURL, nil, warmURL)
 	fmt.Printf("store %s — warmup(proxy): status=%d blocked=%s len=%d\n\n", id, ws, yn(isBlocked(wb)), len(wb))
+
+	// Товары могут быть прямо в SSR store-странице (__AER_DATA__) — анализируем HTML.
+	analyzeStoreHTML(wb)
 	time.Sleep(1200 * time.Millisecond)
+	fmt.Println("--- варианты фильтра в search-API ---")
 
 	base := `"page":1,"searchText":"","catId":"","pgChildren":[],"aeBrainIds":[],"mainFilters":"","searchTrigger":"","g":"y"`
 	variants := []struct{ name, extra string }{
@@ -237,6 +242,77 @@ func snippet(b []byte, n int) string {
 		b = b[:n]
 	}
 	return strings.Join(strings.Fields(string(b)), " ")
+}
+
+var aerDataRe = regexp.MustCompile(`(?s)<script id="__AER_DATA__"[^>]*>(.*?)</script>`)
+
+// analyzeStoreHTML извлекает __AER_DATA__ из store-страницы и ищет, где лежат
+// товары: топ массивов объектов + объекты с title+ценой + маркеры itemId.
+func analyzeStoreHTML(html []byte) {
+	raw := aerDataRe.FindSubmatch(html)
+	if raw == nil {
+		fmt.Println("__AER_DATA__ в store-HTML не найден")
+		return
+	}
+	var root interface{}
+	if err := json.Unmarshal(raw[1], &root); err != nil {
+		fmt.Printf("__AER_DATA__ не распарсился: %v\n", err)
+		return
+	}
+	if m, ok := root.(map[string]interface{}); ok {
+		keys := make([]string, 0, len(m))
+		for k := range m {
+			keys = append(keys, k)
+		}
+		sort.Strings(keys)
+		fmt.Printf("store __AER_DATA__ top keys: %s\n", strings.Join(keys, ", "))
+	}
+	var arrs []objArray
+	collectObjArrays(root, "$", &arrs)
+	sort.Slice(arrs, func(i, j int) bool { return arrs[i].n > arrs[j].n })
+	fmt.Println("топ массивов объектов в store-HTML:")
+	for i, a := range arrs {
+		if i >= 8 {
+			break
+		}
+		fmt.Printf("  %-46s ×%-3d {%s}\n", a.path, a.n, strings.Join(a.keys, ","))
+	}
+	// Признаки товара в любом виде.
+	for _, marker := range []string{`"itemId"`, `"productId"`, `"productsV2"`, `"snippetContainer"`, `"minPrice"`, `"salePrice"`} {
+		if n := strings.Count(string(raw[1]), marker); n > 0 {
+			fmt.Printf("  marker %-16s ×%d\n", marker, n)
+		}
+	}
+	fmt.Println()
+}
+
+type objArray struct {
+	path string
+	n    int
+	keys []string
+}
+
+func collectObjArrays(v interface{}, path string, out *[]objArray) {
+	switch t := v.(type) {
+	case map[string]interface{}:
+		for k, val := range t {
+			collectObjArrays(val, path+"."+k, out)
+		}
+	case []interface{}:
+		if len(t) > 0 {
+			if first, ok := t[0].(map[string]interface{}); ok {
+				keys := make([]string, 0, len(first))
+				for k := range first {
+					keys = append(keys, k)
+				}
+				sort.Strings(keys)
+				*out = append(*out, objArray{path: path, n: len(t), keys: keys})
+			}
+		}
+		for i, val := range t {
+			collectObjArrays(val, fmt.Sprintf("%s[%d]", path, i), out)
+		}
+	}
 }
 
 // extractStoreID достаёт числовой id из "store:<id>" или URL /store/<id>.
