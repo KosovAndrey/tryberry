@@ -24,6 +24,7 @@ type Bot struct {
 	prodRepo  *postgres.ProductRepo
 	priceRepo *postgres.PriceHistoryRepo // история цен для подсказки target (может быть nil)
 	registry  *scraper.Registry
+	resolver  *scraper.LinkResolver // разворачивает короткие ссылки приложений (ozon.ru/t/…, a.aliexpress.com/…)
 
 	// Поиск-подписки
 	searchQueryRepo *postgres.SearchQueryRepo
@@ -95,6 +96,7 @@ func NewBot(
 		prodRepo:        prodRepo,
 		priceRepo:       priceRepo,
 		registry:        registry,
+		resolver:        scraper.NewLinkResolver(0),
 		searchQueryRepo: searchQueryRepo,
 		searchSubRepo:   searchSubRepo,
 		promoRepo:       promoRepo,
@@ -190,6 +192,12 @@ func (b *Bot) handleMessage(ctx context.Context, msg *tgbotapi.Message) {
 		return
 	}
 
+	// 1c½. Короткие ссылки из мобильных приложений (ozon.ru/t/…, a.aliexpress.com/…)
+	// сами по себе не товарные URL — разворачиваем по 3xx в канонический URL ДО гейтов
+	// распознавания (bulk/поиск/товар), иначе они падают в главное меню. Сетевой запрос
+	// только для allowlist-хостов; обычный текст/ссылки проходят без сети.
+	text = b.resolver.ExpandInText(ctx, text)
+
 	// 1d. Несколько товарных ссылок в одном сообщении → массовое добавление
 	// (одна сводка вместо карточки на каждую). Одиночная ссылка идёт обычным флоу ниже.
 	if prods := b.trackableProductURLs(text); len(prods) >= 2 {
@@ -265,6 +273,7 @@ func (b *Bot) handleCommand(ctx context.Context, msg *tgbotapi.Message) {
 					"Или используй:\n<code>/track https://www.wildberries.ru/catalog/.../detail.aspx</code>")
 			return
 		}
+		args = b.resolver.ExpandInText(ctx, args)
 		b.doTrack(ctx, msg.Chat.ID, args, user)
 	case "list":
 		b.handleList(ctx, msg.Chat.ID, user)
