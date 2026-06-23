@@ -39,8 +39,10 @@ func NewYandexMarketSearchScraper(base *YandexMarketScraper, maxItems int) *Yand
 	return &YandexMarketSearchScraper{
 		YandexMarketScraper: base,
 		maxItems:            maxItems,
-		// Выдача тяжёлая (~2.5 МБ) и идёт через один IP — держим темп низким.
-		limiter: rate.NewLimiter(rate.Limit(0.5), 1),
+		// Выдача тяжёлая (~2.5 МБ), но идёт direct без прокси (см.
+		// docs/YANDEX-WARMED-COOKIES.md) — прежний 0.5 был из-за одного proxy-IP.
+		// Поднимаем до 2; фолбэк-прокси и метрика source=proxy страхуют.
+		limiter: rate.NewLimiter(rate.Limit(2), 1),
 	}
 }
 
