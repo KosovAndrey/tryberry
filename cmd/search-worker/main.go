@@ -132,11 +132,15 @@ func run(log *slog.Logger) error {
 	// Ozon-поиск: только через сайдкар ozon-miner (browser-пул) — прямой API за
 	// FAB. Маршрут /search в сайдкаре есть; парсер searchResultsV2 best-effort,
 	// доводим по прод-логам. Без OZON_BROWSER_URL ScrapeSearch вернёт blocked.
-	ozonSearch := scraper.NewOzonSearchScraper(scraper.NewOzonScraper(scraper.OzonOptions{
-		Mode:       "browser", // поиск Ozon доступен только через сайдкар-пул
+	ozonBrowser := scraper.NewOzonScraper(scraper.OzonOptions{
+		Mode:       "browser", // поиск/витрина Ozon доступны только через сайдкар-пул
 		BrowserURL: getEnv("OZON_BROWSER_URL", ""),
 		Logger:     log,
-	}), getEnvInt("SEARCH_MAX_ITEMS_OZON", 60))
+	})
+	ozonSearch := scraper.NewOzonSearchScraper(ozonBrowser, getEnvInt("SEARCH_MAX_ITEMS_OZON", 60))
+	// Витрина продавца Ozon (/seller/<slug-id>/) — тот же сайдкар (/seller), парсер
+	// выдачи переиспользуется.
+	ozonSeller := scraper.NewOzonSellerScraper(ozonBrowser, getEnvInt("SEARCH_MAX_ITEMS_OZON", 60))
 	// AliExpress-поиск: JSON-API /aer-webapi/v1/search через тот же транспорт, что
 	// у карточки (direct + proxy-fallback). Без ALI_PROXY_URL/OZON_PROXY_URL
 	// карточный скрейпер не сконфигурён → ScrapeSearch вернёт ErrNotImplemented.
@@ -148,7 +152,7 @@ func run(log *slog.Logger) error {
 		}),
 		getEnvInt("SEARCH_MAX_ITEMS_ALI", 60),
 	)
-	registry := scraper.NewRegistry(wbSearch, wbSeller, yandexSearch, ozonSearch, aliSearch)
+	registry := scraper.NewRegistry(wbSearch, wbSeller, yandexSearch, ozonSearch, ozonSeller, aliSearch)
 
 	// ── Kafka ─────────────────────────────────────────────────────────────────
 	consumer := kafka.NewConsumer(kafkaBrokers, tasksTopic, kafkaGroupID)

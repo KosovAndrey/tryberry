@@ -146,6 +146,7 @@ func run(log *slog.Logger) error {
 		wbSearch,
 		wbSeller,
 		scraper.NewOzonSearchScraper(ozonCard, 60),
+		scraper.NewOzonSellerScraper(ozonCard, 60),
 		scraper.NewYandexMarketSearchScraper(yandexCard, 60),
 		// Поисковый Ali встраивает карточный → даёт и разбор карточки, и
 		// распознавание поисковых ссылок (MatchesSearch/NormalizeSearchURL).
