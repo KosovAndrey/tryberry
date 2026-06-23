@@ -250,6 +250,19 @@ var (
 		[]string{"source"},
 	)
 
+	// YandexPriceSource — каким путём взята цена Я.Маркета. direct — основной
+	// (карточка напрямую с датацентр-IP, без прокси: проверено probe'ом — IP держит
+	// поток без капчи); proxy — fallback, когда direct упёрся в SmartCaptcha (один
+	// запрос через RU-прокси). Рост доли proxy = датацентр-IP начал ловить капчу.
+	YandexPriceSource = promauto.NewCounterVec(
+		prometheus.CounterOpts{
+			Namespace: namespace,
+			Name:      "yandex_price_source_total",
+			Help:      "Which path served the Yandex Market product price (direct vs proxy-fallback)",
+		},
+		[]string{"source"},
+	)
+
 	// MaxActiveSubsPerUser — максимум активных товарных подписок у одного юзера.
 	// Сигнал «пора делать бандлинг алертов»: пока мало (единицы) — пачек уведомлений
 	// за цикл почти нет; когда вырастет (~15+) или появятся reseller-юзеры — за цикл
