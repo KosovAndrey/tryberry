@@ -26,6 +26,7 @@ import (
 	"net/url"
 	"os"
 	"regexp"
+	"sort"
 	"strings"
 	"time"
 
@@ -117,56 +118,69 @@ func report(body []byte) {
 		fmt.Printf("  top-level keys: %s\n", strings.Join(keys, ", "))
 	}
 
-	// Ищем самый длинный массив объектов под ключом "items" — это и есть выдача.
-	path, arr := findItems(root, "$")
-	if arr == nil {
-		fmt.Println("  массив items не найден (структура иная — нужен дамп)")
+	// Собираем ВСЕ массивы объектов и сортируем по длине: выдача товаров — самый
+	// длинный (20-60 на страницу). Имя ключа в Ali RU нестандартное, поэтому ищем
+	// по форме, а не по имени.
+	var found []objArray
+	collectObjArrays(root, "$", &found)
+	sort.Slice(found, func(i, j int) bool { return found[i].n > found[j].n })
+
+	fmt.Printf("  топ массивов объектов (путь × длина × ключи элемента):\n")
+	for i, fa := range found {
+		if i >= 6 {
+			break
+		}
+		fmt.Printf("    %-48s ×%-3d  {%s}\n", fa.path, fa.n, strings.Join(fa.keys, ","))
+	}
+	if len(found) == 0 {
+		fmt.Println("    (массивов объектов не найдено)")
 		return
 	}
-	fmt.Printf("  items: путь %s, длина %d\n", path, len(arr))
 
-	first, _ := json.MarshalIndent(arr[0], "  ", "  ")
-	if len(first) > 2500 {
-		first = append(first[:2500], []byte(" …(обрезано)")...)
+	first, _ := json.MarshalIndent(found[0].sample, "  ", "  ")
+	if len(first) > 3000 {
+		first = append(first[:3000], []byte(" …(обрезано)")...)
 	}
-	fmt.Printf("  первый элемент:\n  %s\n", first)
+	fmt.Printf("  первый элемент самого длинного (%s):\n  %s\n", found[0].path, first)
 }
 
 var aerDataRe = regexp.MustCompile(`(?s)<script id="__AER_DATA__"[^>]*>(.*?)</script>`)
 
-// findItems рекурсивно ищет самый длинный массив объектов под ключом, содержащим
-// "items" (без учёта регистра). Возвращает путь и срез.
-func findItems(v interface{}, path string) (string, []interface{}) {
-	var bestPath string
-	var best []interface{}
+type objArray struct {
+	path   string
+	n      int
+	keys   []string
+	sample map[string]interface{}
+}
+
+// collectObjArrays рекурсивно собирает все массивы, чьи элементы — объекты.
+func collectObjArrays(v interface{}, path string, out *[]objArray) {
 	switch t := v.(type) {
 	case map[string]interface{}:
 		for k, val := range t {
-			if arr, ok := val.([]interface{}); ok && strings.Contains(strings.ToLower(k), "items") {
-				if len(arr) > len(best) && isObjArray(arr) {
-					best, bestPath = arr, path+"."+k
-				}
-			}
-			if p, a := findItems(val, path+"."+k); len(a) > len(best) {
-				best, bestPath = a, p
-			}
+			collectObjArrays(val, path+"."+k, out)
 		}
 	case []interface{}:
-		for i, val := range t {
-			if p, a := findItems(val, fmt.Sprintf("%s[%d]", path, i)); len(a) > len(best) {
-				best, bestPath = a, p
+		if first, ok := firstObj(t); ok {
+			keys := make([]string, 0, len(first))
+			for k := range first {
+				keys = append(keys, k)
 			}
+			sort.Strings(keys)
+			*out = append(*out, objArray{path: path, n: len(t), keys: keys, sample: first})
+		}
+		for i, val := range t {
+			collectObjArrays(val, fmt.Sprintf("%s[%d]", path, i), out)
 		}
 	}
-	return bestPath, best
 }
 
-func isObjArray(arr []interface{}) bool {
+func firstObj(arr []interface{}) (map[string]interface{}, bool) {
 	if len(arr) == 0 {
-		return false
+		return nil, false
 	}
-	_, ok := arr[0].(map[string]interface{})
-	return ok
+	m, ok := arr[0].(map[string]interface{})
+	return m, ok
 }
 
 func isBlocked(body []byte) bool {
