@@ -211,22 +211,24 @@ func (b *Bot) handleMessage(ctx context.Context, msg *tgbotapi.Message) {
 		return
 	}
 
-	// 2. Поисковая ссылка WB (?search=...) → флоу поиск-подписки.
-	if b.isSearchURL(text) {
-		b.startSearchTrack(ctx, msg.Chat.ID, text, user)
+	// 2. Поисковая ссылка (возможно с лишним текстом вокруг) → флоу поиск-подписки.
+	// Сначала по извлечённым из текста ссылкам, затем — по всему тексту (на случай
+	// «голой» ссылки без схемы, которую regex не ловит).
+	if su := b.firstSearchURL(text); su != "" {
+		b.startSearchTrack(ctx, msg.Chat.ID, su, user)
 		return
 	}
 
-	// 3. Ссылка на товар → существующая логика. В doTrack передаём ТОЛЬКО ссылку,
-	// извлечённую из текста, а не весь текст: иначе сообщение вида «Название\nссылка»
-	// целиком уедет в products.url и сломает inline-клавиатуру списка (Telegram
-	// отклоняет кнопку с невалидным URL → весь список не открывается).
+	// 3. Одна товарная ссылка → товарный флоу по ИЗВЛЕЧЁННОЙ ссылке. Пользователь
+	// часто присылает «Название\nссылка» (шеринг из приложения WB) или «/track
+	// ссылка» — лишний текст игнорируем, иначе он уедет в products.url и сломает
+	// inline-клавиатуру списка. Фолбэк на весь текст — для «голой» ссылки без схемы.
+	if prods := b.trackableProductURLs(text); len(prods) == 1 {
+		b.doTrack(ctx, msg.Chat.ID, prods[0], user)
+		return
+	}
 	if _, err := b.registry.FindByURL(text); err == nil {
-		rawURL := text
-		if prods := b.trackableProductURLs(text); len(prods) == 1 {
-			rawURL = prods[0]
-		}
-		b.doTrack(ctx, msg.Chat.ID, rawURL, user)
+		b.doTrack(ctx, msg.Chat.ID, text, user)
 		return
 	}
 
