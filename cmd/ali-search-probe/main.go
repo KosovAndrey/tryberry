@@ -20,6 +20,7 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"io"
 	"net/url"
@@ -93,47 +94,79 @@ func probe(ctx context.Context, direct, proxy tls_client.HttpClient, target stri
 	}
 }
 
-// report ищет известные контейнеры стейта и ценовые маркеры.
+// report извлекает __AER_DATA__, находит массив товаров (items) и печатает
+// первый элемент целиком — чтобы по реальным именам полей написать парсер.
 func report(body []byte) {
-	s := string(body)
-	markers := []string{
-		"window.runParams", "__INITIAL_DATA__", "window._dida_config_",
-		"__AER_DATA__", "__AER_SSR_DATA__", "window.__NUXT__", "__APP_DATA__",
-		`"itemList"`, `"items"`, `"mods"`, `"productId"`, `"productIds"`,
-		`"mult_minPrice"`, `"minPrice"`, `"salePrice"`, `"formattedPrice"`,
-		`"trade"`, `"star"`, `"sku"`,
+	raw := aerDataRe.FindSubmatch(body)
+	if raw == nil {
+		fmt.Println("  __AER_DATA__ не найден")
+		return
 	}
-	fmt.Printf("  markers present:\n")
-	for _, m := range markers {
-		if n := strings.Count(s, m); n > 0 {
-			fmt.Printf("    %-22s ×%d\n", m, n)
-		}
+	var root interface{}
+	if err := json.Unmarshal(raw[1], &root); err != nil {
+		fmt.Printf("  __AER_DATA__ не распарсился: %v\n", err)
+		return
 	}
 
-	// <script> с id/data-* — где обычно лежит SSR-стейт.
-	for _, m := range scriptTagRe.FindAllStringSubmatch(s, 8) {
-		fmt.Printf("    <script %s>\n", strings.TrimSpace(m[1]))
+	// Верхнеуровневые ключи — для ориентира.
+	if m, ok := root.(map[string]interface{}); ok {
+		keys := make([]string, 0, len(m))
+		for k := range m {
+			keys = append(keys, k)
+		}
+		fmt.Printf("  top-level keys: %s\n", strings.Join(keys, ", "))
 	}
 
-	// Сниппет вокруг первого правдоподобного ценового маркера.
-	for _, pm := range []string{`"mult_minPrice"`, `"minPrice"`, `"salePrice"`, `"formattedPrice"`, `"price"`} {
-		if i := strings.Index(s, pm); i >= 0 {
-			end := i + 240
-			if end > len(s) {
-				end = len(s)
-			}
-			fmt.Printf("  price ctx (%s):\n    %s\n", pm, collapse(s[i:end]))
-			break
-		}
+	// Ищем самый длинный массив объектов под ключом "items" — это и есть выдача.
+	path, arr := findItems(root, "$")
+	if arr == nil {
+		fmt.Println("  массив items не найден (структура иная — нужен дамп)")
+		return
 	}
+	fmt.Printf("  items: путь %s, длина %d\n", path, len(arr))
+
+	first, _ := json.MarshalIndent(arr[0], "  ", "  ")
+	if len(first) > 2500 {
+		first = append(first[:2500], []byte(" …(обрезано)")...)
+	}
+	fmt.Printf("  первый элемент:\n  %s\n", first)
 }
 
-var scriptTagRe = regexp.MustCompile(`(?i)<script\b([^>]*\b(?:id|data-[a-z-]+)="[^"]*"[^>]*)>`)
+var aerDataRe = regexp.MustCompile(`(?s)<script id="__AER_DATA__"[^>]*>(.*?)</script>`)
 
-func collapse(s string) string {
-	s = strings.ReplaceAll(s, "\n", " ")
-	s = strings.ReplaceAll(s, "\t", " ")
-	return strings.Join(strings.Fields(s), " ")
+// findItems рекурсивно ищет самый длинный массив объектов под ключом, содержащим
+// "items" (без учёта регистра). Возвращает путь и срез.
+func findItems(v interface{}, path string) (string, []interface{}) {
+	var bestPath string
+	var best []interface{}
+	switch t := v.(type) {
+	case map[string]interface{}:
+		for k, val := range t {
+			if arr, ok := val.([]interface{}); ok && strings.Contains(strings.ToLower(k), "items") {
+				if len(arr) > len(best) && isObjArray(arr) {
+					best, bestPath = arr, path+"."+k
+				}
+			}
+			if p, a := findItems(val, path+"."+k); len(a) > len(best) {
+				best, bestPath = a, p
+			}
+		}
+	case []interface{}:
+		for i, val := range t {
+			if p, a := findItems(val, fmt.Sprintf("%s[%d]", path, i)); len(a) > len(best) {
+				best, bestPath = a, p
+			}
+		}
+	}
+	return bestPath, best
+}
+
+func isObjArray(arr []interface{}) bool {
+	if len(arr) == 0 {
+		return false
+	}
+	_, ok := arr[0].(map[string]interface{})
+	return ok
 }
 
 func isBlocked(body []byte) bool {
