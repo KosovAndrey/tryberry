@@ -30,6 +30,8 @@ import (
 	"io"
 	"net/url"
 	"os"
+	"regexp"
+	"strconv"
 	"strings"
 	"time"
 
@@ -73,11 +75,81 @@ func main() {
 	fmt.Printf("urls:  %d\n\n", len(urls))
 
 	ctx := context.Background()
+
+	// Нагрузочный режим: PROBE_LOAD=N → N запросов карточек ПОДРЯД через direct
+	// (без прокси, без прогрева), чтобы увидеть, держит ли датацентр-IP поток или
+	// Яндекс начинает капчить под нагрузкой. URL чередуем по кругу.
+	if n := envInt("PROBE_LOAD", 0); n > 0 {
+		gapMs := envInt("PROBE_GAP_MS", 1000)
+		loadTest(ctx, urls, n, time.Duration(gapMs)*time.Millisecond)
+		return
+	}
+
 	for i, target := range urls {
 		fmt.Printf("════════ [%d/%d] %s\n", i+1, len(urls), target)
 		runScenarios(ctx, proxyURL, target)
 		fmt.Println()
 	}
+}
+
+// loadTest гоняет n direct-запросов (общий jar, без прокси, без прогрева) и
+// печатает сводку: сколько 200/капч/распарсенных цен. Это проверка устойчивости
+// «голого direct» под нагрузкой — главный риск отказа от прокси.
+func loadTest(ctx context.Context, urls []string, n int, gap time.Duration) {
+	jar := tls_client.NewCookieJar()
+	client := mkClientJar("", jar) // direct, общий jar — как жил бы реальный скрейпер
+	fmt.Printf("LOAD: %d direct-запросов, пауза %s, общий jar\n\n", n, gap)
+
+	var ok, blocked, priced, errs, firstBlockAt int
+	firstBlockAt = -1
+	for i := 0; i < n; i++ {
+		target := urls[i%len(urls)]
+		o := fetchCard(ctx, client, "load", target)
+		switch {
+		case o.err != "":
+			errs++
+		case o.blocked:
+			blocked++
+			if firstBlockAt < 0 {
+				firstBlockAt = i + 1
+			}
+		case o.status == 200:
+			ok++
+			if o.price != "" {
+				priced++
+			}
+		}
+		mark := "."
+		if o.blocked {
+			mark = "C"
+		} else if o.err != "" {
+			mark = "E"
+		} else if o.status != 200 {
+			mark = "x"
+		}
+		fmt.Print(mark)
+		if (i+1)%50 == 0 {
+			fmt.Printf("  %d\n", i+1)
+		}
+		if i < n-1 {
+			time.Sleep(gap)
+		}
+	}
+	fmt.Printf("\n\nИТОГО: ok=%d blocked=%d priced=%d err=%d (из %d)\n", ok, blocked, priced, errs, n)
+	if firstBlockAt > 0 {
+		fmt.Printf("первая капча на запросе #%d\n", firstBlockAt)
+	} else {
+		fmt.Printf("капчи не было — direct держит поток\n")
+	}
+}
+
+func envInt(key string, def int) int {
+	if v := os.Getenv(key); v != "" {
+		if n, err := strconv.Atoi(v); err == nil {
+			return n
+		}
+	}
+	return def
 }
 
 // outcome — итог одного запроса карточки для строки таблицы.
@@ -242,26 +314,23 @@ func isCaptcha(body []byte) bool {
 		strings.Contains(ls, "подтвердите, что запросы отправляли вы")
 }
 
-// firstPrice — грубо вытаскивает первую цену из JSON-LD offers (для оценки, что
-// данные реально достаём). Не претендует на точность боевого парсера.
+// firstPrice — вытаскивает цену для оценки, что данные реально достаём. Сперва
+// JSON-LD offers ("price":"12345"), затем фолбэк на стейт marketfront
+// ("price":{"value":"12345","currency":"RUR"}). Не боевой парсер, лишь индикатор.
+var (
+	ldPriceRe    = regexp.MustCompile(`"price"\s*:\s*"(\d+(?:\.\d+)?)"`)
+	statePriceRe = regexp.MustCompile(`"price":\{"value":"(\d+(?:\.\d+)?)","currency":"(?:RUR|RUB)"`)
+)
+
 func firstPrice(body []byte) string {
 	s := string(body)
-	i := strings.Index(s, `"application/ld+json"`)
-	if i < 0 {
-		return ""
+	if m := ldPriceRe.FindStringSubmatch(s); len(m) > 1 {
+		return m[1]
 	}
-	rest := s[i:]
-	j := strings.Index(rest, `"price"`)
-	if j < 0 {
-		return ""
+	if m := statePriceRe.FindStringSubmatch(s); len(m) > 1 {
+		return m[1] + "*" // звёздочка = из стейта (last-known), не из offers
 	}
-	frag := rest[j+len(`"price"`):]
-	frag = strings.TrimLeft(frag, ": \"")
-	end := strings.IndexAny(frag, `",}`)
-	if end < 0 || end > 20 {
-		return ""
-	}
-	return strings.TrimSpace(frag[:end])
+	return ""
 }
 
 func printTable(rows []outcome) {
