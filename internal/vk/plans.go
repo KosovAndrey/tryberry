@@ -15,9 +15,14 @@ import (
 const dateLayout = "02.01.2006 15:04"
 
 func (b *Bot) sendPlans(ctx context.Context, vkID int64, user *domain.User) {
+	pct := b.usablePendingDiscount(ctx, user.ID)
+
 	var sb strings.Builder
 	sb.WriteString("💳 Тарифы TryberryBot\n\n" +
 		"Подписка открывает больше отслеживаемых товаров, поиск-подписки и частые проверки цен. Действует 30 дней с момента оплаты.\n\n")
+	if pct > 0 {
+		fmt.Fprintf(&sb, "🎟 Промокод на %d%% применён — цены ниже уже со скидкой.\n\n", pct)
+	}
 
 	var rows [][]Button
 	for _, sp := range domain.PlanShowcase {
@@ -25,11 +30,18 @@ func (b *Bot) sendPlans(ctx context.Context, vkID int64, user *domain.User) {
 		if !ok {
 			continue
 		}
-		fmt.Fprintf(&sb, "▫️ %s — %d ₽/мес · %s\n", p.Title, p.PriceRub, sp.Tagline)
+		priceStr := fmt.Sprintf("%d ₽/мес", p.PriceRub)
+		btnPrice := priceStr
+		if pct > 0 {
+			// VK — плейн-текст, зачёркивания нет: показываем «старая → новая».
+			priceStr = fmt.Sprintf("%d → %s ₽/мес", p.PriceRub, discountedRub(p.PriceRub, pct))
+			btnPrice = fmt.Sprintf("%s ₽/мес", discountedRub(p.PriceRub, pct))
+		}
+		fmt.Fprintf(&sb, "▫️ %s — %s · %s\n", p.Title, priceStr, sp.Tagline)
 		fmt.Fprintf(&sb, "    📦 %d товаров · 🔎 %d поисков · ⏱ %s\n\n",
 			p.MaxProduct, p.MaxSearch, domain.IntervalPhrase(p.Interval))
 		rows = append(rows, []Button{TextButton(
-			fmt.Sprintf("%s — %d ₽/мес", p.Title, p.PriceRub),
+			fmt.Sprintf("%s — %s", p.Title, btnPrice),
 			fmt.Sprintf(`{"cmd":%q,"k":%q}`, cmdPlanCard, p.Name),
 			ColorPrimary,
 		)})
@@ -52,6 +64,7 @@ func (b *Bot) sendPlanCard(ctx context.Context, vkID int64, user *domain.User, n
 			break
 		}
 	}
+	pct := b.usablePendingDiscount(ctx, user.ID)
 
 	var sb strings.Builder
 	fmt.Fprintf(&sb, "💳 Тариф %s — %d ₽/мес\n", p.Title, p.PriceRub)
@@ -64,19 +77,38 @@ func (b *Bot) sendPlanCard(ctx context.Context, vkID int64, user *domain.User, n
 	fmt.Fprintf(&sb, "⏱ Проверка цен %s\n", domain.IntervalPhrase(p.Interval))
 	sb.WriteString("🔔 Уведомления о снижении цены в Telegram и VK\n\n")
 	sb.WriteString("Доступ действует 30 дней с момента оплаты.")
+	if pct > 0 {
+		fmt.Fprintf(&sb, "\n\n🎟 Промокод: скидка %d%% применится к оплате.", pct)
+	}
+
+	buyLabel := fmt.Sprintf("💳 Оплатить %d ₽", p.PriceRub)
+	subLabel := fmt.Sprintf("🔁 Подписка %d ₽/мес", p.SubPriceRub)
+	buyOnceLabel := fmt.Sprintf("💳 Разовая оплата %d ₽", p.PriceRub)
+	if pct > 0 {
+		buyLabel = fmt.Sprintf("💳 Оплатить %s ₽", discountedRub(p.PriceRub, pct))
+		subLabel = fmt.Sprintf("🔁 Подписка %s ₽/мес", discountedRub(p.SubPriceRub, pct))
+		buyOnceLabel = fmt.Sprintf("💳 Разовая оплата %s ₽", discountedRub(p.PriceRub, pct))
+	}
 
 	var rows [][]Button
 	if b.subSupported() && p.SubPriceRub > 0 {
 		fmt.Fprintf(&sb, "\n\n🔁 С автопродлением выгоднее: %d ₽ вместо %d ₽.", p.SubPriceRub, p.PriceRub)
 		rows = append(rows,
-			[]Button{TextButton(fmt.Sprintf("🔁 Подписка %d ₽/мес", p.SubPriceRub),
-				fmt.Sprintf(`{"cmd":%q,"k":%q}`, cmdSub, p.Name), ColorPrimary)},
-			[]Button{TextButton(fmt.Sprintf("💳 Разовая оплата %d ₽", p.PriceRub),
-				fmt.Sprintf(`{"cmd":%q,"k":%q}`, cmdBuy, p.Name), ColorSecondary)},
+			[]Button{TextButton(subLabel, fmt.Sprintf(`{"cmd":%q,"k":%q}`, cmdSub, p.Name), ColorPrimary)},
+			[]Button{TextButton(buyOnceLabel, fmt.Sprintf(`{"cmd":%q,"k":%q}`, cmdBuy, p.Name), ColorSecondary)},
 		)
 	} else {
-		rows = append(rows, []Button{TextButton(fmt.Sprintf("💳 Оплатить %d ₽", p.PriceRub),
-			fmt.Sprintf(`{"cmd":%q,"k":%q}`, cmdBuy, p.Name), ColorPrimary)})
+		rows = append(rows, []Button{TextButton(buyLabel, fmt.Sprintf(`{"cmd":%q,"k":%q}`, cmdBuy, p.Name), ColorPrimary)})
+	}
+	// «Промокод» в платёжном флоу — когда оплата доступна; при активной скидке
+	// становится «Сменить промокод» (перезапись бесплатна до оплаты).
+	if b.payments != nil {
+		promoLabel := "🎟 У меня есть промокод"
+		if pct > 0 {
+			promoLabel = "🎟 Сменить промокод"
+		}
+		rows = append(rows, []Button{TextButton(promoLabel,
+			fmt.Sprintf(`{"cmd":%q,"k":%q}`, cmdPromo, p.Name), ColorSecondary)})
 	}
 	rows = append(rows, []Button{TextButton("◀️ К тарифам", buttonPayload(cmdPlans), ColorSecondary)})
 	b.send(ctx, vkID, sb.String(), &Keyboard{Inline: true, Buttons: rows})
@@ -120,12 +152,10 @@ func (b *Bot) handlePlanBuy(ctx context.Context, vkID int64, user *domain.User, 
 }
 
 // previewAmount — сумма с учётом ожидающей скидки (для текста запроса email).
+// Через тот же гейт usablePendingDiscount, что список/карточка/checkout.
 func (b *Bot) previewAmount(ctx context.Context, userID int64, full int64) int64 {
-	if b.discounts == nil {
-		return full
-	}
-	if d, ok, err := b.discounts.Get(ctx, userID); err == nil && ok && d.Pct > 0 {
-		return domain.DiscountedKopecks(full, d.Pct)
+	if pct := b.usablePendingDiscount(ctx, userID); pct > 0 {
+		return domain.DiscountedKopecks(full, pct)
 	}
 	return full
 }

@@ -14,46 +14,15 @@ import (
 // telegram/referral.go; код приглашения в VK = users.id реферера (в TG —
 // deep-link t.me/?start=ref_<telegram_id>, оба ведут на одну строку users).
 
-// handlePromoCode — «промокод <КОД>».
+// handlePromoCode — «промокод <КОД>» и «промокод» без кода. Без кода — запускаем
+// диалог ввода (FSM), с кодом — сразу через общий applyPromoCode (grant → дни,
+// discount → ожидающая скидка + переход к оплате).
 func (b *Bot) handlePromoCode(ctx context.Context, vkID int64, user *domain.User, codeArg string) {
-	kb := menuKeyboard(user.TelegramID != 0)
-
-	code := domain.NormalizePromoCode(codeArg)
-	if code == "" {
-		b.send(ctx, vkID, "Отправь код сообщением:\nпромокод КОД", kb)
+	if domain.NormalizePromoCode(codeArg) == "" {
+		b.promptPromo(ctx, vkID, user, "")
 		return
 	}
-
-	promo, err := b.promoRepo.GetActiveByCode(ctx, code)
-	if err != nil {
-		if errors.Is(err, domain.ErrNotFound) {
-			b.send(ctx, vkID, "🎟 Такого промокода нет, либо он уже не действует.", kb)
-			return
-		}
-		b.log.Error("vk: promo get code", "err", err)
-		b.send(ctx, vkID, "Произошла ошибка, попробуй позже.", nil)
-		return
-	}
-
-	switch promo.Kind {
-	case domain.PromoKindGrant:
-		b.applyGrantPromo(ctx, vkID, user, promo, kb)
-	case domain.PromoKindDiscount:
-		// «Ожидающая скидка» в Redis (как в TG) — применится к ближайшей оплате;
-		// гасится только после успешного платежа.
-		if b.discounts != nil {
-			if err := b.discounts.Put(ctx, user.ID, promo.ID, promo.DiscountPct); err != nil {
-				b.log.Error("vk: store pending discount", "user_id", user.ID, "err", err)
-			}
-		}
-		b.send(ctx, vkID, fmt.Sprintf(
-			"🎟 Код %s даёт скидку %d%% на оплату тарифа.\n\n"+
-				"Скидка применится автоматически при оплате — открой «Тарифы» и выбери тариф.",
-			promo.Code, promo.DiscountPct), kb)
-	default:
-		b.log.Error("vk: promo unknown kind", "kind", promo.Kind, "code", promo.Code)
-		b.send(ctx, vkID, "Произошла ошибка, попробуй позже.", nil)
-	}
+	b.applyPromoCode(ctx, vkID, user, codeArg, "")
 }
 
 func (b *Bot) applyGrantPromo(ctx context.Context, vkID int64, user *domain.User, promo *domain.PromoCode, kb *Keyboard) {
