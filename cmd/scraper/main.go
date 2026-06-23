@@ -49,7 +49,10 @@ func run(log *slog.Logger) error {
 	kafkaGroupID := config.MustEnv("KAFKA_GROUP_ID")
 	otlpEndpoint := getEnv("OTLP_ENDPOINT", "jaeger:4317")
 	rpsStrWB := getEnv("SCRAPER_RATE_LIMIT_RPS_WB", "5")
-	rpsStrYandex := getEnv("SCRAPER_RATE_LIMIT_RPS_YANDEX", "2")
+	// Я.Маркет теперь direct (без прокси, см. docs/YANDEX-WARMED-COOKIES.md) —
+	// probe держал сотни запросов без капчи, прежний потолок 2 был из-за одного
+	// proxy-IP. Поднимаем до 8; сторож — метрика yandex_price_source_total{proxy}.
+	rpsStrYandex := getEnv("SCRAPER_RATE_LIMIT_RPS_YANDEX", "8")
 	rpsStrOzon := getEnv("SCRAPER_RATE_LIMIT_RPS_OZON", "1")
 	rpsStrAli := getEnv("SCRAPER_RATE_LIMIT_RPS_ALI", "1")
 	rpsWB, err := strconv.ParseFloat(rpsStrWB, 64)

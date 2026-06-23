@@ -189,19 +189,19 @@ func productSchedulerTick(
 			byProduct[r.ProductID] = a
 		}
 		lurl := strings.ToLower(r.URL)
-		// Антибот-маркетплейсы за общим мобильным IP (Ozon FAB + Я.Маркет
-		// SmartCaptcha, по умолчанию делят OZON_PROXY_URL) троттлятся одинаково:
-		// минутный каданс губителен для антибота и быстро жжёт единственный IP.
-		isAntibot := strings.Contains(lurl, "ozon.ru") || strings.Contains(lurl, "market.yandex.ru")
+		// Ozon — единственный антибот, требующий троттла: FAB + один аккаунт/IP за
+		// общим мобильным прокси не терпят частого опроса. Я.Маркет СЮДА БОЛЬШЕ НЕ
+		// ВХОДИТ: probe доказал, что он ходит direct с датацентр-IP без прокси и
+		// держит поток без капчи (docs/YANDEX-WARMED-COOKIES.md) — троттлить его как
+		// антибот незачем, скрейпим обычным WB-кадансом (вкл. reseller-планы).
+		isOzon := strings.Contains(lurl, "ozon.ru")
 		plan := domain.EffectivePlanFor(r.OwnerPlan, r.PlanExpiresAt, now)
-		// Reseller-планы на таких маркетплейсах не тянут: такой подписчик не
-		// вносит вклад в товар. На WB он работает как обычно.
-		if isAntibot && domain.IsResellerPlan(plan.Name) {
-			continue
-		}
 		iv := plan.EffectiveInterval(defaultInterval)
-		if isAntibot {
-			// Тарифный каданс WB, но в ozonMult раз реже, с полом ozonMinInterval.
+		if isOzon {
+			// Ozon троттлим: тарифный каданс × ozonMult, с полом ozonMinInterval.
+			// Reseller-планы (1 мин) идут этим же путём → их Ozon-каданс = пол 20м
+			// (раньше Ozon перекупам был НЕДОСТУПЕН; решение — дать доступ на
+			// троттл-кадансе, docs/SCRAPE-CADENCE.md; больше дорожек Ozon — позже).
 			iv *= time.Duration(ozonMult)
 			if ozonMinInterval > 0 && iv < ozonMinInterval {
 				iv = ozonMinInterval
