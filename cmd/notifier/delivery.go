@@ -132,6 +132,14 @@ func (d *deliverer) SendSearchAlert(ctx context.Context, a telegram.SearchAlert)
 		vkSearchText(a), "")
 }
 
+// SendBundledAlert — пачка товарных алертов одного юзера одним сообщением (без
+// фото: несколько картинок в один текст не вложить). Роутинг TG/VK как обычно.
+func (d *deliverer) SendBundledAlert(ctx context.Context, a telegram.BundledAlert) error {
+	return d.deliver(ctx, a.UserID, a.ChatID,
+		func(ctx context.Context) error { return d.tg.SendBundledAlert(ctx, a) },
+		vkBundledText(a), "")
+}
+
 // SendDigest — персональный дайджест (один и тот же текст в TG и VK), роутинг по
 // notify_channel. Текст уже отрендерен билдером (HTML годится и для VK — теги VK
 // игнорирует/не критично).
@@ -210,6 +218,37 @@ func vkPriceText(a telegram.PriceAlert) string {
 	return fmt.Sprintf(
 		"📉 Цена снизилась!\n\n%s\n\nБыло: %.0f ₽ → Стало: %.0f ₽\nСкидка: %.0f ₽ (%.0f%%)%s\n\n%s",
 		a.ProductName, a.OldPrice, a.NewPrice, diff, percent, honest, a.ProductURL)
+}
+
+func vkBundledText(a telegram.BundledAlert) string {
+	hasBack := false
+	for _, it := range a.Items {
+		if it.BackInStock {
+			hasBack = true
+			break
+		}
+	}
+	var sb strings.Builder
+	if hasBack {
+		fmt.Fprintf(&sb, "🔔 Обновления по вашим товарам (%d):\n\n", len(a.Items))
+	} else {
+		fmt.Fprintf(&sb, "📉 По вашим товарам снизилась цена (%d):\n\n", len(a.Items))
+	}
+	for _, it := range a.Items {
+		if it.BackInStock {
+			fmt.Fprintf(&sb, "🔔 %s\nснова в наличии — %.0f ₽\n%s\n\n", it.ProductName, it.NewPrice, it.ProductURL)
+			continue
+		}
+		fmt.Fprintf(&sb, "📉 %s\n", it.ProductName)
+		if it.OldPrice > it.NewPrice && it.OldPrice > 0 {
+			pct := math.Round((it.OldPrice - it.NewPrice) / it.OldPrice * 100)
+			fmt.Fprintf(&sb, "%.0f ₽ (было %.0f ₽, -%.0f%%)\n%s\n\n", it.NewPrice, it.OldPrice, pct, it.ProductURL)
+		} else {
+			fmt.Fprintf(&sb, "%.0f ₽\n%s\n\n", it.NewPrice, it.ProductURL)
+		}
+	}
+	sb.WriteString("Управлять отслеживанием — /list")
+	return sb.String()
 }
 
 func vkSearchText(a telegram.SearchAlert) string {
