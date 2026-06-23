@@ -58,8 +58,9 @@ type discountReader interface {
 	Get(ctx context.Context, userID int64) (redisrepo.PendingDiscount, bool, error)
 }
 
-// promoCapacityChecker — есть ли у discount-кода свободные активации (гейт скидки
-// на checkout, до оплаты). *postgres.PromoRepo удовлетворяет.
+// promoCapacityChecker — может ли этот юзер применить discount-код (свободные
+// активации + он его ещё не гасил). Гейт скидки на checkout, до оплаты.
+// *postgres.PromoRepo удовлетворяет.
 type promoCapacityChecker interface {
-	Redeemable(ctx context.Context, codeID int64) (bool, error)
+	Redeemable(ctx context.Context, codeID, userID int64) (bool, error)
 }

@@ -101,7 +101,7 @@ func (s *Service) checkout(ctx context.Context, u *domain.User, plan, email, kin
 	if s.discounts != nil {
 		if d, found, err := s.discounts.Get(ctx, u.ID); err != nil {
 			s.log.Warn("checkout: read pending discount", "user_id", u.ID, "err", err)
-		} else if found && d.Pct > 0 && s.discountUsable(ctx, d.CodeID) {
+		} else if found && d.Pct > 0 && s.discountUsable(ctx, d.CodeID, u.ID) {
 			amount = domain.DiscountedKopecks(amount, d.Pct)
 			id := d.CodeID
 			promoCodeID = &id
@@ -152,17 +152,17 @@ func (s *Service) checkout(ctx context.Context, u *domain.User, plan, email, kin
 // оплаты код может исчерпаться — окончательный лимит держит RedeemDiscount, а
 // здесь мы лишь не показываем скидку по очевидно исчерпанному коду. Нет чекера
 // или сбой запроса → считаем пригодным (best-effort, не валим оплату из-за БД).
-func (s *Service) discountUsable(ctx context.Context, codeID int64) bool {
+func (s *Service) discountUsable(ctx context.Context, codeID, userID int64) bool {
 	if s.promos == nil {
 		return true
 	}
-	ok, err := s.promos.Redeemable(ctx, codeID)
+	ok, err := s.promos.Redeemable(ctx, codeID, userID)
 	if err != nil {
 		s.log.Warn("checkout: check discount capacity", "code_id", codeID, "err", err)
 		return true
 	}
 	if !ok {
-		s.log.Info("checkout: discount code exhausted, skipping", "code_id", codeID)
+		s.log.Info("checkout: discount code exhausted or already redeemed, skipping", "code_id", codeID, "user_id", userID)
 	}
 	return ok
 }

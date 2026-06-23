@@ -196,19 +196,24 @@ func (r *PromoRepo) RedeemDiscount(ctx context.Context, codeID, userID int64) er
 	return nil
 }
 
-// Redeemable — есть ли у кода ещё свободные активации (active, не истёк,
-// used_count < max_uses). Гейт скидки на этапе checkout: исчерпанный (но ещё
-// active) discount-код не должен давать скидку новым юзерам. Окончательный лимит
-// держит RedeemDiscount после оплаты — это лишь срезает очевидную утечку.
-func (r *PromoRepo) Redeemable(ctx context.Context, codeID int64) (bool, error) {
+// Redeemable — может ли ИМЕННО ЭТОТ юзер применить discount-код прямо сейчас:
+// код active, не истёк, есть свободные активации (used_count < max_uses) И юзер
+// его ещё НЕ гасил (нет строки в promo_redemptions). Гейт скидки на этапе checkout
+// и при вводе кода. Без проверки «один раз на юзера» был бы leak: discount гасится
+// только после оплаты, поэтому уже погасивший код юзер мог ввести его снова и
+// заплатить со скидкой повторно (RedeemDiscount потом откатится по UNIQUE, но
+// деньги уже списались со скидкой). Окончательный лимит держит RedeemDiscount.
+func (r *PromoRepo) Redeemable(ctx context.Context, codeID, userID int64) (bool, error) {
 	const q = `
 		SELECT EXISTS(
 			SELECT 1 FROM promo_codes
 			WHERE id = $1 AND active
 			  AND (expires_at IS NULL OR expires_at > NOW())
-			  AND used_count < max_uses)`
+			  AND used_count < max_uses)
+		AND NOT EXISTS(
+			SELECT 1 FROM promo_redemptions WHERE code_id = $1 AND user_id = $2)`
 	var ok bool
-	err := r.db.QueryRow(ctx, q, codeID).Scan(&ok)
+	err := r.db.QueryRow(ctx, q, codeID, userID).Scan(&ok)
 	return ok, err
 }
 
