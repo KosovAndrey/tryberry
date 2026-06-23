@@ -46,8 +46,9 @@ func (b *Bot) sendPlansMenu(chatID int64, messageID int) {
 	b.showView(chatID, messageID, sb.String(), tgbotapi.NewInlineKeyboardMarkup(rows...))
 }
 
-// sendPlanCard — карточка тарифа: описание, состав, цена, кнопка оплаты.
-func (b *Bot) sendPlanCard(chatID int64, messageID int, name string) {
+// sendPlanCard — карточка тарифа: описание, состав, цена, кнопка оплаты. Если у
+// юзера есть ожидающая скидка (промокод) — цены и кнопки показываем уже со скидкой.
+func (b *Bot) sendPlanCard(ctx context.Context, tgID, chatID int64, messageID int, name string) {
 	p, ok := domain.PlanByName(name)
 	if !ok || p.PriceRub <= 0 {
 		b.sendPlansMenu(chatID, messageID)
@@ -60,6 +61,7 @@ func (b *Bot) sendPlanCard(chatID int64, messageID int, name string) {
 			break
 		}
 	}
+	pct := b.pendingDiscountPct(ctx, tgID)
 
 	var sb strings.Builder
 	fmt.Fprintf(&sb, "💳 <b>Тариф %s</b> — %d ₽/мес\n", p.Title, p.PriceRub)
@@ -72,25 +74,61 @@ func (b *Bot) sendPlanCard(chatID int64, messageID int, name string) {
 	fmt.Fprintf(&sb, "⏱ Проверка цен %s\n", domain.IntervalPhrase(p.Interval))
 	sb.WriteString("🔔 Уведомления о снижении цены в Telegram и VK\n\n")
 	sb.WriteString("Доступ действует <b>30 дней</b> с момента оплаты.")
+	if pct > 0 {
+		fmt.Fprintf(&sb, "\n\n🎟 Промокод: скидка <b>%d%%</b> применится к оплате.", pct)
+	}
+
+	buyLabel := fmt.Sprintf("💳 Оплатить %d ₽", p.PriceRub)
+	subLabel := fmt.Sprintf("🔁 Подписка %d ₽/мес", p.SubPriceRub)
+	buyOnceLabel := fmt.Sprintf("💳 Разовая оплата %d ₽", p.PriceRub)
+	if pct > 0 {
+		buyLabel = fmt.Sprintf("💳 Оплатить %s ₽", discountedRub(p.PriceRub, pct))
+		subLabel = fmt.Sprintf("🔁 Подписка %s ₽/мес", discountedRub(p.SubPriceRub, pct))
+		buyOnceLabel = fmt.Sprintf("💳 Разовая оплата %s ₽", discountedRub(p.PriceRub, pct))
+	}
 
 	var rows [][]tgbotapi.InlineKeyboardButton
 	if b.subSupported() && p.SubPriceRub > 0 {
 		// Подписка — рекомендуемый (и более дешёвый) вариант, ставим первой.
 		fmt.Fprintf(&sb, "\n\n🔁 С <b>автопродлением</b> — выгоднее: <b>%d ₽</b> вместо %d ₽.", p.SubPriceRub, p.PriceRub)
 		rows = append(rows,
-			tgbotapi.NewInlineKeyboardRow(tgbotapi.NewInlineKeyboardButtonData(
-				fmt.Sprintf("🔁 Подписка %d ₽/мес", p.SubPriceRub), "plan:sub:"+p.Name)),
-			tgbotapi.NewInlineKeyboardRow(tgbotapi.NewInlineKeyboardButtonData(
-				fmt.Sprintf("💳 Разовая оплата %d ₽", p.PriceRub), "plan:buy:"+p.Name)),
+			tgbotapi.NewInlineKeyboardRow(tgbotapi.NewInlineKeyboardButtonData(subLabel, "plan:sub:"+p.Name)),
+			tgbotapi.NewInlineKeyboardRow(tgbotapi.NewInlineKeyboardButtonData(buyOnceLabel, "plan:buy:"+p.Name)),
 		)
 	} else {
-		rows = append(rows, tgbotapi.NewInlineKeyboardRow(tgbotapi.NewInlineKeyboardButtonData(
-			fmt.Sprintf("💳 Оплатить %d ₽", p.PriceRub), "plan:buy:"+p.Name)))
+		rows = append(rows, tgbotapi.NewInlineKeyboardRow(tgbotapi.NewInlineKeyboardButtonData(buyLabel, "plan:buy:"+p.Name)))
+	}
+	// «Промокод» в платёжном флоу — только когда оплата реально доступна.
+	if b.payments != nil && pct == 0 {
+		rows = append(rows, tgbotapi.NewInlineKeyboardRow(
+			tgbotapi.NewInlineKeyboardButtonData("🎟 У меня есть промокод", "plan:promo:"+p.Name),
+		))
 	}
 	rows = append(rows, tgbotapi.NewInlineKeyboardRow(
 		tgbotapi.NewInlineKeyboardButtonData("◀️ К тарифам", "menu:plans"),
 	))
 	b.showView(chatID, messageID, sb.String(), tgbotapi.NewInlineKeyboardMarkup(rows...))
+}
+
+// discountedRub — цена в рублях (целое) со скидкой pct%, готовая строка ("349").
+func discountedRub(fullRub, pct int) string {
+	return domain.KopecksToRubString(domain.DiscountedKopecks(int64(fullRub)*100, pct))
+}
+
+// pendingDiscountPct — процент ожидающей скидки юзера (0, если нет/недоступно).
+func (b *Bot) pendingDiscountPct(ctx context.Context, tgID int64) int {
+	if b.discounts == nil {
+		return 0
+	}
+	user, err := b.userRepo.GetByTelegramID(ctx, tgID)
+	if err != nil {
+		return 0
+	}
+	d, ok, err := b.discounts.Get(ctx, user.ID)
+	if err != nil || !ok {
+		return 0
+	}
+	return d.Pct
 }
 
 // subSupported — текущий провайдер умеет автосписания (показывать ли подписку).
@@ -100,10 +138,10 @@ func (b *Bot) subSupported() bool {
 
 // sendSubConsent — экран явного согласия на подписку перед оплатой: сумма,
 // период, автопродление, как отменить. Согласие фиксируем при создании платежа.
-func (b *Bot) sendSubConsent(chatID int64, messageID int, name string) {
+func (b *Bot) sendSubConsent(ctx context.Context, tgID, chatID int64, messageID int, name string) {
 	p, ok := domain.PlanByName(name)
 	if !ok || p.SubPriceRub <= 0 || !b.subSupported() {
-		b.sendPlanCard(chatID, messageID, name)
+		b.sendPlanCard(ctx, tgID, chatID, messageID, name)
 		return
 	}
 	text := fmt.Sprintf(

@@ -169,6 +169,12 @@ func (b *Bot) handleMessage(ctx context.Context, msg *tgbotapi.Message) {
 		return
 	}
 
+	// 1a⅒. Ждём ли промокод, введённый в платёжном флоу (кнопка на карточке тарифа)?
+	if fsm, ok := b.getCheckoutPromoFSM(ctx, msg.From.ID); ok {
+		b.handleCheckoutPromoInput(ctx, msg.Chat.ID, msg.From.ID, text, user, fsm)
+		return
+	}
+
 	// 1a. Ждём ли число (порог/процент) для ТОВАРНОЙ подписки?
 	if fsm, ok := b.getTrackFSM(ctx, msg.From.ID); ok {
 		b.handleTrackThreshold(ctx, msg.Chat.ID, msg.From.ID, text, fsm)
@@ -242,6 +248,7 @@ func (b *Bot) handleCommand(ctx context.Context, msg *tgbotapi.Message) {
 	b.clearSearchFSM(ctx, msg.From.ID)
 	b.clearTrackFSM(ctx, msg.From.ID)
 	b.clearEmailFSM(ctx, msg.From.ID)
+	b.clearCheckoutPromoFSM(ctx, msg.From.ID)
 
 	user, err := b.userRepo.Upsert(ctx, msg.From.ID, msg.From.UserName)
 	if err != nil {
@@ -456,16 +463,19 @@ func (b *Bot) handleCallback(ctx context.Context, cb *tgbotapi.CallbackQuery) {
 		b.sendPlansMenu(chatID, messageID)
 
 	case strings.HasPrefix(cb.Data, "plan:view:"):
-		b.sendPlanCard(chatID, messageID, strings.TrimPrefix(cb.Data, "plan:view:"))
+		b.sendPlanCard(ctx, cb.From.ID, chatID, messageID, strings.TrimPrefix(cb.Data, "plan:view:"))
 
 	case strings.HasPrefix(cb.Data, "plan:buy:"):
 		b.handlePlanBuy(ctx, cb.From.ID, chatID, messageID, strings.TrimPrefix(cb.Data, "plan:buy:"))
+
+	case strings.HasPrefix(cb.Data, "plan:promo:"):
+		b.promptCheckoutPromo(ctx, cb.From.ID, chatID, messageID, strings.TrimPrefix(cb.Data, "plan:promo:"))
 
 	case strings.HasPrefix(cb.Data, "plan:subok:"):
 		b.handleSubBuy(ctx, cb.From.ID, chatID, messageID, strings.TrimPrefix(cb.Data, "plan:subok:"))
 
 	case strings.HasPrefix(cb.Data, "plan:sub:"):
-		b.sendSubConsent(chatID, messageID, strings.TrimPrefix(cb.Data, "plan:sub:"))
+		b.sendSubConsent(ctx, cb.From.ID, chatID, messageID, strings.TrimPrefix(cb.Data, "plan:sub:"))
 
 	case cb.Data == "sub:cancel":
 		b.handleSubCancelConfirm(ctx, cb.From.ID, chatID, messageID)
