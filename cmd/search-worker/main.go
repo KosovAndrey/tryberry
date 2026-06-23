@@ -137,7 +137,18 @@ func run(log *slog.Logger) error {
 		BrowserURL: getEnv("OZON_BROWSER_URL", ""),
 		Logger:     log,
 	}), getEnvInt("SEARCH_MAX_ITEMS_OZON", 60))
-	registry := scraper.NewRegistry(wbSearch, wbSeller, yandexSearch, ozonSearch)
+	// AliExpress-поиск: JSON-API /aer-webapi/v1/search через тот же транспорт, что
+	// у карточки (direct + proxy-fallback). Без ALI_PROXY_URL/OZON_PROXY_URL
+	// карточный скрейпер не сконфигурён → ScrapeSearch вернёт ErrNotImplemented.
+	aliSearch := scraper.NewAliexpressSearchScraper(
+		scraper.NewAliexpressScraper(scraper.AliexpressOptions{
+			ProxyURL: getEnv("ALI_PROXY_URL", getEnv("OZON_PROXY_URL", "")),
+			RPS:      2,
+			Logger:   log,
+		}),
+		getEnvInt("SEARCH_MAX_ITEMS_ALI", 60),
+	)
+	registry := scraper.NewRegistry(wbSearch, wbSeller, yandexSearch, ozonSearch, aliSearch)
 
 	// ── Kafka ─────────────────────────────────────────────────────────────────
 	consumer := kafka.NewConsumer(kafkaBrokers, tasksTopic, kafkaGroupID)
