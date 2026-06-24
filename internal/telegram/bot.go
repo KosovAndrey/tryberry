@@ -516,6 +516,9 @@ func (b *Bot) handleCallback(ctx context.Context, cb *tgbotapi.CallbackQuery) {
 	case cb.Data == "sfskip":
 		b.handleSellerSkipFilter(ctx, cb)
 
+	case cb.Data == "scancel":
+		b.handleSearchCancel(ctx, cb)
+
 	case strings.HasPrefix(cb.Data, "suntrack:"):
 		b.callbackUntrackSearch(ctx, cb)
 
