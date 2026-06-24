@@ -183,6 +183,52 @@ func HasTextFilter(rawURL string) bool {
 	return strings.TrimSpace(u.Query().Get(tbTextFilterParam)) != ""
 }
 
+// searchNonFilterParams — query-параметры поисковой ссылки, которые НЕ сужают
+// выдачу (сам запрос, пагинация, сортировка, регион, трекинг). Всё остальное в
+// query трактуем как фильтр маркетплейса (категория hid/nid, бренд/цена glfilter,
+// WB f<digits>/priceU и т.п.). Список — нижний регистр.
+var searchNonFilterParams = map[string]bool{
+	"text": true, "search": true, "tb_q": true, // сам запрос / наш текст-фильтр
+	"page": true, "sort": true, "sorting": true,
+	"lr": true, "clid": true, "rs": true, "rt": true, // регион/трекинг Я.Маркета
+	"suggest_text": true, "suggesttext": true, "was_redir": true,
+	"from": true, "from_global": true,
+	"utm_source": true, "utm_medium": true, "utm_campaign": true,
+	"utm_term": true, "utm_content": true,
+}
+
+// SearchHasSiteFilter — заданы ли в поисковой ссылке сужающие фильтры маркетплейса
+// (категория, бренд, цена и пр.), помимо самого текста запроса. Эвристика: любой
+// query-параметр вне searchNonFilterParams ИЛИ категорийный путь Я.Маркета. Нужно,
+// чтобы не советовать «добавь фильтры», когда они уже есть. Ошибаемся в безопасную
+// сторону: незнакомый трекинг-параметр → решим, что фильтр есть, и просто не
+// покажем совет (лучше не надоесть, чем надоесть зря).
+func SearchHasSiteFilter(rawURL string) bool {
+	u, err := url.Parse(rawURL)
+	if err != nil {
+		return false
+	}
+	p := strings.ToLower(u.Path)
+	if strings.Contains(p, "catalog--") || strings.Contains(p, "category--") {
+		return true // категорийная страница Я.Маркета
+	}
+	// RawQuery парсим вручную (по «&»): url.Query() отбрасывает пары с «;» —
+	// а WB-фильтры бывают вида priceU=1000;5000 / f5023=a;b;c.
+	for _, pair := range strings.Split(u.RawQuery, "&") {
+		key := pair
+		if i := strings.IndexByte(pair, '='); i >= 0 {
+			key = pair[:i]
+		}
+		if key == "" {
+			continue
+		}
+		if !searchNonFilterParams[strings.ToLower(key)] {
+			return true
+		}
+	}
+	return false
+}
+
 // AppendTextFilter дописывает клиентский текст-фильтр tb_q к ссылке. RawQuery
 // дополняем напрямую (не через url.Query/Encode), чтобы не потерять фильтры WB
 // вида f5023=a;b;c — стандартный парсер отбрасывает пары с «;».

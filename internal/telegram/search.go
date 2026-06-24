@@ -186,7 +186,7 @@ func (b *Bot) proceedSearchTrack(ctx context.Context, chatID int64, rawURL strin
 	// Совет ненавязчивый, не обесцениваем (следим за всей выдачей), даём явный
 	// выход. Слежение стартует только после выбора стратегии.
 	isSeller := strings.Contains(normalized, "/seller/") || strings.Contains(normalized, "business--")
-	if !isSeller && !domain.HasTextFilter(rawURL) {
+	if !isSeller && !domain.HasTextFilter(rawURL) && !domain.SearchHasSiteFilter(rawURL) {
 		text += "💡 Запрос без фильтров — под него подходит очень много разных товаров. " +
 			"Чтобы получать уведомления только о том, что нужно именно тебе, сузь выдачу на сайте " +
 			"(категория, бренд, цена) и пришли новую ссылку.\n\n" +

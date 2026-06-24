@@ -20,6 +20,27 @@ func TestHasTextFilter(t *testing.T) {
 	}
 }
 
+func TestSearchHasSiteFilter(t *testing.T) {
+	cases := map[string]bool{
+		// Голый поиск (только запрос + трекинг/регион) — фильтров нет.
+		"https://market.yandex.ru/search?text=наушники":                false,
+		"https://market.yandex.ru/search?text=наушники&lr=213&clid=1": false,
+		"https://www.wildberries.ru/catalog/0/search.aspx?search=наушники": false,
+		"https://www.ozon.ru/search/?text=наушники":                        false,
+		// Заданы фильтры маркетплейса — true.
+		"https://market.yandex.ru/search?text=наушники&hid=90555&glfilter=7893318%3A153043": true,
+		"https://market.yandex.ru/search?text=наушники&nid=26992150":                        true,
+		"https://www.wildberries.ru/catalog/0/search.aspx?search=наушники&priceU=1000;5000":  true,
+		"https://www.wildberries.ru/catalog/0/search.aspx?search=наушники&fbrand=123":        true,
+		"https://www.ozon.ru/search/?text=наушники&brand=apple":                              true,
+	}
+	for in, want := range cases {
+		if got := SearchHasSiteFilter(in); got != want {
+			t.Errorf("SearchHasSiteFilter(%q) = %v, want %v", in, got, want)
+		}
+	}
+}
+
 func TestAppendTextFilter(t *testing.T) {
 	// Без query — добавляется первым параметром.
 	if got := AppendTextFilter("https://www.wildberries.ru/seller/100", "iphone 17"); !strings.Contains(got, "tb_q=iphone+17") {
