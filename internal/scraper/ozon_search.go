@@ -97,9 +97,10 @@ func (s *OzonSearchScraper) ScrapeSearch(ctx context.Context, rawURL string) (*S
 	return s.scrapePaginated(ctx, "/search/?text="+text, "search", text)
 }
 
-// maxOzonPages — потолок страниц пагинации (по ~36 тайлов), чтобы не уходить в
-// бесконечную прокрутку.
-const maxOzonPages = 8
+// maxOzonPages — потолок страниц пагинации (по ~8–36 тайлов), чтобы не уходить в
+// бесконечную прокрутку. Дороже всех (одна браузер-дорожка), поэтому держим низко;
+// item-кап SEARCH_MAX_ITEMS_OZON упирается обычно раньше.
+const maxOzonPages = 9
 
 // scrapePaginated — общий цикл для выдачи и витрины: идём по nextPage из
 // widgetStates, складываем тайлы (дедуп по ArticleID) до maxItems/конца/потолка

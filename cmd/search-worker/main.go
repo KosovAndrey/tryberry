@@ -151,7 +151,7 @@ func run(log *slog.Logger) error {
 			RPS:      2,
 			Logger:   log,
 		}),
-		getEnvInt("SEARCH_MAX_ITEMS_ALI", 60),
+		getEnvInt("SEARCH_MAX_ITEMS_ALI", 80),
 	)
 	registry := scraper.NewRegistry(wbSearch, wbSeller, yandexSearch, ozonSearch, ozonSeller, aliSearch)
 

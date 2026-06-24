@@ -150,7 +150,7 @@ func run(log *slog.Logger) error {
 		scraper.NewYandexMarketSearchScraper(yandexCard, 100, 12),
 		// Поисковый Ali встраивает карточный → даёт и разбор карточки, и
 		// распознавание поисковых ссылок (MatchesSearch/NormalizeSearchURL).
-		scraper.NewAliexpressSearchScraper(aliexpressCard, 60),
+		scraper.NewAliexpressSearchScraper(aliexpressCard, 80),
 	)
 
 	// getMe ходит наружу (через HTTPS_PROXY). Ретраим старт.

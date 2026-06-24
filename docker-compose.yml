@@ -312,7 +312,7 @@ services:
       SEARCH_SCRAPE_INTERVAL_MINUTES: "20"
       SEARCH_MAX_PAGES: "5"
       SEARCH_PAGE_DELAY_MS: "700"
-      SEARCH_MAX_ITEMS_OZON: "${SEARCH_MAX_ITEMS_OZON:-60}"
+      SEARCH_MAX_ITEMS_OZON: "${SEARCH_MAX_ITEMS_OZON:-72}"
       # Анти-спам below_target на широких/ротирующихся выдачах: не чаще раза в N мин.
       SEARCH_BELOW_TARGET_COOLDOWN_MINUTES: "${SEARCH_BELOW_TARGET_COOLDOWN_MINUTES:-360}"
       SEARCH_WORKER_HEALTH_PORT: "8094"
@@ -358,9 +358,11 @@ services:
       WB_TOKEN_POOL_PREFIX: "wb:reseller:"
       WB_TOKEN_POOL_SIZE: "5"
       SEARCH_SCRAPE_INTERVAL_MINUTES: "20"
-      SEARCH_MAX_PAGES: "2"
+      # Reseller — премиум-тариф: даём WB-поиску покрытие 3 стр (300) против 2 у
+      # бесплатной дорожки. WB-каталог дёшев, поэтому +1 страница ничего не стоит.
+      SEARCH_MAX_PAGES: "3"
       SEARCH_PAGE_DELAY_MS: "400"
-      SEARCH_MAX_ITEMS_OZON: "${SEARCH_MAX_ITEMS_OZON:-60}"
+      SEARCH_MAX_ITEMS_OZON: "${SEARCH_MAX_ITEMS_OZON:-72}"
       SEARCH_BELOW_TARGET_COOLDOWN_MINUTES: "${SEARCH_BELOW_TARGET_COOLDOWN_MINUTES:-360}"
       SEARCH_PROXY_URLS: "${RESELLER_SEARCH_PROXY_URLS:-}"
       SEARCH_WORKER_HEALTH_PORT: "8094"
