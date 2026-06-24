@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/url"
 	"regexp"
+	"strconv"
 	"strings"
 
 	fhttp "github.com/bogdanfinn/fhttp"
@@ -208,15 +209,32 @@ func (s *YandexMarketSearchScraper) NormalizeSearchURL(rawURL string) (string, e
 // на товар выдачи): "price":{"value":"25997","currency":"RUR"}.
 var ymSearchPriceRe = regexp.MustCompile(`"price":\{"value":"(\d+(?:\.\d+)?)","currency":"(?:RUR|RUB)"`)
 
-// ScrapeSearch — забрать выдачу. FIRST-PASS: структура SSR-стейта Я.Маркета не
-// подтверждена на живой странице (локально антибот), поэтому парсер минимальный
-// (цены из сниппетов) + диагностика в лог для доводки по проду. См. ymSearchDiag.
+// maxYandexPages — потолок страниц пагинации (&page=N) на один скрейп. Каждая
+// страница — отдельный SSR-фетч (~2.5 МБ), но YM идёт direct/безлимит. Цикл всё
+// равно раньше упрётся в maxItems (SEARCH_MAX_ITEMS_YANDEX, по умолч. 60) или в
+// страницу без новых товаров.
+const maxYandexPages = 5
+
+// ScrapeSearch — забрать выдачу постранично (&page=1..maxYandexPages), копя товары
+// с дедупом по ArticleID до maxItems / пустой страницы / потолка страниц.
+//
+// Витрину продавца тянем через search-форму (/search?generalContext=merchant), а
+// НЕ через /business--*/<id>: business флапает в «лёгкий» SSR без моделей и
+// одностраничен, тогда как search-форма стабильна и пагинируется по &page (тот же
+// /search SSR, что текстовый поиск). Имя магазина (SellerName) по-прежнему берётся
+// из business-страницы — там <h1> есть и в лёгком рендере. Цены — в КОПЕЙКАХ.
 func (s *YandexMarketSearchScraper) ScrapeSearch(ctx context.Context, rawURL string) (*SearchResultSet, error) {
 	if s.YandexMarketScraper == nil || s.direct == nil {
 		return nil, fmt.Errorf("%w: yandex search scraper not configured", ErrNotImplemented)
 	}
-	if err := s.limiter.Wait(ctx); err != nil {
-		return nil, err
+
+	// База для пагинации: для витрины — search-форма по id продавца, иначе сама
+	// ссылка выдачи (/search?text=...).
+	base := rawURL
+	if u, perr := url.Parse(rawURL); perr == nil {
+		if id := ymSellerID(u); id != "" {
+			base = ymSellerSearchURL(id)
+		}
 	}
 
 	// Тот же транспорт direct+proxy-fallback, что у карточки (общий jar).
@@ -226,48 +244,73 @@ func (s *YandexMarketSearchScraper) ScrapeSearch(ctx context.Context, rawURL str
 		"user-agent":         {"Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/148.0.0.0 Safari/537.36"},
 		fhttp.HeaderOrderKey: {"accept", "accept-language", "user-agent"},
 	}
-	status, body, _, err := s.getWithFallback(ctx, rawURL, header, 8<<20)
-	if err != nil {
-		return nil, fmt.Errorf("yandex search request: %w", err)
-	}
 
-	if isYandexCaptcha(body) {
-		return nil, ErrMarketplaceBlocked
-	}
-
-	out := s.parseSearch(string(body))
-
-	// Витрина продавца (/business--*/<id>) флапает: иногда SSR отдаётся «лёгким»
-	// (~1.95 МБ) БЕЗ развёрнутых товарных моделей → parseSearch=0. В этом случае
-	// добираем через стабильную search-форму (/search?generalContext=merchant) —
-	// это тот же /search SSR, что и текстовый поиск, и парсится так же. Business
-	// оставляем первичной: когда она «полная», моделей там больше (16 vs 8).
-	if len(out.Items) == 0 {
-		if u, perr := url.Parse(rawURL); perr == nil {
-			if id := ymSellerID(u); id != "" {
-				alt := ymSellerSearchURL(id)
-				if st2, b2, _, e2 := s.getWithFallback(ctx, alt, header, 8<<20); e2 == nil && st2 == 200 && !isYandexCaptcha(b2) {
-					if alt2 := s.parseSearch(string(b2)); len(alt2.Items) > 0 {
-						s.log.Info("yandex seller: business light SSR → search-форма",
-							"seller_id", id, "items", len(alt2.Items))
-						return alt2, nil
-					}
-				}
+	out := &SearchResultSet{}
+	seen := make(map[string]bool)
+	var lastStatus int
+	var lastBody []byte
+	for page := 1; page <= maxYandexPages; page++ {
+		if err := s.limiter.Wait(ctx); err != nil {
+			return nil, err
+		}
+		status, body, _, err := s.getWithFallback(ctx, ymWithPage(base, page), header, 8<<20)
+		if err != nil {
+			if page == 1 {
+				return nil, fmt.Errorf("yandex search request: %w", err)
+			}
+			break // частичный результат — отдаём что набрали
+		}
+		lastStatus, lastBody = status, body
+		if isYandexCaptcha(body) {
+			if page == 1 {
+				return nil, ErrMarketplaceBlocked
+			}
+			break
+		}
+		added := 0
+		for _, it := range s.parseSearch(string(body)).Items {
+			if seen[it.ArticleID] {
+				continue
+			}
+			seen[it.ArticleID] = true
+			it.Position = len(out.Items) + 1
+			out.Items = append(out.Items, it)
+			added++
+			if len(out.Items) >= s.maxItems {
+				break
 			}
 		}
+		out.PagesRead = page
+		if added == 0 || len(out.Items) >= s.maxItems {
+			break // конец выдачи (повтор/пусто) или достигли лимита
+		}
 	}
+	out.TotalFound = len(out.Items)
 
 	if len(out.Items) == 0 {
 		// Диагностика для доводки парсера по прод-логам (как у карточки).
 		s.log.Warn("yandex search: no items parsed",
-			"url", rawURL, "status", status, "len", len(body),
-			"price_hits", len(ymSearchPriceRe.FindAllStringIndex(string(body), -1)),
-			"price_ctx", ymPriceContext(body),
-			"cur_ctx", ymCurrencyContext(body))
+			"url", base, "status", lastStatus, "len", len(lastBody),
+			"price_hits", len(ymSearchPriceRe.FindAllStringIndex(string(lastBody), -1)),
+			"price_ctx", ymPriceContext(lastBody),
+			"cur_ctx", ymCurrencyContext(lastBody))
 		return out, ErrParseFailed
 	}
-	s.log.Info("yandex search scraped", "url", rawURL, "items", len(out.Items))
+	s.log.Info("yandex search scraped", "url", base, "items", len(out.Items), "pages", out.PagesRead)
 	return out, nil
+}
+
+// ymWithPage — добавить/заменить &page=N в URL выдачи (сохраняя остальные query,
+// включая generalContext витрины). При ошибке парса возвращает base как есть.
+func ymWithPage(base string, page int) string {
+	u, err := url.Parse(base)
+	if err != nil {
+		return base
+	}
+	q := u.Query()
+	q.Set("page", strconv.Itoa(page))
+	u.RawQuery = q.Encode()
+	return u.String()
 }
 
 // ymProductStartRe — начало объекта товарной модели в стейте marketfront:
