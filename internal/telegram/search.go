@@ -180,10 +180,18 @@ func (b *Bot) proceedSearchTrack(ctx context.Context, chatID int64, rawURL strin
 		return
 	}
 
-	text := fmt.Sprintf(
-		"🔎 Запрос: <b>%s</b>\n\nКак уведомлять о снижении цены?",
-		htmlEscape(sq.QueryText),
-	)
+	text := fmt.Sprintf("🔎 Запрос: <b>%s</b>\n\n", htmlEscape(sq.QueryText))
+	// Подсказка про фильтры для обычного поиска (не витрина — у неё свой шаг с
+	// tb_q) и только если фильтра ещё нет: широкая выдача даёт много лишнего, а
+	// слежу я лишь за верхней её частью. Про конкретный лимит не пишем (юзер всё
+	// равно не проверит) — просто советуем сузить.
+	isSeller := strings.Contains(normalized, "/seller/") || strings.Contains(normalized, "business--")
+	if !isSeller && !domain.HasTextFilter(rawURL) {
+		text += "💡 Слежу за верхней частью выдачи. Если в запросе много лишнего — " +
+			"сузь фильтрами на сайте (категория, бренд, цена) и пришли ссылку снова, " +
+			"или добавь в конец ссылки <code>&tb_q=слово</code> — оставлю только карточки с этим словом в названии.\n\n"
+	}
+	text += "Как уведомлять о снижении цены?"
 	keyboard := tgbotapi.NewInlineKeyboardMarkup(
 		tgbotapi.NewInlineKeyboardRow(
 			tgbotapi.NewInlineKeyboardButtonData("📉 Ниже цены", fmt.Sprintf("strack:%d:below", sq.ID)),
