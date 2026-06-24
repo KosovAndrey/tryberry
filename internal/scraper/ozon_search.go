@@ -167,12 +167,32 @@ func (s *OzonSearchScraper) scrapePaginated(ctx context.Context, initialPath, ki
 }
 
 // ozonNextPage — inner-path следующей страницы из ответа (пусто на последней).
+// У Ozon курсор бесконечного скролла лежит НЕ в корне envelope, а внутри стейта
+// виджета infiniteVirtualPaginator (stringified-JSON в widgetStates) — поле
+// nextPage, напр. "/seller/<seg>/?layout_page_index=2&page=2&paginator_token=…".
+// Корневой env.NextPage оставляем как первичный источник (на случай иных раскладок).
 func ozonNextPage(body []byte) string {
 	var env ozonEnvelope
 	if json.Unmarshal(body, &env) != nil {
 		return ""
 	}
-	return strings.TrimSpace(env.NextPage)
+	if np := strings.TrimSpace(env.NextPage); np != "" {
+		return np
+	}
+	for k, v := range env.WidgetStates {
+		if !strings.HasPrefix(k, "infiniteVirtualPaginator") {
+			continue
+		}
+		var pag struct {
+			NextPage string `json:"nextPage"`
+		}
+		if json.Unmarshal([]byte(v), &pag) == nil {
+			if np := strings.TrimSpace(pag.NextPage); np != "" {
+				return np
+			}
+		}
+	}
+	return ""
 }
 
 // fetchPageViaBrowser — in-page fetch произвольного inner-path через сайдкар
