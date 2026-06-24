@@ -72,6 +72,16 @@ func main() {
 		fmt.Printf("  final URL: %s\n", finalURL)
 		bs := string(body)
 
+		// DUMP_MODEL=1 — выгрузить первую товарную модель (балансировка скобок),
+		// чтобы увидеть схему цен (full: prices.min строкой; light: price.value числом).
+		if os.Getenv("DUMP_MODEL") != "" && len(models) > 0 {
+			obj := balancedObject(bs, models[0][0])
+			if len(obj) > 1200 {
+				obj = obj[:1200] + "…"
+			}
+			fmt.Printf("  [model#0] %s\n", obj)
+		}
+
 		// Заголовки H1 — частое место имени магазина в SSR.
 		for _, m := range h1Re.FindAllStringSubmatch(bs, 5) {
 			txt := strings.TrimSpace(stripTags(m[1]))
@@ -165,4 +175,35 @@ func yn(b bool) string {
 		return "YES"
 	}
 	return "no"
+}
+
+// balancedObject — подстрока сбалансированного JSON-объекта от start (s[start]=='{'),
+// с учётом строк/экранов. "" если не закрыт. (копия yandex_market_search.ymBalancedObject)
+func balancedObject(s string, start int) string {
+	depth := 0
+	inStr := false
+	for i := start; i < len(s); i++ {
+		c := s[i]
+		if inStr {
+			switch c {
+			case '\\':
+				i++
+			case '"':
+				inStr = false
+			}
+			continue
+		}
+		switch c {
+		case '"':
+			inStr = true
+		case '{':
+			depth++
+		case '}':
+			depth--
+			if depth == 0 {
+				return s[start : i+1]
+			}
+		}
+	}
+	return ""
 }
