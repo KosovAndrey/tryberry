@@ -69,6 +69,16 @@ func ymSellerID(u *url.URL) string {
 	return ""
 }
 
+// ymSellerSearchURL — search-форма витрины продавца: /search?generalContext=
+// t=merchant;mrch=<id> . Тот же /search SSR, что текстовый поиск (парсится
+// parseSearch'ом), и в отличие от /business--*/<id> не флапает в лёгкий рендер.
+func ymSellerSearchURL(id string) string {
+	v := url.Values{}
+	v.Set("text", "")
+	v.Set("generalContext", "t=merchant;mrch="+id)
+	return "https://market.yandex.ru/search?" + v.Encode()
+}
+
 // ymBusinessSlugRe — слаг витрины из /business--<slug>/<id>.
 var ymBusinessSlugRe = regexp.MustCompile(`/business--([^/]+)/\d+`)
 
@@ -226,6 +236,27 @@ func (s *YandexMarketSearchScraper) ScrapeSearch(ctx context.Context, rawURL str
 	}
 
 	out := s.parseSearch(string(body))
+
+	// Витрина продавца (/business--*/<id>) флапает: иногда SSR отдаётся «лёгким»
+	// (~1.95 МБ) БЕЗ развёрнутых товарных моделей → parseSearch=0. В этом случае
+	// добираем через стабильную search-форму (/search?generalContext=merchant) —
+	// это тот же /search SSR, что и текстовый поиск, и парсится так же. Business
+	// оставляем первичной: когда она «полная», моделей там больше (16 vs 8).
+	if len(out.Items) == 0 {
+		if u, perr := url.Parse(rawURL); perr == nil {
+			if id := ymSellerID(u); id != "" {
+				alt := ymSellerSearchURL(id)
+				if st2, b2, _, e2 := s.getWithFallback(ctx, alt, header, 8<<20); e2 == nil && st2 == 200 && !isYandexCaptcha(b2) {
+					if alt2 := s.parseSearch(string(b2)); len(alt2.Items) > 0 {
+						s.log.Info("yandex seller: business light SSR → search-форма",
+							"seller_id", id, "items", len(alt2.Items))
+						return alt2, nil
+					}
+				}
+			}
+		}
+	}
+
 	if len(out.Items) == 0 {
 		// Диагностика для доводки парсера по прод-логам (как у карточки).
 		s.log.Warn("yandex search: no items parsed",
