@@ -12,7 +12,7 @@ import (
 func newYMSearch() *YandexMarketSearchScraper {
 	// base без прокси: client поднимется (tls-client не требует прокси для init),
 	// но сетевых вызовов в этих тестах нет — проверяем только разбор URL/стейта.
-	return NewYandexMarketSearchScraper(NewYandexMarketScraper(YandexMarketOptions{}), 60)
+	return NewYandexMarketSearchScraper(NewYandexMarketScraper(YandexMarketOptions{}), 60, 5)
 }
 
 func TestYandexSearch_MatchesSearch(t *testing.T) {

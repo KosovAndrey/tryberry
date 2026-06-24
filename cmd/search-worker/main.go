@@ -127,7 +127,8 @@ func run(log *slog.Logger) error {
 			RPS:      2,
 			Logger:   log,
 		}),
-		getEnvInt("SEARCH_MAX_ITEMS_YANDEX", 60),
+		getEnvInt("SEARCH_MAX_ITEMS_YANDEX", 100),
+		getEnvInt("YANDEX_MAX_PAGES", 12),
 	)
 	// Ozon-поиск: только через сайдкар ozon-miner (browser-пул) — прямой API за
 	// FAB. Маршрут /search в сайдкаре есть; парсер searchResultsV2 best-effort,
