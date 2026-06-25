@@ -58,3 +58,13 @@ graphify-out/
 
 # локальные дампы/срезы для отладки
 tmp/
+
+# Скомпилированные бинари сервисов в корне (артефакты go build ./cmd/<svc>)
+/bin/
+/api
+/scraper
+/notifier
+/bot-worker
+/scheduler
+/search-worker
+/reseller-worker
