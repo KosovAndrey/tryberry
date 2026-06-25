@@ -50,7 +50,8 @@ const (
 	cmdAdd         = "add"
 	cmdList        = "list"
 	cmdUntrack     = "untrack"
-	cmdPTrack      = "ptrack"      // тип триггера товарной подписки (k=any|below|disc)
+	cmdPTrack      = "ptrack"      // тип триггера товарной подписки (k=any|stock|below|disc)
+	cmdPTarget     = "ptgt"        // выбор подсказанной целевой цены (k=<rub>|manual)
 	cmdSearch      = "search"      // как добавить поиск-подписку
 	cmdLSearch     = "lsearch"     // список поиск-подписок
 	cmdSTrack      = "strack"      // выбор типа триггера поиск-подписки (k=any|below|disc)
@@ -100,6 +101,7 @@ type Bot struct {
 	userRepo        *postgres.UserRepo
 	subRepo         *postgres.SubscriptionRepo
 	prodRepo        *postgres.ProductRepo
+	priceRepo       *postgres.PriceHistoryRepo // honest-price подсказки целевой цены (nilable)
 	searchQueryRepo *postgres.SearchQueryRepo
 	searchSubRepo   *postgres.SearchSubscriptionRepo
 	promoRepo       *postgres.PromoRepo
@@ -134,6 +136,7 @@ func NewBot(
 	userRepo *postgres.UserRepo,
 	subRepo *postgres.SubscriptionRepo,
 	prodRepo *postgres.ProductRepo,
+	priceRepo *postgres.PriceHistoryRepo,
 	searchQueryRepo *postgres.SearchQueryRepo,
 	searchSubRepo *postgres.SearchSubscriptionRepo,
 	promoRepo *postgres.PromoRepo,
@@ -155,6 +158,7 @@ func NewBot(
 		userRepo:        userRepo,
 		subRepo:         subRepo,
 		prodRepo:        prodRepo,
+		priceRepo:       priceRepo,
 		searchQueryRepo: searchQueryRepo,
 		searchSubRepo:   searchSubRepo,
 		promoRepo:       promoRepo,
@@ -411,6 +415,8 @@ func (b *Bot) handleMessage(ctx context.Context, vkID int64, text, payload strin
 		b.handleUntrack(ctx, vkID, user, p.ID)
 	case cmdPTrack:
 		b.handleProductTrigger(ctx, vkID, user, p)
+	case cmdPTarget:
+		b.handleProductTarget(ctx, vkID, user, p)
 	case cmdSearch:
 		b.send(ctx, vkID, "🔎 Поиск по ссылке\n\n"+
 			"Отправь ссылку на поисковую выдачу Wildberries — буду следить за всей выдачей и напишу, когда товары подешевеют.\n\n"+

@@ -175,7 +175,7 @@ func run(log *slog.Logger) error {
 		if redisClient != nil {
 			linkCodes = redisrepo.NewLinkCodeStore(redisClient)
 		}
-		vkBot = vk.NewBot(vk.NewClient(vkToken), log, userRepo, subRepo, prodRepo,
+		vkBot = vk.NewBot(vk.NewClient(vkToken), log, userRepo, subRepo, prodRepo, priceHistoryRepo,
 			searchQueryRepo, searchSubRepo, promoRepo, referralRepo, registry, linkCodes, redisClient,
 			getEnv("VK_BOT_URL", ""),
 			getEnv("PUBLIC_BASE_URL", "https://tryberry.ru"),

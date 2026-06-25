@@ -242,11 +242,7 @@ func (b *Bot) handleProductTrigger(ctx context.Context, vkID int64, user *domain
 		b.send(ctx, vkID, "🔔 Тип уведомления: "+domain.TriggerDescription(domain.TriggerBackInStock, nil, nil),
 			vkTrackOOSKeyboard(p.ID, hasPrice, b.chartURLForSub(ctx, p.ID)))
 	case "below":
-		if err := b.setTrackFSM(ctx, vkID, vkTrackFSM{SubID: p.ID, Trigger: string(domain.TriggerBelowTarget)}); err != nil {
-			b.send(ctx, vkID, "Не получилось начать ввод (нет связи с хранилищем). Останется «Любое снижение».", nil)
-			return
-		}
-		b.send(ctx, vkID, "💰 Введи целевую цену в рублях (например 1499).\nУведомлю, когда цена опустится до неё или ниже.", nil)
+		b.startBelowTarget(ctx, vkID, p.ID)
 	case "disc":
 		if err := b.setTrackFSM(ctx, vkID, vkTrackFSM{SubID: p.ID, Trigger: string(domain.TriggerDiscountPct)}); err != nil {
 			b.send(ctx, vkID, "Не получилось начать ввод (нет связи с хранилищем). Останется «Любое снижение».", nil)
@@ -254,6 +250,80 @@ func (b *Bot) handleProductTrigger(ctx context.Context, vkID int64, user *domain
 		}
 		b.send(ctx, vkID, "％ Введи процент скидки от текущей цены (1–99, например 20).", nil)
 	}
+}
+
+// startBelowTarget — флоу «ниже цены»: предлагаем подсказанные пороги из honest-price
+// (текущая цена + Stats → SuggestTargets). Нет опорной цены/подсказок → ручной ввод.
+// Зеркало telegram handleTrackTriggerCallback "below".
+func (b *Bot) startBelowTarget(ctx context.Context, vkID, subID int64) {
+	var current float64
+	var stats domain.PriceStats
+	if s, err := b.subRepo.GetByID(ctx, subID); err == nil {
+		current = s.FirstSeenPrice
+		if b.priceRepo != nil {
+			if p, _, e := b.priceRepo.GetLatest(ctx, s.ProductID); e == nil && p > 0 {
+				current = p
+			}
+			if st, e := b.priceRepo.Stats(ctx, s.ProductID, time.Now()); e == nil {
+				stats = st
+			}
+		}
+	}
+	sugg := domain.SuggestTargets(current, stats, time.Now())
+	if current <= 0 || len(sugg) == 0 {
+		b.promptManualTarget(ctx, vkID, subID)
+		return
+	}
+	b.send(ctx, vkID, fmt.Sprintf(
+		"📉 Уведомить, когда подешевеет.\nТекущая цена: %.0f ₽. Выбери порог или задай свой:", current),
+		vkBelowTargetKeyboard(subID, sugg))
+}
+
+// promptManualTarget — фолбэк-ввод целевой цены вручную (FSM).
+func (b *Bot) promptManualTarget(ctx context.Context, vkID, subID int64) {
+	if err := b.setTrackFSM(ctx, vkID, vkTrackFSM{SubID: subID, Trigger: string(domain.TriggerBelowTarget)}); err != nil {
+		b.send(ctx, vkID, "Не получилось начать ввод (нет связи с хранилищем). Останется «Любое снижение».", nil)
+		return
+	}
+	b.send(ctx, vkID, "💰 Введи целевую цену в рублях (например 1499).\nУведомлю, когда цена опустится до неё или ниже.", nil)
+}
+
+// vkBelowTargetKeyboard — кнопки подсказанных целевых цен + «своя цена». Каждая несёт
+// готовую цену (ptgt:<subID>:<rub>); manual → ручной ввод.
+func vkBelowTargetKeyboard(subID int64, sugg []domain.TargetSuggestion) *Keyboard {
+	pl := func(k string) string {
+		return fmt.Sprintf(`{"cmd":%q,"id":%d,"k":%q}`, cmdPTarget, subID, k)
+	}
+	var rows [][]Button
+	for _, s := range sugg {
+		rows = append(rows, []Button{TextButton(
+			fmt.Sprintf("≤ %.0f ₽ · %s", s.Price, s.Label),
+			pl(fmt.Sprintf("%.0f", s.Price)), ColorPrimary)})
+	}
+	rows = append(rows, []Button{TextButton("✏️ Своя цена", pl("manual"), ColorSecondary)})
+	return &Keyboard{Inline: true, Buttons: rows}
+}
+
+// handleProductTarget — выбор подсказанной цены: k=manual → ручной ввод, k=<rub> →
+// ставим below_target сразу. Владельца резолвим по user (фильтр в репозитории).
+func (b *Bot) handleProductTarget(ctx context.Context, vkID int64, user *domain.User, p payloadData) {
+	if p.Kind == "manual" {
+		b.promptManualTarget(ctx, vkID, p.ID)
+		return
+	}
+	price, err := domain.ParsePrice(p.Kind)
+	if err != nil || price <= 0 {
+		b.promptManualTarget(ctx, vkID, p.ID)
+		return
+	}
+	b.clearTrackFSM(ctx, vkID)
+	if err := b.subRepo.SetTrigger(ctx, p.ID, user.ID, string(domain.TriggerBelowTarget), &price, nil); err != nil {
+		b.log.Error("vk: set trigger below (suggested)", "sub_id", p.ID, "err", err)
+		b.send(ctx, vkID, "Произошла ошибка, попробуй позже.", nil)
+		return
+	}
+	b.send(ctx, vkID, "✅ Готово! "+domain.TriggerDescription(domain.TriggerBelowTarget, &price, nil),
+		vkTriggerKeyboard(p.ID, domain.TriggerBelowTarget, b.chartURLForSub(ctx, p.ID)))
 }
 
 // handleTrackThreshold — приём числа (порог/процент) для товарной подписки.
