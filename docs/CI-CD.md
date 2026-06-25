@@ -1,4 +1,63 @@
-# CI/CD — GitLab + self-hosted раннер на VPS
+# CI/CD
+
+Два режима. Выбери один:
+
+- **A. Поллер на VPS (без GitLab-пайплайнов)** — рекомендуется для РФ: GitLab требует
+  верификацию аккаунта (карта/телефон) для запуска пайплайнов, карта РФ не проходит.
+  Поллер обходит это: сам VPS следит за `main` и катит. См. раздел «Режим A» ниже.
+- **B. GitLab CI + self-hosted раннер** — нативные пайплайны с UI, но нужна верификация
+  аккаунта GitLab. См. «Режим B».
+
+Оба переиспользуют `make ci-test` / `make deploy` и не выносят секреты с VPS.
+
+---
+
+## Режим A — поллер на systemd-таймере (без GitLab CI)
+
+`scripts/ci-watch.sh` раз в 2 минуты: `git fetch`; если `main` сдвинулся →
+`git pull` → `make ci-test` → при успехе `make deploy`. Всё локально на VPS, от
+GitLab нужен только `git pull` (по SSH, верификация на него не влияет).
+
+Установка (одноразово):
+```bash
+cd ~/projects/tryberrybot
+chmod +x scripts/ci-watch.sh
+sudo cp deploy/systemd/tryberry-ci.service deploy/systemd/tryberry-ci.timer /etc/systemd/system/
+sudo systemctl daemon-reload
+sudo systemctl enable --now tryberry-ci.timer
+```
+
+Проверка:
+```bash
+systemctl list-timers tryberry-ci.timer        # когда следующий запуск
+journalctl -u tryberry-ci.service -f           # лог прогонов (test/deploy)
+sudo systemctl start tryberry-ci.service       # прогнать прямо сейчас вручную
+```
+
+Как работает цикл: пушишь/мержишь в `main` → в течение ~2 мин VPS подхватывает,
+гоняет тесты и (если зелёные) деплоит. Тесты красные → деплой НЕ происходит.
+
+Пауза/выключение:
+```bash
+sudo systemctl disable --now tryberry-ci.timer   # остановить авто-CI/CD
+```
+Пока таймер на паузе — деплой руками: `make deploy` (или `make deploy-api`).
+
+Если выбран режим A — gitlab-runner не нужен, можно выключить:
+```bash
+sudo gitlab-runner stop || true
+sudo systemctl disable gitlab-runner || true
+```
+
+Замечания:
+- `make deploy` пересобирает все Go-сервисы (~неск. минут). Долгие прогоны не
+  перекрываются (flock + systemd). При желании позже сделаем выборочную пересборку.
+- Миграции БД поллер НЕ применяет (как и режим B) — накатывай руками перед деплоем
+  кода, который их требует.
+
+---
+
+## Режим B — GitLab + self-hosted раннер на VPS
 
 Пайплайн (`.gitlab-ci.yml`):
 - **test** — на каждый push/MR: `go build ./... && go test ./...` в контейнере `golang:1.26`.

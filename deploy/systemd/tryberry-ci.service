@@ -1,0 +1,20 @@
+# CI/CD-поллер TryBerry (без GitLab-пайплайнов). Один прогон: fetch → test → deploy.
+# Запускается таймером tryberry-ci.timer. Логи: journalctl -u tryberry-ci.service
+#
+# Установка:
+#   sudo cp deploy/systemd/tryberry-ci.{service,timer} /etc/systemd/system/
+#   sudo systemctl daemon-reload && sudo systemctl enable --now tryberry-ci.timer
+#
+# Путь ниже подставлен под прод (~/projects/tryberrybot пользователя kosovandrey).
+# Если каталог/пользователь другой — поправь User= и ExecStart=.
+[Unit]
+Description=TryBerry CI/CD watcher (poll main, test, deploy)
+After=docker.service network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=kosovandrey
+ExecStart=/home/kosovandrey/projects/tryberrybot/scripts/ci-watch.sh
+# Сборка может быть долгой — не убиваем по таймауту.
+TimeoutStartSec=0
