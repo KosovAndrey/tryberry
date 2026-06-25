@@ -52,6 +52,8 @@ const (
 	cmdUntrack     = "untrack"
 	cmdPTrack      = "ptrack"      // тип триггера товарной подписки (k=any|stock|below|disc)
 	cmdPTarget     = "ptgt"        // выбор подсказанной целевой цены (k=<rub>|manual)
+	cmdListPage    = "lpage"       // навигация по страницам списка товаров (id=страница)
+	cmdLSearchPage = "lspage"      // навигация по страницам списка поисков (id=страница)
 	cmdSearch      = "search"      // как добавить поиск-подписку
 	cmdLSearch     = "lsearch"     // список поиск-подписок
 	cmdSTrack      = "strack"      // выбор типа триггера поиск-подписки (k=any|below|disc)
@@ -411,6 +413,8 @@ func (b *Bot) handleMessage(ctx context.Context, vkID int64, text, payload strin
 			"Пример:\nhttps://www.wildberries.ru/catalog/252334498/detail.aspx", kb)
 	case cmdList:
 		b.handleList(ctx, vkID, user, "")
+	case cmdListPage:
+		b.showProductList(ctx, vkID, user, "", int(p.ID))
 	case cmdUntrack:
 		b.handleUntrack(ctx, vkID, user, p.ID)
 	case cmdPTrack:
@@ -424,6 +428,8 @@ func (b *Bot) handleMessage(ctx context.Context, vkID int64, text, payload strin
 			"Пример:\nhttps://www.wildberries.ru/catalog/0/search.aspx?search=наушники", kb)
 	case cmdLSearch:
 		b.handleListSearch(ctx, vkID, user, "")
+	case cmdLSearchPage:
+		b.showSearchList(ctx, vkID, user, "", int(p.ID))
 	case cmdSTrack:
 		b.handleSearchTrigger(ctx, vkID, user, p)
 	case cmdSFSkip:

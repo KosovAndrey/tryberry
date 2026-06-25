@@ -16,10 +16,48 @@ import (
 // товара → лимит тарифа → upsert подписки), но plain-text. Тип уведомления тоже
 // выбирается (vkTriggerKeyboard: любое снижение / ниже цены / скидка %).
 
-const (
-	listMaxShown   = 20 // VK режет сообщения ~4096 символов
-	listMaxButtons = 10 // лимит inline-клавиатуры VK
-)
+const listPageSize = 8 // подписок на страницу списка (VK лимитирует inline-кнопки)
+
+// pageBounds — число страниц и срез [start,end) для page по n элементам.
+func pageBounds(n, page int) (pages, start, end int) {
+	pages = (n + listPageSize - 1) / listPageSize
+	if pages < 1 {
+		pages = 1
+	}
+	page = clampPage(page, pages)
+	start = page * listPageSize
+	end = start + listPageSize
+	if end > n {
+		end = n
+	}
+	return
+}
+
+func clampPage(page, pages int) int {
+	if page < 0 {
+		return 0
+	}
+	if page >= pages {
+		return pages - 1
+	}
+	return page
+}
+
+// pageNavRow — строка навигации ◀️/▶️ для списка (cmd несёт целевую страницу в id).
+// nil, если страница одна.
+func pageNavRow(cmd string, page, pages int) []Button {
+	if pages <= 1 {
+		return nil
+	}
+	var nav []Button
+	if page > 0 {
+		nav = append(nav, TextButton("◀️ Назад", fmt.Sprintf(`{"cmd":%q,"id":%d}`, cmd, page-1), ColorSecondary))
+	}
+	if page < pages-1 {
+		nav = append(nav, TextButton("Вперёд ▶️", fmt.Sprintf(`{"cmd":%q,"id":%d}`, cmd, page+1), ColorSecondary))
+	}
+	return nav
+}
 
 func (b *Bot) handleTrack(ctx context.Context, vkID int64, user *domain.User, rawURL string) {
 	s, err := b.registry.FindByURL(rawURL)
@@ -365,9 +403,15 @@ func (b *Bot) handleTrackThreshold(ctx context.Context, vkID int64, user *domain
 	}
 }
 
-// handleList — список подписок + inline-кнопки отписки. prefix — строка над
-// списком (например, подтверждение отписки).
+// handleList — список подписок (страница 0). prefix — строка над списком.
 func (b *Bot) handleList(ctx context.Context, vkID int64, user *domain.User, prefix string) {
+	b.showProductList(ctx, vkID, user, prefix, 0)
+}
+
+// showProductList — постраничный список товарных подписок. VK ограничивает inline-
+// клавиатуру, поэтому листаем по listPageSize с кнопками ◀️/▶️ — так VK-only юзер
+// может управлять ВСЕМИ подписками (паритет с TG, где список не обрезается).
+func (b *Bot) showProductList(ctx context.Context, vkID int64, user *domain.User, prefix string, page int) {
 	subs, err := b.subRepo.GetActiveByUserID(ctx, user.ID)
 	if err != nil {
 		b.log.Error("vk: get subscriptions", "err", err)
@@ -382,17 +426,20 @@ func (b *Bot) handleList(ctx context.Context, vkID int64, user *domain.User, pre
 		b.send(ctx, vkID, text, menuKeyboard(user.TelegramID != 0))
 		return
 	}
+	pages, start, end := pageBounds(len(subs), page)
+	page = clampPage(page, pages)
 
 	var sb strings.Builder
 	if prefix != "" {
 		sb.WriteString(prefix + "\n\n")
 	}
-	fmt.Fprintf(&sb, "📋 Твои подписки — %d активных\n\n", len(subs))
-	for i, sub := range subs {
-		if i == listMaxShown {
-			fmt.Fprintf(&sb, "… и ещё %d. Полный список — в Telegram-боте (/list).\n", len(subs)-listMaxShown)
-			break
-		}
+	fmt.Fprintf(&sb, "📋 Твои подписки — %d активных", len(subs))
+	if pages > 1 {
+		fmt.Fprintf(&sb, " (стр. %d/%d)", page+1, pages)
+	}
+	sb.WriteString("\n\n")
+	for i := start; i < end; i++ {
+		sub := subs[i]
 		current := "нет данных"
 		if sub.CurrentPrice > 0 {
 			emoji := ""
@@ -410,24 +457,14 @@ func (b *Bot) handleList(ctx context.Context, vkID int64, user *domain.User, pre
 	}
 	sb.WriteString("Отписаться — кнопки «❌ номер» под сообщением 👇")
 
-	// Inline-клавиатура отписки; постоянное меню при этом остаётся на месте.
-	b.send(ctx, vkID, sb.String(), untrackKeyboard(subs))
-}
-
-// untrackKeyboard — inline-кнопки «❌ N» (VK: максимум 10 кнопок в inline).
-func untrackKeyboard(subs []*domain.Subscription) *Keyboard {
 	var rows [][]Button
 	var row []Button
-	for i, sub := range subs {
-		if i == listMaxButtons {
-			break
-		}
+	for i := start; i < end; i++ {
 		row = append(row, TextButton(
 			fmt.Sprintf("❌ %d", i+1),
-			fmt.Sprintf(`{"cmd":%q,"id":%d}`, cmdUntrack, sub.ID),
-			ColorSecondary,
-		))
-		if len(row) == 5 {
+			fmt.Sprintf(`{"cmd":%q,"id":%d}`, cmdUntrack, subs[i].ID),
+			ColorSecondary))
+		if len(row) == 4 {
 			rows = append(rows, row)
 			row = nil
 		}
@@ -435,7 +472,10 @@ func untrackKeyboard(subs []*domain.Subscription) *Keyboard {
 	if len(row) > 0 {
 		rows = append(rows, row)
 	}
-	return &Keyboard{Inline: true, Buttons: rows}
+	if nav := pageNavRow(cmdListPage, page, pages); nav != nil {
+		rows = append(rows, nav)
+	}
+	b.send(ctx, vkID, sb.String(), &Keyboard{Inline: true, Buttons: rows})
 }
 
 func (b *Bot) handleUntrack(ctx context.Context, vkID int64, user *domain.User, subID int64) {
