@@ -41,7 +41,9 @@
     <div class="hero__head">
       {{ if .ImageURL }}
       <div class="hero__img" id="prodimg-box">
-        <img id="prodimg" src="{{ .ImageURL }}" alt="{{ .Name }}" loading="lazy" decoding="async" referrerpolicy="no-referrer">
+        <a href="{{ .ProductURL }}" rel="nofollow noopener" target="_blank" aria-label="Открыть товар на маркетплейсе">
+          <img id="prodimg" src="{{ .ImageURL }}" alt="{{ .Name }}" loading="lazy" decoding="async" referrerpolicy="no-referrer">
+        </a>
       </div>
       {{ end }}
       <div class="hero__headtext">
@@ -49,7 +51,7 @@
           {{ if .MarketplaceLabel }}<span class="badge badge--{{ .Marketplace }}">{{ .MarketplaceLabel }}</span>{{ end }}
           {{ if not .InStock }}<span class="badge badge--oos">Нет в наличии</span>{{ end }}
         </div>
-        <h1 class="hero__name">{{ .Name }}</h1>
+        <h1 class="hero__name"><a class="hero__namelink" href="{{ .ProductURL }}" rel="nofollow noopener" target="_blank">{{ .Name }}</a></h1>
       </div>
     </div>
 
