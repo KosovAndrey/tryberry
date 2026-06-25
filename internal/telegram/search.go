@@ -180,10 +180,20 @@ func (b *Bot) proceedSearchTrack(ctx context.Context, chatID int64, rawURL strin
 		return
 	}
 
-	text := fmt.Sprintf(
-		"🔎 Запрос: <b>%s</b>\n\nКак уведомлять о снижении цены?",
-		htmlEscape(sq.QueryText),
-	)
+	text := fmt.Sprintf("🔎 Запрос: <b>%s</b>\n\n", htmlEscape(sq.QueryText))
+	// Подсказка про фильтры для обычного поиска (не витрина — у неё свой шаг) и
+	// только если фильтра ещё нет: широкий запрос даёт много разных товаров.
+	// Совет ненавязчивый, не обесцениваем (следим за всей выдачей), даём явный
+	// выход. Слежение стартует только после выбора стратегии.
+	isSeller := strings.Contains(normalized, "/seller/") || strings.Contains(normalized, "business--")
+	if !isSeller && !domain.HasTextFilter(rawURL) && !domain.SearchHasSiteFilter(rawURL) {
+		text += "💡 Запрос без фильтров — под него подходит очень много разных товаров. " +
+			"Чтобы получать уведомления только о том, что нужно именно тебе, сузь выдачу на сайте " +
+			"(категория, бренд, цена) и пришли новую ссылку.\n\n" +
+			"Если подборка на маркетплейсе тебя устраивает — выбери ниже, как уведомлять, и я начну следить 👇"
+	} else {
+		text += "Как уведомлять о снижении цены?"
+	}
 	keyboard := tgbotapi.NewInlineKeyboardMarkup(
 		tgbotapi.NewInlineKeyboardRow(
 			tgbotapi.NewInlineKeyboardButtonData("📉 Ниже цены", fmt.Sprintf("strack:%d:below", sq.ID)),
@@ -193,6 +203,9 @@ func (b *Bot) proceedSearchTrack(ctx context.Context, chatID int64, rawURL strin
 		),
 		tgbotapi.NewInlineKeyboardRow(
 			tgbotapi.NewInlineKeyboardButtonData("％ Скидка от %", fmt.Sprintf("strack:%d:disc", sq.ID)),
+		),
+		tgbotapi.NewInlineKeyboardRow(
+			tgbotapi.NewInlineKeyboardButtonData("❌ Отменить", "scancel"),
 		),
 	)
 	m := tgbotapi.NewMessage(chatID, text)
@@ -217,6 +230,9 @@ func (b *Bot) promptSellerTextFilter(ctx context.Context, chatID int64, user *do
 	keyboard := tgbotapi.NewInlineKeyboardMarkup(
 		tgbotapi.NewInlineKeyboardRow(
 			tgbotapi.NewInlineKeyboardButtonData("⏭ Без фильтра", "sfskip"),
+		),
+		tgbotapi.NewInlineKeyboardRow(
+			tgbotapi.NewInlineKeyboardButtonData("❌ Отменить", "scancel"),
 		),
 	)
 	m := tgbotapi.NewMessage(chatID, text)
@@ -301,6 +317,19 @@ func (b *Bot) checkSellerCap(ctx context.Context, chatID int64, ss interface{}, 
 		return false
 	}
 	return true
+}
+
+// handleSearchCancel — отмена на шаге выбора стратегии (кнопка «❌ Отменить»).
+// Подписка ещё не создана (есть только общая строка запроса), чистить нечего —
+// просто закрываем сообщение.
+func (b *Bot) handleSearchCancel(ctx context.Context, cb *tgbotapi.CallbackQuery) {
+	b.clearSearchFSM(ctx, cb.From.ID) // на случай отмены с шага фильтра витрины
+	b.answerCallback(cb.ID, "Отменено")
+	edit := tgbotapi.NewEditMessageText(cb.Message.Chat.ID, cb.Message.MessageID,
+		"❌ Отменено. Пришли другую ссылку, когда будешь готов.")
+	if _, err := b.api.Send(edit); err != nil {
+		b.log.Error("edit search cancel", "err", err)
+	}
 }
 
 // ── Выбор типа триггера (callback strack:<qid>:<type>) ────────────────────────

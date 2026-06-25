@@ -26,20 +26,28 @@ import (
 type YandexMarketSearchScraper struct {
 	*YandexMarketScraper
 	maxItems int
+	maxPages int
 	limiter  *rate.Limiter
 }
 
 var _ SearchScraper = (*YandexMarketSearchScraper)(nil)
 
 // NewYandexMarketSearchScraper оборачивает уже сконфигуренный карточный скрейпер
-// (переиспользуем его tls-client/прокси). maxItems<=0 → 60.
-func NewYandexMarketSearchScraper(base *YandexMarketScraper, maxItems int) *YandexMarketSearchScraper {
+// (переиспользуем его tls-client/прокси). maxItems<=0 → 100, maxPages<=0 → 12.
+// maxPages — потолок страниц пагинации (&page); цикл всё равно раньше упрётся в
+// maxItems или в страницу без новых товаров (~10 товаров/страница → 12 страниц
+// с запасом покрывают item-кап 100).
+func NewYandexMarketSearchScraper(base *YandexMarketScraper, maxItems, maxPages int) *YandexMarketSearchScraper {
 	if maxItems <= 0 {
-		maxItems = 60
+		maxItems = 100
+	}
+	if maxPages <= 0 {
+		maxPages = 12
 	}
 	return &YandexMarketSearchScraper{
 		YandexMarketScraper: base,
 		maxItems:            maxItems,
+		maxPages:            maxPages,
 		// Выдача тяжёлая (~2.5 МБ), но идёт direct без прокси (см.
 		// docs/YANDEX-WARMED-COOKIES.md) — прежний 0.5 был из-за одного proxy-IP.
 		// Поднимаем до 2; фолбэк-прокси и метрика source=proxy страхуют.
@@ -209,13 +217,7 @@ func (s *YandexMarketSearchScraper) NormalizeSearchURL(rawURL string) (string, e
 // на товар выдачи): "price":{"value":"25997","currency":"RUR"}.
 var ymSearchPriceRe = regexp.MustCompile(`"price":\{"value":"(\d+(?:\.\d+)?)","currency":"(?:RUR|RUB)"`)
 
-// maxYandexPages — потолок страниц пагинации (&page=N) на один скрейп. Каждая
-// страница — отдельный SSR-фетч (~2.5 МБ), но YM идёт direct/безлимит. Цикл всё
-// равно раньше упрётся в maxItems (SEARCH_MAX_ITEMS_YANDEX, по умолч. 60) или в
-// страницу без новых товаров.
-const maxYandexPages = 5
-
-// ScrapeSearch — забрать выдачу постранично (&page=1..maxYandexPages), копя товары
+// ScrapeSearch — забрать выдачу постранично (&page=1..s.maxPages), копя товары
 // с дедупом по ArticleID до maxItems / пустой страницы / потолка страниц.
 //
 // Витрину продавца тянем через search-форму (/search?generalContext=merchant), а
@@ -249,7 +251,7 @@ func (s *YandexMarketSearchScraper) ScrapeSearch(ctx context.Context, rawURL str
 	seen := make(map[string]bool)
 	var lastStatus int
 	var lastBody []byte
-	for page := 1; page <= maxYandexPages; page++ {
+	for page := 1; page <= s.maxPages; page++ {
 		if err := s.limiter.Wait(ctx); err != nil {
 			return nil, err
 		}
