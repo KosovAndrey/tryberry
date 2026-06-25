@@ -82,6 +82,30 @@ func (b *Bot) handleTrack(ctx context.Context, vkID int64, user *domain.User, ra
 		return
 	}
 
+	// OOS: товара нет в наличии (нет активного оффера) — «слежу за снижением»
+	// неприменимо. Заводим back_in_stock и фиксируем in_stock=false (как TG doTrack).
+	if !result.InStock {
+		if err := b.prodRepo.SetInStock(ctx, product.ID, false); err != nil {
+			b.log.Warn("vk: set product out of stock", "product_id", product.ID, "err", err)
+		}
+		oos, _, err := b.subRepo.UpsertOutOfStock(ctx, user.ID, product.ID, result.Price)
+		if err != nil {
+			b.log.Error("vk: upsert oos subscription", "err", err)
+			b.send(ctx, vkID, "Произошла ошибка, попробуй позже.", nil)
+			return
+		}
+		priceLine := "Цена появится, когда товар вернётся в продажу."
+		if result.Price > 0 {
+			priceLine = fmt.Sprintf("💰 Последняя цена: %.0f ₽", result.Price)
+		}
+		b.send(ctx, vkID, fmt.Sprintf(
+			"✅ Добавил в отслеживание!\n\n%s\n🚫 Сейчас товара нет в наличии (нет активного предложения).\n%s\n\n"+
+				"По умолчанию уведомлю, как только он появится в наличии. Сменить тип — кнопками ниже 👇",
+			result.Name, priceLine),
+			vkTrackOOSKeyboard(oos.ID, result.Price > 0, b.chartURL(product.PublicID)))
+		return
+	}
+
 	sub, created, err := b.subRepo.Upsert(ctx, user.ID, product.ID, result.Price)
 	if err != nil {
 		b.log.Error("vk: upsert subscription", "err", err)
@@ -168,6 +192,30 @@ func vkTriggerKeyboard(subID int64, current domain.TriggerType, chartURL string)
 	return &Keyboard{Inline: true, Buttons: rows}
 }
 
+// vkTrackOOSKeyboard — клавиатура для товара БЕЗ активного оффера: по умолчанию
+// «когда появится в наличии» (back_in_stock), а «ниже цены»/«скидка %» — только при
+// известной last-цене (hasPrice). Зеркало telegram.trackOOSKeyboard.
+func vkTrackOOSKeyboard(subID int64, hasPrice bool, chartURL string) *Keyboard {
+	pl := func(kind string) string {
+		return fmt.Sprintf(`{"cmd":%q,"id":%d,"k":%q}`, cmdPTrack, subID, kind)
+	}
+	rows := [][]Button{
+		{TextButton("✅ 🔔 Когда появится в наличии", pl("stock"), ColorPrimary)},
+	}
+	if hasPrice {
+		rows = append(rows, []Button{
+			TextButton("📉 Ниже цены", pl("below"), ColorSecondary),
+			TextButton("％ Скидка %", pl("disc"), ColorSecondary),
+		})
+	} else {
+		rows = append(rows, []Button{TextButton("📉 Ниже цены", pl("below"), ColorSecondary)})
+	}
+	if chartURL != "" {
+		rows = append(rows, []Button{LinkButton("📈 График цены", chartURL)})
+	}
+	return &Keyboard{Inline: true, Buttons: rows}
+}
+
 // handleProductTrigger — нажатие кнопки типа триггера (cmd=ptrack).
 func (b *Bot) handleProductTrigger(ctx context.Context, vkID int64, user *domain.User, p payloadData) {
 	switch p.Kind {
@@ -180,6 +228,19 @@ func (b *Bot) handleProductTrigger(ctx context.Context, vkID int64, user *domain
 		}
 		b.send(ctx, vkID, "🔔 Тип уведомления: "+domain.TriggerDescription(domain.TriggerAnyDrop, nil, nil),
 			vkTriggerKeyboard(p.ID, domain.TriggerAnyDrop, b.chartURLForSub(ctx, p.ID)))
+	case "stock":
+		// Товар без оффера: ждать появления в наличии (back_in_stock).
+		if err := b.subRepo.SetTrigger(ctx, p.ID, user.ID, string(domain.TriggerBackInStock), nil, nil); err != nil {
+			b.log.Error("vk: set trigger stock", "sub_id", p.ID, "err", err)
+			b.send(ctx, vkID, "Произошла ошибка, попробуй позже.", nil)
+			return
+		}
+		hasPrice := false
+		if s, err := b.subRepo.GetByID(ctx, p.ID); err == nil {
+			hasPrice = s.FirstSeenPrice > 0
+		}
+		b.send(ctx, vkID, "🔔 Тип уведомления: "+domain.TriggerDescription(domain.TriggerBackInStock, nil, nil),
+			vkTrackOOSKeyboard(p.ID, hasPrice, b.chartURLForSub(ctx, p.ID)))
 	case "below":
 		if err := b.setTrackFSM(ctx, vkID, vkTrackFSM{SubID: p.ID, Trigger: string(domain.TriggerBelowTarget)}); err != nil {
 			b.send(ctx, vkID, "Не получилось начать ввод (нет связи с хранилищем). Останется «Любое снижение».", nil)

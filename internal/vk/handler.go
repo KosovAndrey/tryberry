@@ -109,6 +109,7 @@ type Bot struct {
 	rdb             *redis.Client // FSM ввода порога (может быть nil)
 	botURL          string        // ссылка на VK-бота для приглашений ("" — не показывать)
 	chartBaseURL    string        // PUBLIC_BASE_URL для ссылки «📈 График цены» → /p/<public_id>; "" — не показывать
+	adminIDs        map[int64]bool // VK_ADMIN_IDS — операторы для админ-команд (grant/revoke/promo…)
 
 	// Оплата (как в TG): payments == nil → заглушка; discounts хранит
 	// «ожидающую скидку» (nil без redis); billing — рекуррентные подписки.
@@ -142,6 +143,7 @@ func NewBot(
 	rdb *redis.Client,
 	botURL string,
 	chartBaseURL string,
+	adminIDs map[int64]bool,
 ) *Bot {
 	var discounts *redisrepo.DiscountStore
 	if rdb != nil {
@@ -162,8 +164,14 @@ func NewBot(
 		rdb:             rdb,
 		botURL:          botURL,
 		chartBaseURL:    chartBaseURL,
+		adminIDs:        adminIDs,
 		discounts:       discounts,
 	}
+}
+
+// isAdmin — VK-оператор (по vk_id из VK_ADMIN_IDS). Зеркало telegram.Bot.isAdmin.
+func (b *Bot) isAdmin(vkID int64) bool {
+	return b.adminIDs[vkID]
 }
 
 // chartURL — публичная ссылка на график товара (chartBaseURL + "/p/" + publicID),
@@ -251,6 +259,12 @@ func (b *Bot) handleMessage(ctx context.Context, vkID int64, text, payload strin
 		return
 	}
 	kb := menuKeyboard(user.TelegramID != 0)
+
+	// Слэш-команды (admin + /myplan + алиасы команд TG) — паритет с TG. Прерывают
+	// любой незавершённый ввод; кнопки (payload) сюда не попадают.
+	if strings.HasPrefix(text, "/") && b.handleSlashCommand(ctx, vkID, user, text) {
+		return
+	}
 
 	p := parsePayload(payload)
 	lower := strings.ToLower(text)

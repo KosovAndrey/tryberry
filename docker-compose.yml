@@ -187,6 +187,8 @@ services:
       # VK-бот (пусто = выключено): токен сообщества + ссылка для кнопки привязки.
       VK_GROUP_TOKEN: "${VK_GROUP_TOKEN:-}"
       VK_BOT_URL: "${VK_BOT_URL:-}"
+      # VK-операторы для админ-команд (vk_id через запятую; пусто = админа в VK нет).
+      VK_ADMIN_IDS: "${VK_ADMIN_IDS:-}"
       # Оплата ЮKassa (пусто = витрина показывает заглушку). Секреты — из .env.
       YOOKASSA_SHOP_ID: "${YOOKASSA_SHOP_ID:-}"
       YOOKASSA_SECRET_KEY: "${YOOKASSA_SECRET_KEY:-}"
