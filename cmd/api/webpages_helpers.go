@@ -154,7 +154,8 @@ type pageData struct {
 	// JSON-LD
 	LDJSON template.JS
 
-	SeriesJSON template.JS
+	SeriesJSON   template.JS
+	AssetVersion string // ?v= к css/js (сброс кэша при деплое)
 }
 
 // verdictPresentation переводит вердикт честной цены в подачу на странице
@@ -258,6 +259,7 @@ func (h *WebHandlers) buildPageData(
 		UpdatedISO:       p.UpdatedAt.UTC().Format(time.RFC3339),
 		LDJSON:           template.JS(ldJSON),
 		SeriesJSON:       seriesJSON,
+		AssetVersion:     h.assetVersion,
 	}
 	if !stats.Since.IsZero() {
 		pd.SinceISO = stats.Since.UTC().Format("2006-01-02")

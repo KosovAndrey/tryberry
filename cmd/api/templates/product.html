@@ -19,8 +19,8 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Unbounded:wght@400;500;600;700;800&family=Onest:wght@300;400;500;600;700&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="/vendor/uPlot.min.css">
-<link rel="stylesheet" href="/assets/chart.css">
+<link rel="stylesheet" href="/vendor/uPlot.min.css?v={{ .AssetVersion }}">
+<link rel="stylesheet" href="/assets/chart.css?v={{ .AssetVersion }}">
 
 <script type="application/ld+json">{{ .LDJSON }}</script>
 </head>
@@ -119,7 +119,7 @@
 </footer>
 
 <script>window.__CHART__ = {publicId:"{{ .PublicID }}", series:{{ .SeriesJSON }}, refs:{min:{{ .RefMin }}, usual:{{ .RefUsual }}}};</script>
-<script src="/vendor/uPlot.iife.min.js"></script>
-<script src="/assets/chart.js" defer></script>
+<script src="/vendor/uPlot.iife.min.js?v={{ .AssetVersion }}"></script>
+<script src="/assets/chart.js?v={{ .AssetVersion }}" defer></script>
 </body>
 </html>

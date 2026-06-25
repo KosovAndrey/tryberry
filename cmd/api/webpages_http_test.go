@@ -63,7 +63,7 @@ func newTestHandlers(t *testing.T) *WebHandlers {
 		{RecordedAt: now.AddDate(0, 0, -90), Price: 1500},
 		{RecordedAt: now.AddDate(0, 0, -10), Price: 1299},
 	}
-	h, err := NewWebHandlers(&stubProducts{prod: prod, in: true}, &stubPrices{pts: pts}, "https://tryberry.ru", slog.Default())
+	h, err := NewWebHandlers(&stubProducts{prod: prod, in: true}, &stubPrices{pts: pts}, "https://tryberry.ru", "testver", slog.Default())
 	if err != nil {
 		t.Fatalf("NewWebHandlers: %v", err)
 	}
@@ -105,6 +105,12 @@ func TestProductPage_OK(t *testing.T) {
 	// JS-контексте обрамляет числа пробелами — проверяем по наличию значений).
 	if !strings.Contains(body, "refs:{min:") || !strings.Contains(body, "990") || !strings.Contains(body, "1399") {
 		t.Error("reference values (min/usual) not injected into chart bootstrap")
+	}
+	// Ассеты версионированы хешем (?v=) — сброс кэша css/js при деплое.
+	if !strings.Contains(body, "/assets/chart.js?v=testver") ||
+		!strings.Contains(body, "/assets/chart.css?v=testver") ||
+		!strings.Contains(body, "/vendor/uPlot.iife.min.js?v=testver") {
+		t.Error("assets not versioned with ?v=")
 	}
 	// Картинка товара рендерится (с хотлинк-защитой no-referrer).
 	if !strings.Contains(body, `id="prodimg"`) ||
