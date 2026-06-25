@@ -251,14 +251,16 @@ func makeHandler(
 			// «цена X действует с t0» восстанавливаем на чтении (PriceHistoryRepo.Stats
 			// взвешивает по длительности). prevPrice<=0 → первая точка по товару.
 			// Кэш последней цены обновляем ВСЕГДА — на нём держится детект снижения.
+			// Дозаливаем недостающую СТАРУЮ историю от маркетплейса (WB
+			// price-history.json): покрывает и новые товары, и добавленные до
+			// появления бэкфилла (у них своя история начинается с момента трекинга).
+			// Самоограничивается дешёвым пред-чеком внутри (EarliestRecordedAt) —
+			// в установившемся режиме это один индексный запрос. Best-effort:
+			// ошибка бэкфилла не валит обычную запись цены.
+			if len(result.History) > 0 {
+				backfillHistory(ctx, log, pm, priceHistoryRepo, task.ProductID, result.History)
+			}
 			if prevPrice <= 0 || !pricesEqual(result.Price, prevPrice) {
-				// Первая точка по товару + маркетплейс отдал свою историю (WB
-				// price-history.json) → одноразовый бэкфилл: график и «честная цена»
-				// работают сразу, без ожидания накопления. Best-effort: ошибка
-				// бэкфилла не должна валить обычную запись цены.
-				if prevPrice <= 0 && len(result.History) > 0 {
-					backfillHistory(ctx, log, pm, priceHistoryRepo, task.ProductID, result.History)
-				}
 				if err := priceHistoryRepo.Insert(ctx, task.ProductID, result.Price); err != nil {
 					return fmt.Errorf("insert price history: %w", err)
 				}
@@ -339,17 +341,30 @@ func backfillHistory(
 	productID int64,
 	history []scraper.PriceHistoryPoint,
 ) {
+	// Дешёвый пред-чек: тянем только точки СТАРШЕ нашей самой ранней (или все, если
+	// истории нет). В установившемся режиме older пуст → ни партиций, ни лока.
+	earliest, hasAny, err := histRepo.EarliestRecordedAt(ctx, productID)
+	if err != nil {
+		log.Warn("backfill: earliest lookup failed", "err", err, "product_id", productID)
+		return
+	}
 	times := make([]time.Time, 0, len(history))
-	points := make([]postgres.PricePoint, 0, len(history))
+	older := make([]postgres.PricePoint, 0, len(history))
 	for _, h := range history {
+		if hasAny && !h.At.Before(earliest) {
+			continue
+		}
 		times = append(times, h.At)
-		points = append(points, postgres.PricePoint{RecordedAt: h.At, Price: h.Price})
+		older = append(older, postgres.PricePoint{RecordedAt: h.At, Price: h.Price})
+	}
+	if len(older) == 0 {
+		return // нечего дозаливать
 	}
 	if err := pm.EnsureForTimes(ctx, times); err != nil {
 		log.Warn("backfill: ensure partitions failed", "err", err, "product_id", productID)
 		return
 	}
-	n, err := histRepo.BackfillIfEmpty(ctx, productID, points)
+	n, err := histRepo.PrependOlder(ctx, productID, older)
 	if err != nil {
 		log.Warn("backfill: insert failed", "err", err, "product_id", productID)
 		return
