@@ -188,7 +188,7 @@ func run(log *slog.Logger) error {
 	)
 
 	// ── Обработчик сообщений (цены) — блокирующий основной цикл ────────────────
-	handler := makeHandler(log, registry, productRepo, priceHistoryRepo, priceCache, producer)
+	handler := makeHandler(log, registry, productRepo, priceHistoryRepo, priceCache, producer, pm)
 
 	log.Info("scraper started, waiting for tasks...")
 	return consumer.Run(ctx, handler)
@@ -201,6 +201,7 @@ func makeHandler(
 	priceHistoryRepo *postgres.PriceHistoryRepo,
 	priceCache *redisrepo.PriceCache,
 	producer *kafka.Producer,
+	pm *partition.Manager,
 ) kafka.HandlerFunc {
 	return func(ctx context.Context, msg kafka.Message) error {
 		task, err := kafka.Decode[domain.ScrapeTask](msg)
@@ -250,6 +251,13 @@ func makeHandler(
 			// взвешивает по длительности). prevPrice<=0 → первая точка по товару.
 			// Кэш последней цены обновляем ВСЕГДА — на нём держится детект снижения.
 			if prevPrice <= 0 || result.Price != prevPrice {
+				// Первая точка по товару + маркетплейс отдал свою историю (WB
+				// price-history.json) → одноразовый бэкфилл: график и «честная цена»
+				// работают сразу, без ожидания накопления. Best-effort: ошибка
+				// бэкфилла не должна валить обычную запись цены.
+				if prevPrice <= 0 && len(result.History) > 0 {
+					backfillHistory(ctx, log, pm, priceHistoryRepo, task.ProductID, result.History)
+				}
 				if err := priceHistoryRepo.Insert(ctx, task.ProductID, result.Price); err != nil {
 					return fmt.Errorf("insert price history: %w", err)
 				}
@@ -315,6 +323,39 @@ func getPrevPrice(
 
 	price, _, err := histRepo.GetLatest(ctx, productID)
 	return price, err
+}
+
+// backfillHistory заливает историческую серию маркетплейса в price_history на
+// первом скрейпе товара. Best-effort: любые ошибки логируем и идём дальше — это
+// бонус-наполнение графика, оно не должно ронять обработку задачи. Сначала
+// создаём партиции под прошлые месяцы серии, затем одноразовый BackfillIfEmpty
+// (сам ещё раз проверит, что истории нет, под advisory-lock).
+func backfillHistory(
+	ctx context.Context,
+	log *slog.Logger,
+	pm *partition.Manager,
+	histRepo *postgres.PriceHistoryRepo,
+	productID int64,
+	history []scraper.PriceHistoryPoint,
+) {
+	times := make([]time.Time, 0, len(history))
+	points := make([]postgres.PricePoint, 0, len(history))
+	for _, h := range history {
+		times = append(times, h.At)
+		points = append(points, postgres.PricePoint{RecordedAt: h.At, Price: h.Price})
+	}
+	if err := pm.EnsureForTimes(ctx, times); err != nil {
+		log.Warn("backfill: ensure partitions failed", "err", err, "product_id", productID)
+		return
+	}
+	n, err := histRepo.BackfillIfEmpty(ctx, productID, points)
+	if err != nil {
+		log.Warn("backfill: insert failed", "err", err, "product_id", productID)
+		return
+	}
+	if n > 0 {
+		log.Info("price history backfilled", "product_id", productID, "points", n)
+	}
 }
 
 func getEnv(key, fallback string) string {

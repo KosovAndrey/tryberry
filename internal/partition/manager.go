@@ -37,6 +37,25 @@ func (m *Manager) EnsurePartitions(ctx context.Context, monthsAhead int) error {
 	return nil
 }
 
+// EnsureForTimes создаёт партиции для месяцев, в которые попадают переданные
+// моменты (для бэкфилла исторических серий в прошлые месяцы). Месяцы дедупятся,
+// поэтому серия из десятков точек = единицы CREATE. Идемпотентно и гонко-безопасно.
+func (m *Manager) EnsureForTimes(ctx context.Context, times []time.Time) error {
+	seen := make(map[string]struct{}, len(times))
+	for _, t := range times {
+		t = t.UTC()
+		key := fmt.Sprintf("%d_%02d", t.Year(), t.Month())
+		if _, ok := seen[key]; ok {
+			continue
+		}
+		seen[key] = struct{}{}
+		if err := m.ensureOne(ctx, t); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 func (m *Manager) ensureOne(ctx context.Context, t time.Time) error {
 	// Начало и конец месяца
 	from := time.Date(t.Year(), t.Month(), 1, 0, 0, 0, 0, time.UTC)

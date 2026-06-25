@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	neturl "net/url"
 	"regexp"
@@ -273,19 +274,20 @@ func (s *WildberriesScraper) tryBasket(ctx context.Context, vol, part int64, art
 
 	var (
 		price          float64
+		history        []PriceHistoryPoint
 		priceErr       error
 		name, imageURL string
 		wg             sync.WaitGroup
 	)
 	wg.Add(2)
-	go func() { defer wg.Done(); price, priceErr = s.fetchBasketPrice(ctx, base) }()
+	go func() { defer wg.Done(); price, history, priceErr = s.fetchBasketPriceHistory(ctx, base) }()
 	go func() { defer wg.Done(); name, imageURL = s.fetchBasketCard(ctx, base, articleID, basket, vol, part) }()
 	wg.Wait()
 
 	if priceErr != nil {
 		return nil, priceErr
 	}
-	return &Result{Name: name, Price: price, ImageURL: imageURL, InStock: true}, nil
+	return &Result{Name: name, Price: price, ImageURL: imageURL, InStock: true, History: history}, nil
 }
 
 // basketCandidates — порядок проб номеров шарда вокруг кандидата формулы: кандидат
@@ -332,40 +334,77 @@ func (s *WildberriesScraper) fetchBasketCard(ctx context.Context, base, articleI
 	return card.Name, imageURL
 }
 
-func (s *WildberriesScraper) fetchBasketPrice(ctx context.Context, base string) (float64, error) {
+// wbHistoryMaxAge — окно бэкфилла из WB price-history.json. Файл крошечный
+// (~40 байт/точка, каданс ~недельный, обычно ≤3 мес), но прошлые точки требуют
+// своих месячных партиций — ограничиваем глубину, чтобы не плодить их без меры.
+const wbHistoryMaxAge = 180 * 24 * time.Hour
+
+// fetchBasketPriceHistory возвращает текущую цену (последняя точка) И всю
+// историческую серию из price-history.json для бэкфилла. Серия — точки строго в
+// прошлом (моложе wbHistoryMaxAge), отсортированы по времени; нулевые цены
+// пропускаем. Текущую точку в History НЕ включаем — её добавит обычный путь.
+func (s *WildberriesScraper) fetchBasketPriceHistory(ctx context.Context, base string) (float64, []PriceHistoryPoint, error) {
 	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, base+"/price-history.json", nil)
 	req.Header.Set("User-Agent", wbUserAgent)
 	resp, err := s.http.Do(req)
 	if err != nil {
-		return 0, err
+		return 0, nil, err
 	}
 	defer resp.Body.Close()
 
 	// 404 на price-history = товара нет в CDN (несуществующий/удалённый артикул)
 	if resp.StatusCode == http.StatusNotFound {
-		return 0, ErrProductNotFound
+		return 0, nil, ErrProductNotFound
 	}
 	if resp.StatusCode != http.StatusOK {
-		return 0, fmt.Errorf("price-history status %d", resp.StatusCode)
+		return 0, nil, fmt.Errorf("price-history status %d", resp.StatusCode)
 	}
 
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return 0, nil, err
+	}
+	return parseWBHistory(body, time.Now())
+}
+
+// parseWBHistory разбирает price-history.json: текущая цена = последняя точка;
+// History = все предыдущие точки в окне wbHistoryMaxAge с ненулевой ценой. dt —
+// unix-секунды. Чистая (без HTTP) — тестируется на реальном фикстуре.
+func parseWBHistory(body []byte, now time.Time) (float64, []PriceHistoryPoint, error) {
 	var history []struct {
+		Dt    int64 `json:"dt"`
 		Price struct {
 			RUB int64 `json:"RUB"`
 		} `json:"price"`
 	}
-	if err := json.NewDecoder(resp.Body).Decode(&history); err != nil {
-		return 0, err
+	if err := json.Unmarshal(body, &history); err != nil {
+		return 0, nil, err
 	}
 	if len(history) == 0 {
-		return 0, fmt.Errorf("empty price history")
+		return 0, nil, fmt.Errorf("empty price history")
 	}
 
 	raw := history[len(history)-1].Price.RUB
 	if raw == 0 {
-		return 0, fmt.Errorf("price is zero")
+		return 0, nil, fmt.Errorf("price is zero")
 	}
-	return float64(raw) / 100, nil
+	price := float64(raw) / 100
+
+	// История для бэкфилла: все точки кроме последней (она = текущая цена),
+	// в пределах окна и с ненулевой ценой.
+	cutoff := now.Add(-wbHistoryMaxAge)
+	var points []PriceHistoryPoint
+	for _, h := range history[:len(history)-1] {
+		if h.Dt == 0 || h.Price.RUB == 0 {
+			continue
+		}
+		at := time.Unix(h.Dt, 0).UTC()
+		if at.Before(cutoff) {
+			continue
+		}
+		points = append(points, PriceHistoryPoint{At: at, Price: float64(h.Price.RUB) / 100})
+	}
+	return price, points, nil
 }
 
 const wbUserAgent = "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"

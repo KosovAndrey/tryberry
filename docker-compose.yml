@@ -120,6 +120,8 @@ services:
       WEBHOOK_ENABLED: "${WEBHOOK_ENABLED:-false}"
       OTLP_ENDPOINT: "jaeger:4317"
       PORT: "8081"
+      # Базовый публичный URL для canonical/OG/sitemap страниц графиков (/p/).
+      PUBLIC_BASE_URL: "${PUBLIC_BASE_URL:-https://tryberry.ru}"
       ADMIN_IDS: "${ADMIN_IDS}"
       SCRAPE_INTERVAL_MINUTES: "10"
       # Egress к Telegram через WireGuard (wg-proxy + tinyproxy). Внутренние

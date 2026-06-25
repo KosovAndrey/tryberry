@@ -25,6 +25,7 @@ type User struct {
 
 type Product struct {
 	ID          int64
+	PublicID    string // стабильный токен для публичной страницы графика (/p/<public_id>)
 	URL         string
 	Name        string
 	ImageURL    string

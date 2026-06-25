@@ -109,6 +109,61 @@ func (r *ProductRepo) GetByID(ctx context.Context, id int64) (*domain.Product, e
 	return p, nil
 }
 
+// GetByPublicID — резолв товара по публичному токену (страница графика /p/<public_id>).
+// Read-only путь для сервиса api; отдаёт и in_stock для блока «снова в наличии».
+func (r *ProductRepo) GetByPublicID(ctx context.Context, publicID string) (*domain.Product, bool, error) {
+	const q = `
+		SELECT id, public_id, url, name, image_url, marketplace, in_stock, created_at, updated_at
+		FROM products WHERE public_id = $1`
+
+	p := &domain.Product{}
+	var inStock bool
+	err := r.db.QueryRow(ctx, q, publicID).
+		Scan(&p.ID, &p.PublicID, &p.URL, &p.Name, &p.ImageURL, &p.Marketplace, &inStock, &p.CreatedAt, &p.UpdatedAt)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return nil, false, domain.ErrNotFound
+	}
+	if err != nil {
+		return nil, false, err
+	}
+	return p, inStock, nil
+}
+
+// SitemapEntry — строка для sitemap.xml публичных страниц графиков.
+type SitemapEntry struct {
+	PublicID  string
+	Name      string
+	UpdatedAt time.Time
+}
+
+// ListPublicForSitemap — товары, у которых есть история цены (значит странице
+// графика есть что показать). Кап limit защищает размер sitemap; при росте
+// каталога переведём на пагинацию (sitemap index).
+func (r *ProductRepo) ListPublicForSitemap(ctx context.Context, limit int) ([]SitemapEntry, error) {
+	const q = `
+		SELECT p.public_id, p.name, p.updated_at
+		FROM products p
+		WHERE EXISTS (SELECT 1 FROM price_history ph WHERE ph.product_id = p.id)
+		ORDER BY p.updated_at DESC
+		LIMIT $1`
+
+	rows, err := r.db.Query(ctx, q, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var out []SitemapEntry
+	for rows.Next() {
+		var e SitemapEntry
+		if err := rows.Scan(&e.PublicID, &e.Name, &e.UpdatedAt); err != nil {
+			return nil, err
+		}
+		out = append(out, e)
+	}
+	return out, rows.Err()
+}
+
 // UpdateScrapedData обновляет имя/картинку/наличие товара и возвращает ПРЕДЫДУЩЕЕ
 // значение in_stock — notifier по переходу wasInStock(false)→inStock(true) шлёт
 // уведомление «снова в наличии» (триггер back_in_stock).

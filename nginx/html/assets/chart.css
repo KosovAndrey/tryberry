@@ -1,0 +1,134 @@
+/* TryBerry — страница истории цены. Бренд лендинга, возведённый в качество:
+   тезис страницы — ВЕРДИКТ честной цены (выгодно / обычно / дороже), график
+   доказывает его опорными линиями «минимум» и «обычная». */
+
+:root{
+  --ink:#150611; --ink-2:#210a1a; --plum:#3a0f2b;
+  --cream:#f9f3ef; --cream-dim:#d8c6cf;
+  --berry:#e8336c; --berry-bright:#ff5d8f;
+  --muted:#a07f8e; --muted-2:#7d5f6e;
+  --line:rgba(232,51,108,.14);
+  --good:#3fe0a8; --gold:#ffc24a; --alert:#ff6699;
+  --font-display:'Unbounded',sans-serif; --font-body:'Onest',sans-serif;
+  --maxw:760px;
+  --accent:var(--muted); /* перекрывается классом вердикта на body */
+}
+*{margin:0;padding:0;box-sizing:border-box}
+html{-webkit-text-size-adjust:100%}
+body{
+  font-family:var(--font-body);
+  color:var(--cream);
+  background:
+    radial-gradient(120% 70% at 50% -10%, rgba(232,51,108,.16), transparent 60%),
+    var(--ink);
+  background-attachment:fixed;
+  line-height:1.5;-webkit-font-smoothing:antialiased;
+  min-height:100vh;display:flex;flex-direction:column;
+}
+a{color:inherit;text-decoration:none}
+img{display:block;max-width:100%}
+::selection{background:var(--berry);color:#fff}
+
+/* вердикт → семантический акцент всей страницы */
+body.v-good{--accent:var(--good)}
+body.v-typical{--accent:var(--gold)}
+body.v-high{--accent:var(--alert)}
+body.v-none{--accent:var(--muted)}
+
+.grain{position:fixed;inset:0;pointer-events:none;z-index:99;opacity:.035;mix-blend-mode:overlay;
+  background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='160' height='160'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='.8' numOctaves='3'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E")}
+
+/* ── topbar ── */
+.topbar{display:flex;align-items:center;justify-content:space-between;
+  padding:16px clamp(18px,5vw,32px)}
+.brand{display:flex;align-items:center;gap:9px;font-family:var(--font-display);font-weight:600;font-size:1rem;letter-spacing:-.01em}
+.brand img{border-radius:7px}
+.topcta{font-size:.82rem;font-weight:600;color:var(--cream-dim);
+  border:1px solid var(--line);border-radius:999px;padding:7px 15px;transition:.16s}
+.topcta:hover{color:#fff;border-color:var(--berry);background:rgba(232,51,108,.1)}
+
+.wrap{width:100%;max-width:var(--maxw);margin:0 auto;
+  padding:clamp(8px,3vw,20px) clamp(18px,5vw,32px) 40px;flex:1}
+
+/* ── hero / verdict (тезис) ── */
+.hero{padding:clamp(16px,4vw,30px) 0 22px}
+.hero__meta{display:flex;gap:8px;flex-wrap:wrap;margin-bottom:16px}
+.badge{font-size:.72rem;font-weight:600;letter-spacing:.01em;padding:4px 11px;border-radius:999px;
+  background:rgba(255,255,255,.05);border:1px solid var(--line);color:var(--cream-dim)}
+.badge--ozon{color:#8db4ff;border-color:rgba(141,180,255,.3)}
+.badge--wildberries{color:#d08bff;border-color:rgba(208,139,255,.3)}
+.badge--yandex_market{color:#ffd24a;border-color:rgba(255,210,74,.3)}
+.badge--aliexpress{color:#ff8a6a;border-color:rgba(255,138,106,.3)}
+.badge--oos{color:#ff9aae;border-color:rgba(255,154,174,.35)}
+
+.hero__name{font-family:var(--font-display);font-weight:500;
+  font-size:clamp(1.15rem,3.4vw,1.6rem);line-height:1.25;letter-spacing:-.01em;
+  color:var(--cream);margin-bottom:24px;max-width:34ch}
+
+.verdict{display:grid;grid-template-columns:1fr auto;align-items:center;gap:clamp(14px,3vw,22px);
+  background:linear-gradient(180deg,var(--ink-2),rgba(33,10,26,.4));
+  border:1px solid var(--line);border-radius:18px;
+  padding:clamp(18px,3.4vw,24px) clamp(18px,3.4vw,26px);position:relative;overflow:hidden}
+.verdict::before{content:"";position:absolute;inset:0 auto 0 0;width:4px;background:var(--accent)}
+.verdict__title{font-family:var(--font-display);font-weight:700;
+  font-size:clamp(1.3rem,4.6vw,1.95rem);line-height:1.05;color:var(--accent);letter-spacing:-.015em}
+.verdict__note{margin-top:6px;font-size:.9rem;color:var(--cream-dim);max-width:40ch}
+.verdict__price{text-align:right;display:flex;flex-direction:column;gap:3px;align-items:flex-end}
+.verdict__price-label{font-size:.68rem;text-transform:uppercase;letter-spacing:.12em;color:var(--muted)}
+.verdict__price-value{font-family:var(--font-display);font-weight:700;
+  font-size:clamp(1.5rem,5.4vw,2.3rem);color:#fff;font-feature-settings:"tnum" 1;line-height:1;white-space:nowrap}
+
+/* ── chart panel ── */
+.panel{background:rgba(33,10,26,.45);border:1px solid var(--line);border-radius:18px;
+  padding:clamp(14px,3vw,20px);margin-top:14px}
+.ranges{display:flex;gap:6px;flex-wrap:wrap;margin-bottom:14px}
+.ranges button{font-family:var(--font-body);font-size:.8rem;font-weight:600;color:var(--muted);
+  background:transparent;border:1px solid var(--line);border-radius:999px;padding:7px 14px;cursor:pointer;transition:.14s}
+.ranges button:hover{color:var(--cream)}
+.ranges button.active{color:#150611;background:var(--cream);border-color:var(--cream)}
+.ranges button:focus-visible{outline:2px solid var(--berry-bright);outline-offset:2px}
+.chart{width:100%;height:340px}
+.empty{padding:54px 16px;text-align:center;color:var(--muted)}
+
+.reflegend{display:flex;gap:16px;flex-wrap:wrap;margin-top:14px;
+  font-size:.78rem;color:var(--cream-dim);font-feature-settings:"tnum" 1}
+.reflegend__item{display:inline-flex;align-items:center;gap:7px}
+.reflegend__item::before{content:"";width:16px;height:0;border-top:2px dashed currentColor;opacity:.9}
+.reflegend__item--min{color:var(--good)}
+.reflegend__item--usual{color:var(--gold)}
+
+/* ── facts ── */
+.facts{display:grid;grid-template-columns:repeat(3,1fr);gap:1px;margin-top:14px;
+  background:var(--line);border:1px solid var(--line);border-radius:14px;overflow:hidden}
+.fact{background:var(--ink);padding:14px 16px;display:flex;flex-direction:column;gap:5px}
+.fact__k{font-size:.72rem;color:var(--muted);letter-spacing:.01em}
+.fact__v{font-family:var(--font-display);font-weight:500;font-size:1.02rem;color:var(--cream);font-feature-settings:"tnum" 1}
+
+/* ── actions ── */
+.actions{margin-top:26px}
+.open{display:inline-flex;align-items:center;gap:9px;font-family:var(--font-display);font-weight:500;font-size:.95rem;
+  background:var(--berry);color:#fff;padding:14px 24px;border-radius:13px;transition:.16s}
+.open:hover{background:var(--berry-bright);transform:translateY(-1px)}
+.open:focus-visible{outline:2px solid var(--berry-bright);outline-offset:3px}
+.src{margin-top:14px;font-size:.78rem;color:var(--muted-2);max-width:52ch}
+.disclaimer{margin-top:26px;font-size:.78rem;color:var(--muted-2);max-width:56ch}
+
+/* ── footer ── */
+.foot{padding:26px;text-align:center;font-size:.8rem;color:var(--muted);
+  display:flex;gap:10px;justify-content:center;align-items:center;border-top:1px solid var(--line)}
+.foot a:hover{color:var(--cream)}
+.foot span{opacity:.4}
+
+/* ── uPlot dark ── */
+.u-wrap,.uplot{font-family:var(--font-body)!important}
+.u-axis{color:var(--muted)}
+.u-legend{display:none}
+
+@media (max-width:600px){
+  .verdict{grid-template-columns:1fr;row-gap:16px}
+  .verdict__price{grid-column:1 / -1;flex-direction:row;align-items:baseline;justify-content:space-between;text-align:left;
+    border-top:1px solid var(--line);padding-top:14px}
+  .chart{height:280px}
+  .facts{grid-template-columns:1fr}
+}
+@media (prefers-reduced-motion:reduce){*{transition:none!important;animation:none!important}}
