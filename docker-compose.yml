@@ -173,6 +173,8 @@ services:
       TELEGRAM_BOT_TOKEN: "${TELEGRAM_BOT_TOKEN}"
       BOT_WORKER_HEALTH_PORT: "8093"
       OTLP_ENDPOINT: "jaeger:4317"
+      # Базовый публичный URL сайта — для кнопки «📈 График цены» (ссылка на /p/).
+      PUBLIC_BASE_URL: "${PUBLIC_BASE_URL:-https://tryberry.ru}"
       # Egress к Telegram (ответы) через WireGuard (wg-proxy + tinyproxy).
       # api.vk.com — мимо прокси: VK доступен с RU-VM напрямую.
       HTTPS_PROXY: "http://xray:8888"

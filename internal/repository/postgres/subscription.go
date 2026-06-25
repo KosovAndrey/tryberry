@@ -120,6 +120,7 @@ func (r *SubscriptionRepo) GetActiveByUserID(ctx context.Context, userID int64) 
 		       s.active, s.created_at, s.updated_at,
 		       p.name, p.url,
 		       COALESCE(p.image_url, ''),
+		       p.public_id,
 		       p.marketplace,
 		       COALESCE((
 		           SELECT ph.price FROM price_history ph
@@ -146,6 +147,7 @@ func (r *SubscriptionRepo) GetActiveByUserID(ctx context.Context, userID int64) 
 			&s.TriggerType, &s.TargetPrice, &s.DiscountPct, &s.Notified,
 			&s.Active, &s.CreatedAt, &s.UpdatedAt,
 			&s.ProductName, &s.ProductURL, &s.ProductImageURL,
+			&s.ProductPublicID,
 			&s.ProductMarketplace,
 			&s.CurrentPrice,
 		); err != nil {
