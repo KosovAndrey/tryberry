@@ -1,0 +1,98 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Спасибо за покупку — TryBerry</title>
+<meta name="robots" content="noindex,follow">
+<meta name="theme-color" content="#170711">
+<meta property="og:title" content="Спасибо за покупку — TryBerry">
+<meta property="og:description" content="Оплата принята. Возвращайся в бота — он пришлёт подтверждение.">
+<link rel="icon" href="/logo.png">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Unbounded:wght@400;500;600;700&family=Onest:wght@300;400;500;600&display=swap" rel="stylesheet">
+<style>
+  :root{
+    --ink:#170711; --ink-2:#250b1c; --plum:#3a0f2b; --cream:#f9f3ef;
+    --cream-2:#f2e8e1; --berry:#e8336c; --berry-bright:#ff5d8f; --berry-deep:#a01651;
+    --muted:#a07f8e; --good:#3fe0a8; --vk:#0077ff;
+    --font-display:'Unbounded',system-ui,sans-serif;
+    --font-body:'Onest',system-ui,sans-serif;
+  }
+  *{box-sizing:border-box}
+  html,body{margin:0;height:100%}
+  body{
+    font-family:var(--font-body); background:var(--ink); color:var(--cream);
+    -webkit-font-smoothing:antialiased; display:flex; min-height:100%;
+    align-items:center; justify-content:center; padding:24px;
+    background-image:radial-gradient(70% 60% at 50% -10%, rgba(232,51,108,.18), transparent 70%);
+  }
+  ::selection{background:var(--berry);color:#fff}
+  .card{
+    width:100%; max-width:460px; text-align:center;
+    background:linear-gradient(180deg,var(--ink-2),var(--plum-deep,#260a1d));
+    border:1px solid rgba(232,51,108,.16); border-radius:28px;
+    padding:48px 32px 36px; box-shadow:0 30px 80px rgba(0,0,0,.45);
+  }
+  .mark{
+    font-size:54px; line-height:1; margin-bottom:18px;
+    animation:pop .5s cubic-bezier(.2,.9,.3,1.3) both;
+  }
+  .eyebrow{
+    font-family:var(--font-display); font-weight:500; font-size:.7rem;
+    letter-spacing:.28em; text-transform:uppercase; color:var(--berry-bright);
+    margin-bottom:14px;
+  }
+  h1{
+    font-family:var(--font-display); font-weight:600; font-size:2rem;
+    margin:0 0 14px; letter-spacing:-.01em;
+  }
+  p.lead{ color:var(--cream); opacity:.82; font-size:1.02rem; line-height:1.55; margin:0 auto 30px; max-width:36ch }
+  .btns{ display:flex; flex-direction:column; gap:12px; margin-bottom:22px }
+  .btn{
+    display:flex; align-items:center; justify-content:center; gap:10px;
+    padding:15px 22px; border-radius:16px; font-family:var(--font-display);
+    font-weight:500; font-size:1rem; text-decoration:none; transition:transform .2s, box-shadow .2s, background .2s;
+    border:1px solid transparent;
+  }
+  .btn:focus-visible{ outline:3px solid var(--berry-bright); outline-offset:3px }
+  .btn-tg{ background:var(--berry); color:#fff; box-shadow:0 12px 34px rgba(232,51,108,.4) }
+  .btn-tg:hover{ transform:translateY(-2px); box-shadow:0 18px 44px rgba(232,51,108,.5) }
+  .btn-vk{ background:transparent; color:var(--cream); border-color:rgba(255,255,255,.18) }
+  .btn-vk:hover{ transform:translateY(-2px); border-color:var(--vk); color:#fff; background:rgba(0,119,255,.12) }
+  .btn svg{ width:20px; height:20px; flex:0 0 auto }
+  .note{ font-size:.86rem; color:var(--muted); line-height:1.5; margin:0 }
+  .brand{
+    display:inline-flex; align-items:center; gap:8px; margin-top:28px;
+    font-family:var(--font-display); font-weight:700; font-size:.95rem; color:var(--cream); opacity:.6; text-decoration:none;
+  }
+  .brand img{ width:22px; height:22px; border-radius:6px }
+  @keyframes pop{ from{transform:scale(.4);opacity:0} to{transform:scale(1);opacity:1} }
+  @media (prefers-reduced-motion:reduce){ *{animation:none!important;transition:none!important} }
+</style>
+</head>
+<body>
+  <main class="card">
+    <div class="mark">🍓</div>
+    <div class="eyebrow">Оплата принята</div>
+    <h1>Спасибо!</h1>
+    <p class="lead">Если оплата прошла, тариф уже активируется — бот пришлёт подтверждение в чат. Возвращайся, чтобы продолжить следить за ценами:</p>
+
+    <div class="btns">
+      <a class="btn btn-tg" href="https://t.me/TryBerryBot" target="_blank" rel="noopener">
+        <svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M21.94 4.3 18.9 19.1c-.23 1.02-.84 1.27-1.7.79l-4.7-3.47-2.27 2.18c-.25.25-.46.46-.94.46l.34-4.78 8.7-7.86c.38-.34-.08-.53-.59-.19L6.7 13.1l-4.64-1.45c-1.01-.32-1.03-1.01.21-1.5L20.64 2.9c.84-.31 1.57.2 1.3 1.4Z"/></svg>
+        Открыть в Telegram
+      </a>
+      <a class="btn btn-vk" href="https://vk.com/tryberrybot" target="_blank" rel="noopener">
+        <svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M13.16 16.6c-5.07 0-7.96-3.48-8.08-9.26h2.54c.08 4.25 1.96 6.05 3.45 6.42V7.34h2.39v3.66c1.47-.16 3.01-1.84 3.53-3.66h2.39c-.4 2.24-2.08 3.92-3.27 4.61 1.19.56 3.1 2.02 3.83 4.65h-2.63c-.57-1.78-1.98-3.16-3.85-3.35v3.35h-.29Z"/></svg>
+        Открыть во ВКонтакте
+      </a>
+    </div>
+
+    <p class="note">Подтверждение оплаты придёт в того бота, через которого ты покупал(а) тариф.</p>
+
+    <a class="brand" href="https://tryberry.ru"><img src="/logo.png" alt="">TryBerry</a>
+  </main>
+</body>
+</html>
