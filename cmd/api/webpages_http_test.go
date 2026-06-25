@@ -57,7 +57,8 @@ func newTestHandlers(t *testing.T) *WebHandlers {
 	t.Helper()
 	now := time.Now()
 	prod := &domain.Product{ID: 7, PublicID: "abcdef012345", URL: "https://ozon.ru/p/x",
-		Name: "Наушники", Marketplace: "ozon", CreatedAt: now.AddDate(0, 0, -120), UpdatedAt: now}
+		Name: "Наушники", ImageURL: "https://cdn.example/img.webp", Marketplace: "ozon",
+		CreatedAt: now.AddDate(0, 0, -120), UpdatedAt: now}
 	pts := []postgres.PricePoint{
 		{RecordedAt: now.AddDate(0, 0, -90), Price: 1500},
 		{RecordedAt: now.AddDate(0, 0, -10), Price: 1299},
@@ -104,6 +105,12 @@ func TestProductPage_OK(t *testing.T) {
 	// JS-контексте обрамляет числа пробелами — проверяем по наличию значений).
 	if !strings.Contains(body, "refs:{min:") || !strings.Contains(body, "990") || !strings.Contains(body, "1399") {
 		t.Error("reference values (min/usual) not injected into chart bootstrap")
+	}
+	// Картинка товара рендерится (с хотлинк-защитой no-referrer).
+	if !strings.Contains(body, `id="prodimg"`) ||
+		!strings.Contains(body, "https://cdn.example/img.webp") ||
+		!strings.Contains(body, `referrerpolicy="no-referrer"`) {
+		t.Error("product image not rendered with expected attributes")
 	}
 }
 

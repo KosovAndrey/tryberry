@@ -9,6 +9,20 @@
   var elChart = document.getElementById("chart");
   var elEmpty = document.getElementById("empty");
   var btns = Array.prototype.slice.call(document.querySelectorAll(".ranges button"));
+
+  // Картинка товара хотлинкится с CDN маркетплейса и может быть битой/заблокированной
+  // по Referer — тогда прячем бокс, чтобы не показывать «сломанный» значок.
+  (function () {
+    var img = document.getElementById("prodimg");
+    if (!img) return;
+    function hide() {
+      var box = document.getElementById("prodimg-box");
+      if (box) box.style.display = "none";
+    }
+    img.addEventListener("error", hide);
+    if (img.complete && img.naturalWidth === 0) hide();
+  })();
+
   if (!elChart || typeof uPlot === "undefined") return;
 
   var BERRY = "#e8336c", BERRY_HI = "#ff5d8f", MUTED = "#a07f8e",
