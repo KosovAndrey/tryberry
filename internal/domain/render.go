@@ -201,6 +201,9 @@ var searchFilterParams = map[string]bool{
 	"fbrand": true, "fsupplier": true, "fcolor": true,
 	// Ozon: бренд/цена, если попадают в query (обычно у Ozon фильтр в пути).
 	"brand": true,
+	// AliExpress: выбранные фасеты (размер/цвет — пары propertyId-valueId через «;»)
+	// и бренд. Голый поиск их не содержит.
+	"pvid": true, "brandvalueids": true,
 }
 
 // wbFacetRe — фасетный фильтр Wildberries вида f204557=... (числовой id предмета/

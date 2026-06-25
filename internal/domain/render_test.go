@@ -43,6 +43,10 @@ func TestSearchHasSiteFilter(t *testing.T) {
 		"https://www.ozon.ru/search/?text=наушники&brand=apple":                               true,
 		// Ozon: выбран бренд (второй slug-сегмент под /category/) — фильтр есть.
 		"https://www.ozon.ru/category/aksessuary-7697/calvin-klein-72378013/?text=кепка": true,
+		// AliExpress: фасеты в pvid (размер/цвет) и бренд в brandValueIds — фильтр есть.
+		"https://aliexpress.ru/wholesale?SearchText=шорты&pvid=13428-1937&g=y&searchInfo=ABC":                  true,
+		"https://aliexpress.ru/wholesale?SearchText=шорты&pvid=13428-1937%3B13428-8324&g=y&spellChecked=true":  true,
+		"https://aliexpress.ru/wholesale?SearchText=шорты&brandValueIds=1609-142707&pvid=13428-1938&g=y":       true,
 	}
 	for in, want := range cases {
 		if got := SearchHasSiteFilter(in); got != want {
