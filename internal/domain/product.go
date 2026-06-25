@@ -74,6 +74,7 @@ type Subscription struct {
 	ProductName     string
 	ProductURL      string
 	ProductImageURL string
+	ProductPublicID string // для ссылки на страницу графика /p/<public_id>
 	CurrentPrice    float64
 }
 

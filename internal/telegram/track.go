@@ -65,14 +65,14 @@ func (b *Bot) clearTrackFSM(ctx context.Context, tgID int64) {
 
 // trackTriggerKeyboard — клавиатура выбора стратегии под сообщением товара.
 // Текущая стратегия помечается галочкой. Снизу — переходы в меню.
-func trackTriggerKeyboard(subID int64, current domain.TriggerType) tgbotapi.InlineKeyboardMarkup {
+func trackTriggerKeyboard(subID int64, current domain.TriggerType, chartURL string) tgbotapi.InlineKeyboardMarkup {
 	mark := func(label string, t domain.TriggerType) string {
 		if current == t {
 			return "✅ " + label
 		}
 		return label
 	}
-	return tgbotapi.NewInlineKeyboardMarkup(
+	rows := [][]tgbotapi.InlineKeyboardButton{
 		tgbotapi.NewInlineKeyboardRow(
 			tgbotapi.NewInlineKeyboardButtonData(
 				mark("🔻 Любое снижение", domain.TriggerAnyDrop),
@@ -86,10 +86,26 @@ func trackTriggerKeyboard(subID int64, current domain.TriggerType) tgbotapi.Inli
 				mark("％ Скидка %", domain.TriggerDiscountPct),
 				fmt.Sprintf("ptrack:%d:disc", subID)),
 		),
-		tgbotapi.NewInlineKeyboardRow(
-			tgbotapi.NewInlineKeyboardButtonData("📋 Мои подписки", "menu:list"),
-			tgbotapi.NewInlineKeyboardButtonData("◀️ В меню", "menu:main"),
-		),
+	}
+	if row := chartButtonRow(chartURL); row != nil {
+		rows = append(rows, row)
+	}
+	rows = append(rows, tgbotapi.NewInlineKeyboardRow(
+		tgbotapi.NewInlineKeyboardButtonData("📋 Мои подписки", "menu:list"),
+		tgbotapi.NewInlineKeyboardButtonData("◀️ В меню", "menu:main"),
+	))
+	return tgbotapi.NewInlineKeyboardMarkup(rows...)
+}
+
+// chartButtonRow — строка с кнопкой «📈 График цены» (URL на /p/<public_id>), либо
+// nil, если ссылка не сконфигурирована. Telegram отклоняет всю клавиатуру при
+// битом URL, поэтому пустую ссылку не добавляем.
+func chartButtonRow(chartURL string) []tgbotapi.InlineKeyboardButton {
+	if chartURL == "" {
+		return nil
+	}
+	return tgbotapi.NewInlineKeyboardRow(
+		tgbotapi.NewInlineKeyboardButtonURL("📈 График цены", chartURL),
 	)
 }
 
@@ -98,7 +114,7 @@ func trackTriggerKeyboard(subID int64, current domain.TriggerType) tgbotapi.Inli
 // (back_in_stock, выбран по умолчанию → галочка). below_target/discount_pct
 // показываем только при известной last-цене (hasPrice): без опорной цены
 // процент скидки считать не от чего.
-func trackOOSKeyboard(subID int64, hasPrice bool) tgbotapi.InlineKeyboardMarkup {
+func trackOOSKeyboard(subID int64, hasPrice bool, chartURL string) tgbotapi.InlineKeyboardMarkup {
 	rows := [][]tgbotapi.InlineKeyboardButton{
 		{tgbotapi.NewInlineKeyboardButtonData(
 			"✅ 🔔 Когда появится в наличии",
@@ -116,6 +132,9 @@ func trackOOSKeyboard(subID int64, hasPrice bool) tgbotapi.InlineKeyboardMarkup 
 			tgbotapi.NewInlineKeyboardButtonData(
 				"📉 Ниже цены", fmt.Sprintf("ptrack:%d:below", subID)),
 		})
+	}
+	if row := chartButtonRow(chartURL); row != nil {
+		rows = append(rows, row)
 	}
 	rows = append(rows, []tgbotapi.InlineKeyboardButton{
 		tgbotapi.NewInlineKeyboardButtonData("📋 Мои подписки", "menu:list"),
@@ -157,7 +176,7 @@ func (b *Bot) handleTrackTriggerCallback(ctx context.Context, cb *tgbotapi.Callb
 		}
 		b.editMenu(chatID, cb.Message.MessageID,
 			"🔔 Тип уведомления: "+domain.TriggerDescription(domain.TriggerAnyDrop, nil, nil),
-			trackTriggerKeyboard(subID, domain.TriggerAnyDrop))
+			trackTriggerKeyboard(subID, domain.TriggerAnyDrop, b.chartURLForSub(ctx, subID)))
 		b.answerCallback(cb.ID, "Готово")
 
 	case "stock":
@@ -175,7 +194,7 @@ func (b *Bot) handleTrackTriggerCallback(ctx context.Context, cb *tgbotapi.Callb
 		}
 		b.editMenu(chatID, cb.Message.MessageID,
 			"🔔 Тип уведомления: "+domain.TriggerDescription(domain.TriggerBackInStock, nil, nil),
-			trackOOSKeyboard(subID, hasPrice))
+			trackOOSKeyboard(subID, hasPrice, b.chartURLForSub(ctx, subID)))
 		b.answerCallback(cb.ID, "Готово")
 
 	case "below":
@@ -242,7 +261,7 @@ func (b *Bot) handleTrackThreshold(ctx context.Context, chatID, tgID int64, text
 			b.reply(chatID, "Произошла ошибка, попробуй позже.")
 			return
 		}
-		b.confirmTrackTrigger(chatID, fsm.SubID, domain.TriggerBelowTarget, &price, nil)
+		b.confirmTrackTrigger(ctx, chatID, fsm.SubID, domain.TriggerBelowTarget, &price, nil)
 
 	case domain.TriggerDiscountPct:
 		pct, err := domain.ParsePct(text)
@@ -256,7 +275,7 @@ func (b *Bot) handleTrackThreshold(ctx context.Context, chatID, tgID int64, text
 			b.reply(chatID, "Произошла ошибка, попробуй позже.")
 			return
 		}
-		b.confirmTrackTrigger(chatID, fsm.SubID, domain.TriggerDiscountPct, nil, &pct)
+		b.confirmTrackTrigger(ctx, chatID, fsm.SubID, domain.TriggerDiscountPct, nil, &pct)
 
 	default:
 		b.clearTrackFSM(ctx, tgID)
@@ -264,10 +283,10 @@ func (b *Bot) handleTrackThreshold(ctx context.Context, chatID, tgID int64, text
 	}
 }
 
-func (b *Bot) confirmTrackTrigger(chatID, subID int64, t domain.TriggerType, target *float64, pct *int16) {
+func (b *Bot) confirmTrackTrigger(ctx context.Context, chatID, subID int64, t domain.TriggerType, target *float64, pct *int16) {
 	m := tgbotapi.NewMessage(chatID, "✅ <b>Готово!</b> "+domain.TriggerDescription(t, target, pct))
 	m.ParseMode = "HTML"
-	kb := trackTriggerKeyboard(subID, t)
+	kb := trackTriggerKeyboard(subID, t, b.chartURLForSub(ctx, subID))
 	m.ReplyMarkup = kb
 	b.send(m)
 }
@@ -338,7 +357,7 @@ func (b *Bot) handleTrackTargetCallback(ctx context.Context, cb *tgbotapi.Callba
 		b.answerCallback(cb.ID, "Ошибка, попробуй позже")
 		return
 	}
-	b.confirmTrackTrigger(chatID, subID, domain.TriggerBelowTarget, &price, nil)
+	b.confirmTrackTrigger(ctx, chatID, subID, domain.TriggerBelowTarget, &price, nil)
 	b.answerCallback(cb.ID, "Готово")
 }
 
@@ -395,21 +414,22 @@ func (b *Bot) buildListView(subs []*domain.Subscription) (string, tgbotapi.Inlin
 
 	var rows [][]tgbotapi.InlineKeyboardButton
 	for i, sub := range subs {
-		cancel := tgbotapi.NewInlineKeyboardButtonData(
-			fmt.Sprintf("❌ Отменить #%d", i+1),
-			fmt.Sprintf("untrack:%d", sub.ID),
-		)
+		var row []tgbotapi.InlineKeyboardButton
 		// URL-кнопку добавляем ТОЛЬКО при валидной ссылке: Telegram отклоняет ВСЮ
 		// клавиатуру, если хоть один URL битый (в БД встречаются записи вида
 		// «Название\nссылка»). Битый URL → строка только с кнопкой отмены.
 		if u := safeButtonURL(sub.ProductURL); u != "" {
-			rows = append(rows, tgbotapi.NewInlineKeyboardRow(
-				tgbotapi.NewInlineKeyboardButtonURL(fmt.Sprintf("🔗 #%d %s", i+1, truncate(sub.ProductName, 20)), u),
-				cancel,
-			))
-		} else {
-			rows = append(rows, tgbotapi.NewInlineKeyboardRow(cancel))
+			row = append(row, tgbotapi.NewInlineKeyboardButtonURL(
+				fmt.Sprintf("🔗 #%d %s", i+1, truncate(sub.ProductName, 16)), u))
 		}
+		if cu := b.chartURL(sub.ProductPublicID); cu != "" {
+			row = append(row, tgbotapi.NewInlineKeyboardButtonURL(fmt.Sprintf("📈 #%d", i+1), cu))
+		}
+		row = append(row, tgbotapi.NewInlineKeyboardButtonData(
+			fmt.Sprintf("❌ Отменить #%d", i+1),
+			fmt.Sprintf("untrack:%d", sub.ID),
+		))
+		rows = append(rows, row)
 	}
 
 	rows = append(rows, tgbotapi.NewInlineKeyboardRow(
@@ -611,7 +631,7 @@ func (b *Bot) doTrack(ctx context.Context, chatID int64, rawURL string, user *do
 		// 3 стратегии как у обычного товара, но «любое снижение» → «в наличии».
 		// below_target/discount_pct показываем только при известной last-цене
 		// (есть опора): без неё процент скидки считать не от чего.
-		kb := trackOOSKeyboard(sub.ID, result.Price > 0)
+		kb := trackOOSKeyboard(sub.ID, result.Price > 0, b.chartURL(product.PublicID))
 		edit := tgbotapi.NewEditMessageText(chatID, sent.MessageID, text)
 		edit.ParseMode = "HTML"
 		edit.ReplyMarkup = &kb
@@ -652,7 +672,7 @@ func (b *Bot) doTrack(ctx context.Context, chatID int64, rawURL string, user *do
 		)
 	}
 
-	keyboard := trackTriggerKeyboard(sub.ID, domain.TriggerAnyDrop)
+	keyboard := trackTriggerKeyboard(sub.ID, domain.TriggerAnyDrop, b.chartURL(product.PublicID))
 
 	edit := tgbotapi.NewEditMessageText(chatID, sent.MessageID, responseText)
 	edit.ParseMode = "HTML"

@@ -79,12 +79,12 @@ func (r *ProductRepo) Upsert(ctx context.Context, url, name, imageURL, marketpla
 			    image_url   = EXCLUDED.image_url,
 			    marketplace = EXCLUDED.marketplace,
 			    updated_at  = NOW()
-		RETURNING id, url, name, image_url, marketplace, created_at, updated_at`
+		RETURNING id, public_id, url, name, image_url, marketplace, created_at, updated_at`
 
 	p := &domain.Product{}
 	err := withSpan(ctx, "upsert_product", func(ctx context.Context) error {
 		return r.db.QueryRow(ctx, q, url, name, imageURL, marketplace).
-			Scan(&p.ID, &p.URL, &p.Name, &p.ImageURL, &p.Marketplace, &p.CreatedAt, &p.UpdatedAt)
+			Scan(&p.ID, &p.PublicID, &p.URL, &p.Name, &p.ImageURL, &p.Marketplace, &p.CreatedAt, &p.UpdatedAt)
 	})
 	if err != nil {
 		return nil, err
@@ -94,12 +94,12 @@ func (r *ProductRepo) Upsert(ctx context.Context, url, name, imageURL, marketpla
 
 func (r *ProductRepo) GetByID(ctx context.Context, id int64) (*domain.Product, error) {
 	const q = `
-		SELECT id, url, name, image_url, marketplace, created_at, updated_at
+		SELECT id, public_id, url, name, image_url, marketplace, created_at, updated_at
 		FROM products WHERE id = $1`
 
 	p := &domain.Product{}
 	err := r.db.QueryRow(ctx, q, id).
-		Scan(&p.ID, &p.URL, &p.Name, &p.ImageURL, &p.Marketplace, &p.CreatedAt, &p.UpdatedAt)
+		Scan(&p.ID, &p.PublicID, &p.URL, &p.Name, &p.ImageURL, &p.Marketplace, &p.CreatedAt, &p.UpdatedAt)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, domain.ErrNotFound
 	}

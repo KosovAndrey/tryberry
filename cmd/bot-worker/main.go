@@ -159,6 +159,7 @@ func run(log *slog.Logger) error {
 			botToken, log, userRepo, subRepo, prodRepo, priceHistoryRepo, registry,
 			searchQueryRepo, searchSubRepo, promoRepo, referralRepo, redisClient, parseAdminIDs(getEnv("ADMIN_IDS", "")),
 			getEnv("VK_BOT_URL", ""),
+			getEnv("PUBLIC_BASE_URL", "https://tryberry.ru"),
 		)
 	})
 	if err != nil {

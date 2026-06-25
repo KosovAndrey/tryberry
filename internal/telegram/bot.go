@@ -45,6 +45,36 @@ type Bot struct {
 	billing   *postgres.BillingSubscriptionRepo
 
 	adminIDs map[int64]bool // кто может выдавать тарифы
+
+	// chartBaseURL — базовый публичный URL сайта (PUBLIC_BASE_URL) для кнопки
+	// «📈 График цены» → chartBaseURL + "/p/" + product.PublicID. "" → кнопку не показываем.
+	chartBaseURL string
+}
+
+// chartURL собирает ссылку на публичную страницу графика цены товара. Пусто, если
+// сайт не сконфигурирован (PUBLIC_BASE_URL) или у товара нет public_id.
+func (b *Bot) chartURL(publicID string) string {
+	if b.chartBaseURL == "" || publicID == "" {
+		return ""
+	}
+	return b.chartBaseURL + "/p/" + publicID
+}
+
+// chartURLForSub резолвит ссылку на график по id подписки (для перерисовок
+// клавиатуры в callback'ах, где под рукой только subID). "" на любой ошибке.
+func (b *Bot) chartURLForSub(ctx context.Context, subID int64) string {
+	if b.chartBaseURL == "" {
+		return ""
+	}
+	sub, err := b.subRepo.GetByID(ctx, subID)
+	if err != nil {
+		return ""
+	}
+	p, err := b.prodRepo.GetByID(ctx, sub.ProductID)
+	if err != nil {
+		return ""
+	}
+	return b.chartURL(p.PublicID)
 }
 
 // SetPayments подключает платёжный сервис (опционально: при пустом конфиге не
@@ -73,6 +103,7 @@ func NewBot(
 	rdb *redis.Client,
 	adminIDs map[int64]bool,
 	vkBotURL string,
+	chartBaseURL string,
 ) (*Bot, error) {
 	// Тот же таймаут-клиент, что у Receiver: ответы bot-worker и (в монолитном
 	// режиме) Bot.RunPolling ходят к Telegram через HTTPS_PROXY — без таймаута
@@ -106,6 +137,7 @@ func NewBot(
 		linkCodes:       linkCodes,
 		discounts:       discounts,
 		vkBotURL:        vkBotURL,
+		chartBaseURL:    chartBaseURL,
 	}, nil
 }
 
