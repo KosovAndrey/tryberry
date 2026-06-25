@@ -1,5 +1,5 @@
 .PHONY: up down down-v migrate migrate-down migrate-status lint test test-short test-cover build tidy help \
-        deploy deploy-api nginx-reload ci-test
+        deploy deploy-api nginx-reload
 
 DB_URL ?= postgres://user:password@localhost:5433/tryberrybot?sslmode=disable
 
@@ -61,12 +61,8 @@ build:
 	go build -o bin/scheduler     ./cmd/scheduler
 	go build -o bin/search-worker ./cmd/search-worker
 
-# Deploy (на VPS, из каталога с .env и секретами)
+# Deploy (на VPS вручную, из каталога с .env и секретами)
 # Любая пересборка api идёт с GIT_COMMIT → версионирование ассетов (?v=) корректное.
-ci-test:
-	docker run --rm -v "$(PWD)":/app -w /app golang:1.26 \
-		sh -c "go build ./... && go test ./..."
-
 deploy-api:
 	GIT_COMMIT=$(GIT_COMMIT) $(COMPOSE_PROD) build api
 	$(COMPOSE_PROD) up -d api
