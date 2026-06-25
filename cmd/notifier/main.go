@@ -99,7 +99,11 @@ func run(log *slog.Logger) error {
 	// ── Telegram ─────────────────────────────────────────────────────────────
 	// Исходящие в Telegram идут через HTTPS_PROXY (см. compose) — поэтому и
 	// товарные, и поиск-уведомления пробиваются с RU-хостинга.
-	tgNotifier := telegram.NewNotifier(botToken)
+	publicBaseURL := os.Getenv("PUBLIC_BASE_URL")
+	if publicBaseURL == "" {
+		publicBaseURL = "https://tryberry.ru"
+	}
+	tgNotifier := telegram.NewNotifier(botToken, publicBaseURL)
 
 	// Маршрутизация по каналам: без VK_GROUP_TOKEN ведёт себя ровно как раньше
 	// (всё в Telegram). С токеном — смотрит на users.notify_channel.
@@ -635,6 +639,7 @@ func makeHandler(
 				SubscriptionID: sub.ID,
 				ProductName:    sub.ProductName,
 				ProductURL:     sub.ProductURL,
+				PublicID:       sub.ProductPublicID,
 				OldPrice:       sub.BaselinePrice,
 				NewPrice:       event.NewPrice,
 				ImageURL:       sub.ProductImageURL,

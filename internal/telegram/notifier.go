@@ -19,15 +19,25 @@ import (
 var ErrTelegramPermanent = errors.New("telegram permanent error")
 
 type Notifier struct {
-	token  string
-	client *http.Client
+	token        string
+	client       *http.Client
+	chartBaseURL string // PUBLIC_BASE_URL для кнопки «📈 График цены» ("" → не показываем)
 }
 
-func NewNotifier(token string) *Notifier {
+func NewNotifier(token, chartBaseURL string) *Notifier {
 	return &Notifier{
-		token:  token,
-		client: &http.Client{Timeout: 10 * time.Second},
+		token:        token,
+		client:       &http.Client{Timeout: 10 * time.Second},
+		chartBaseURL: chartBaseURL,
 	}
+}
+
+// chartURL — ссылка на страницу графика товара или "" (сайт не задан / нет токена).
+func (n *Notifier) chartURL(publicID string) string {
+	if n.chartBaseURL == "" || publicID == "" {
+		return ""
+	}
+	return n.chartBaseURL + "/p/" + publicID
 }
 
 type PriceAlert struct {
@@ -36,9 +46,12 @@ type PriceAlert struct {
 	SubscriptionID int64
 	ProductName    string
 	ProductURL     string
-	ImageURL       string
-	OldPrice       float64
-	NewPrice       float64
+	// PublicID — токен товара для кнопки «📈 График цены» (ссылка на /p/<public_id>).
+	// Пусто (старые in-flight алерты) → кнопку не добавляем.
+	PublicID string
+	ImageURL string
+	OldPrice float64
+	NewPrice float64
 	// BackInStock — алерт о появлении товара в наличии (триггер back_in_stock),
 	// а не о снижении цены. OldPrice не используется (товара не было в продаже).
 	BackInStock bool
@@ -46,6 +59,21 @@ type PriceAlert struct {
 	// Заполняет notifier через domain.AssessHonestPrice; рендерится только в
 	// price-drop алерте (для back_in_stock не применяется).
 	HonestLine string
+}
+
+// priceAlertKeyboard собирает inline-клавиатуру алерта: keep/untrack + (если есть
+// ссылка) «📈 График цены» первой строкой как главный CTA при снижении цены.
+func (n *Notifier) priceAlertKeyboard(a PriceAlert) map[string]any {
+	rows := [][]map[string]any{
+		{
+			{"text": "✅ Продолжить следить", "callback_data": fmt.Sprintf("keep:%d", a.SubscriptionID)},
+			{"text": "❌ Отменить отслеживание", "callback_data": fmt.Sprintf("untrack:%d", a.SubscriptionID)},
+		},
+	}
+	if cu := n.chartURL(a.PublicID); cu != "" {
+		rows = append([][]map[string]any{{{"text": "📈 График цены", "url": cu}}}, rows...)
+	}
+	return map[string]any{"inline_keyboard": rows}
 }
 
 func (n *Notifier) SendPriceAlert(ctx context.Context, a PriceAlert) error {
@@ -74,14 +102,7 @@ func (n *Notifier) SendPriceAlert(ctx context.Context, a PriceAlert) error {
 		)
 	}
 
-	keyboard := map[string]any{
-		"inline_keyboard": [][]map[string]any{
-			{
-				{"text": "✅ Продолжить следить", "callback_data": fmt.Sprintf("keep:%d", a.SubscriptionID)},
-				{"text": "❌ Отменить отслеживание", "callback_data": fmt.Sprintf("untrack:%d", a.SubscriptionID)},
-			},
-		},
-	}
+	keyboard := n.priceAlertKeyboard(a)
 
 	// Если есть картинка — sendPhoto, иначе sendMessage.
 	if a.ImageURL != "" {

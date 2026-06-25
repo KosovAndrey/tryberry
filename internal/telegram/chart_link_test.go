@@ -49,6 +49,29 @@ func TestTrackKeyboardIncludesChart(t *testing.T) {
 	}
 }
 
+func TestPriceAlertKeyboard_Chart(t *testing.T) {
+	// С настроенным сайтом и public_id — первой строкой кнопка графика.
+	n := NewNotifier("token", "https://tryberry.ru")
+	rows := alertRows(n.priceAlertKeyboard(PriceAlert{SubscriptionID: 5, PublicID: "abc123def456"}))
+	if len(rows) != 2 {
+		t.Fatalf("ожидали 2 строки (график + keep/untrack), получили %d", len(rows))
+	}
+	if rows[0][0]["url"] != "https://tryberry.ru/p/abc123def456" || rows[0][0]["text"] != "📈 График цены" {
+		t.Errorf("первая строка должна быть кнопкой графика, got %v", rows[0][0])
+	}
+
+	// Без сайта — только keep/untrack, никакой битой кнопки.
+	n2 := NewNotifier("token", "")
+	rows2 := alertRows(n2.priceAlertKeyboard(PriceAlert{SubscriptionID: 5, PublicID: "abc123def456"}))
+	if len(rows2) != 1 {
+		t.Errorf("без сайта ожидали 1 строку, получили %d", len(rows2))
+	}
+}
+
+func alertRows(kb map[string]any) [][]map[string]any {
+	return kb["inline_keyboard"].([][]map[string]any)
+}
+
 func hasURLButton(kb tgbotapi.InlineKeyboardMarkup, url string) bool {
 	for _, row := range kb.InlineKeyboard {
 		for _, btn := range row {
