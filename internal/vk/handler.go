@@ -336,6 +336,13 @@ func (b *Bot) handleMessage(ctx context.Context, vkID int64, text, payload strin
 			}
 			return
 		}
+		// 2+ товарных ссылок одним сообщением → массовое добавление одной сводкой
+		// (раньше одиночных веток, как в TG).
+		if prods := b.trackableProductURLs(text); len(prods) >= 2 {
+			metrics.VKMessages.WithLabelValues("bulk_track").Inc()
+			b.handleBulkTrack(ctx, vkID, prods, user)
+			return
+		}
 		// Поисковая ссылка → флоу поиск-подписки.
 		if _, err := b.registry.FindSearchByURL(text); err == nil {
 			metrics.VKMessages.WithLabelValues("search_url").Inc()
