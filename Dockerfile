@@ -12,8 +12,11 @@ COPY . .
 
 # ARG указывает какой бинарь собирать — api, scraper или notifier
 ARG SERVICE
+# GIT_COMMIT — короткий хеш для версионирования статики (?v=) у api. Для прочих
+# сервисов -X в несуществующий символ линкер молча игнорирует.
+ARG GIT_COMMIT=dev
 RUN CGO_ENABLED=0 GOOS=linux go build \
-    -ldflags="-w -s" \
+    -ldflags="-w -s -X main.assetVersion=${GIT_COMMIT}" \
     -o /app/bin/service ./cmd/${SERVICE}
 
 # ── Runtime ──────────────────────────────────────────────────────────────────

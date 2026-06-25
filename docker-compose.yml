@@ -106,6 +106,9 @@ services:
       dockerfile: Dockerfile
       args:
         SERVICE: api
+        # Короткий хеш коммита → ?v= у css/js (сброс кэша ассетов при деплое).
+        # Деплой: GIT_COMMIT=$(git rev-parse --short HEAD) docker compose ... build api
+        GIT_COMMIT: "${GIT_COMMIT:-dev}"
     container_name: pt_api
     ports:
       - "8081:8081"

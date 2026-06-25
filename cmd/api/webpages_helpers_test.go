@@ -11,7 +11,7 @@ import (
 )
 
 func TestRenderTemplate(t *testing.T) {
-	h, err := NewWebHandlers(nil, nil, "https://tryberry.ru", slog.Default())
+	h, err := NewWebHandlers(nil, nil, "https://tryberry.ru", "testver", slog.Default())
 	if err != nil {
 		t.Fatalf("NewWebHandlers: %v", err)
 	}

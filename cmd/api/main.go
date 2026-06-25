@@ -44,6 +44,11 @@ import (
 // и health, которые Prometheus уже скрейпит с api:/metrics. Репозитории/registry
 // и FSM здесь больше не нужны.
 
+// assetVersion — короткий хеш коммита, вшивается линкером (-X main.assetVersion)
+// при сборке (см. Dockerfile/compose). Идёт в ?v= к css/js страницы графика —
+// сброс кэша ассетов при деплое. "dev" — локальная сборка без ldflags.
+var assetVersion = "dev"
+
 func main() {
 	log := slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{
 		Level: slog.LevelInfo,
@@ -376,6 +381,7 @@ func run(log *slog.Logger) error {
 		postgres.NewProductRepo(pool),
 		postgres.NewPriceHistoryRepo(pool),
 		publicBaseURL,
+		assetVersion,
 		log,
 	)
 	if err != nil {

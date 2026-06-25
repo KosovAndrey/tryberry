@@ -56,29 +56,34 @@ type priceRepo interface {
 
 // WebHandlers — обработчики публичного веб-раздела.
 type WebHandlers struct {
-	products productRepo
-	prices   priceRepo
-	baseURL  string
-	log      *slog.Logger
-	tmpl     *template.Template
+	products     productRepo
+	prices       priceRepo
+	baseURL      string
+	assetVersion string // ?v= для css/js (сброс кэша ассетов при деплое)
+	log          *slog.Logger
+	tmpl         *template.Template
 
 	cache *ttlCache
 }
 
 // NewWebHandlers парсит шаблон и собирает обработчики. baseURL — без хвостового
 // слэша (например https://tryberry.ru), идёт в canonical/OG/sitemap.
-func NewWebHandlers(products productRepo, prices priceRepo, baseURL string, log *slog.Logger) (*WebHandlers, error) {
+func NewWebHandlers(products productRepo, prices priceRepo, baseURL, assetVersion string, log *slog.Logger) (*WebHandlers, error) {
 	tmpl, err := template.New("product.html").Funcs(templateFuncs).ParseFS(productTemplateFS, "templates/product.html")
 	if err != nil {
 		return nil, fmt.Errorf("parse product template: %w", err)
 	}
+	if assetVersion == "" {
+		assetVersion = "dev"
+	}
 	return &WebHandlers{
-		products: products,
-		prices:   prices,
-		baseURL:  strings.TrimRight(baseURL, "/"),
-		log:      log,
-		tmpl:     tmpl,
-		cache:    newTTLCache(),
+		products:     products,
+		prices:       prices,
+		baseURL:      strings.TrimRight(baseURL, "/"),
+		assetVersion: assetVersion,
+		log:          log,
+		tmpl:         tmpl,
+		cache:        newTTLCache(),
 	}, nil
 }
 
