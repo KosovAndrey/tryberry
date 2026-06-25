@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"math"
 	"os"
 	"os/signal"
 	"strconv"
@@ -250,14 +251,16 @@ func makeHandler(
 			// «цена X действует с t0» восстанавливаем на чтении (PriceHistoryRepo.Stats
 			// взвешивает по длительности). prevPrice<=0 → первая точка по товару.
 			// Кэш последней цены обновляем ВСЕГДА — на нём держится детект снижения.
-			if prevPrice <= 0 || result.Price != prevPrice {
-				// Первая точка по товару + маркетплейс отдал свою историю (WB
-				// price-history.json) → одноразовый бэкфилл: график и «честная цена»
-				// работают сразу, без ожидания накопления. Best-effort: ошибка
-				// бэкфилла не должна валить обычную запись цены.
-				if prevPrice <= 0 && len(result.History) > 0 {
-					backfillHistory(ctx, log, pm, priceHistoryRepo, task.ProductID, result.History)
-				}
+			// Дозаливаем недостающую СТАРУЮ историю от маркетплейса (WB
+			// price-history.json): покрывает и новые товары, и добавленные до
+			// появления бэкфилла (у них своя история начинается с момента трекинга).
+			// Самоограничивается дешёвым пред-чеком внутри (EarliestRecordedAt) —
+			// в установившемся режиме это один индексный запрос. Best-effort:
+			// ошибка бэкфилла не валит обычную запись цены.
+			if len(result.History) > 0 {
+				backfillHistory(ctx, log, pm, priceHistoryRepo, task.ProductID, result.History)
+			}
+			if prevPrice <= 0 || !pricesEqual(result.Price, prevPrice) {
 				if err := priceHistoryRepo.Insert(ctx, task.ProductID, result.Price); err != nil {
 					return fmt.Errorf("insert price history: %w", err)
 				}
@@ -325,11 +328,12 @@ func getPrevPrice(
 	return price, err
 }
 
-// backfillHistory заливает историческую серию маркетплейса в price_history на
-// первом скрейпе товара. Best-effort: любые ошибки логируем и идём дальше — это
-// бонус-наполнение графика, оно не должно ронять обработку задачи. Сначала
-// создаём партиции под прошлые месяцы серии, затем одноразовый BackfillIfEmpty
-// (сам ещё раз проверит, что истории нет, под advisory-lock).
+// backfillHistory дозаливает историческую серию маркетплейса в price_history:
+// точки СТАРШЕ нашей самой ранней (покрывает и новые товары, и трекаемые до
+// появления бэкфилла). Best-effort: ошибки логируем и идём дальше — это бонус-
+// наполнение графика, оно не должно ронять обработку задачи. Сначала дешёвый
+// пред-чек (EarliestRecordedAt), затем партиции прошлых месяцев и PrependOlder
+// (повторно проверяет минимум под advisory-lock).
 func backfillHistory(
 	ctx context.Context,
 	log *slog.Logger,
@@ -338,17 +342,30 @@ func backfillHistory(
 	productID int64,
 	history []scraper.PriceHistoryPoint,
 ) {
+	// Дешёвый пред-чек: тянем только точки СТАРШЕ нашей самой ранней (или все, если
+	// истории нет). В установившемся режиме older пуст → ни партиций, ни лока.
+	earliest, hasAny, err := histRepo.EarliestRecordedAt(ctx, productID)
+	if err != nil {
+		log.Warn("backfill: earliest lookup failed", "err", err, "product_id", productID)
+		return
+	}
 	times := make([]time.Time, 0, len(history))
-	points := make([]postgres.PricePoint, 0, len(history))
+	older := make([]postgres.PricePoint, 0, len(history))
 	for _, h := range history {
+		if hasAny && !h.At.Before(earliest) {
+			continue
+		}
 		times = append(times, h.At)
-		points = append(points, postgres.PricePoint{RecordedAt: h.At, Price: h.Price})
+		older = append(older, postgres.PricePoint{RecordedAt: h.At, Price: h.Price})
+	}
+	if len(older) == 0 {
+		return // нечего дозаливать
 	}
 	if err := pm.EnsureForTimes(ctx, times); err != nil {
 		log.Warn("backfill: ensure partitions failed", "err", err, "product_id", productID)
 		return
 	}
-	n, err := histRepo.BackfillIfEmpty(ctx, productID, points)
+	n, err := histRepo.PrependOlder(ctx, productID, older)
 	if err != nil {
 		log.Warn("backfill: insert failed", "err", err, "product_id", productID)
 		return
@@ -356,6 +373,16 @@ func backfillHistory(
 	if n > 0 {
 		log.Info("price history backfilled", "product_id", productID, "points", n)
 	}
+}
+
+// pricesEqual — равенство ДЕНЕГ с точностью до копейки, а не строгое float-сравнение.
+// Корень бага: WB отдаёт цену делением kopecks/100, а pgx конвертит NUMERIC(12,2)
+// из БД в float64 умножением на 10^-2 — у дробных цен (копейки) младшие биты
+// расходятся, и строгое `!=` считало цену «изменившейся» на КАЖДОМ скрейпе →
+// price_history WB пухла тысячами идентичных точек (у Ozon/ЯМ цены целые, эффекта
+// не было). Округляем до копеек: реальное изменение цены всегда ≥ 0.01.
+func pricesEqual(a, b float64) bool {
+	return math.Round(a*100) == math.Round(b*100)
 }
 
 func getEnv(key, fallback string) string {

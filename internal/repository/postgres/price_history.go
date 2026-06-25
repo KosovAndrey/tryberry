@@ -155,16 +155,32 @@ func (r *PriceHistoryRepo) Series(ctx context.Context, productID int64, from, to
 	return out, rows.Err()
 }
 
-// BackfillIfEmpty одноразово заливает историческую серию (от самого маркетплейса,
-// напр. WB price-history.json) в price_history — ТОЛЬКО если по товару ещё нет
-// записей. Так график и «честная цена» работают с первого скрейпа, без ожидания
-// накопления. Возвращает число вставленных точек (0 = история уже была).
+// EarliestRecordedAt — самая ранняя записанная точка товара (для бэкфилла:
+// дотягиваем из маркетплейс-истории только то, что СТАРШЕ). ok=false — истории нет.
+func (r *PriceHistoryRepo) EarliestRecordedAt(ctx context.Context, productID int64) (time.Time, bool, error) {
+	var t *time.Time
+	err := r.db.QueryRow(ctx,
+		`SELECT min(recorded_at) FROM price_history WHERE product_id = $1`, productID).Scan(&t)
+	if err != nil {
+		return time.Time{}, false, err
+	}
+	if t == nil {
+		return time.Time{}, false, nil
+	}
+	return *t, true, nil
+}
+
+// PrependOlder дозаливает исторические точки (из WB price-history.json и т.п.),
+// которые СТАРШЕ самой ранней уже записанной точки товара (или все, если истории
+// нет). Покрывает и новые товары, и добавленные до появления бэкфилла. Идемпотентно
+// и самоограничивающе: после первого прохода наш минимум = старейшая точка
+// маркетплейса, повторные вызовы ничего не вставляют. Возвращает число вставленных.
 //
-// Гонко-безопасно: транзакция + xact-advisory-lock по product_id (параллельные
-// скрейпы одного товара не задвоят), внутри — повторная проверка пустоты.
-// ВНИМАНИЕ: партиции под прошлые месяцы серии должны существовать (вызывающий
-// заранее делает partition.Manager.EnsureForTimes) — иначе INSERT упадёт.
-func (r *PriceHistoryRepo) BackfillIfEmpty(ctx context.Context, productID int64, points []PricePoint) (int, error) {
+// Гонко-безопасно: транзакция + xact-advisory-lock по product_id; внутри ПОВТОРНО
+// читаем минимум (под локом) и фильтруем — параллельный скрейп не задвоит.
+// ВНИМАНИЕ: партиции под прошлые месяцы должны существовать (вызывающий заранее
+// делает partition.Manager.EnsureForTimes) — иначе INSERT упадёт.
+func (r *PriceHistoryRepo) PrependOlder(ctx context.Context, productID int64, points []PricePoint) (int, error) {
 	if len(points) == 0 {
 		return 0, nil
 	}
@@ -175,28 +191,33 @@ func (r *PriceHistoryRepo) BackfillIfEmpty(ctx context.Context, productID int64,
 	}
 	defer tx.Rollback(ctx)
 
-	// Сериализуем бэкфиллы одного товара; лок снимется на commit/rollback.
 	if _, err := tx.Exec(ctx, `SELECT pg_advisory_xact_lock($1)`, productID); err != nil {
 		return 0, err
 	}
 
-	var existing int64
+	var earliest *time.Time
 	if err := tx.QueryRow(ctx,
-		`SELECT count(*) FROM price_history WHERE product_id = $1`, productID).Scan(&existing); err != nil {
+		`SELECT min(recorded_at) FROM price_history WHERE product_id = $1`, productID).Scan(&earliest); err != nil {
 		return 0, err
-	}
-	if existing > 0 {
-		return 0, nil // история уже есть — ничего не делаем
 	}
 
 	b := &pgx.Batch{}
+	n := 0
 	for _, p := range points {
+		if earliest != nil && !p.RecordedAt.Before(*earliest) {
+			continue // не старше нашей истории — пропускаем (есть своя точка)
+		}
 		b.Queue(
 			`INSERT INTO price_history (product_id, price, recorded_at) VALUES ($1, $2, $3)`,
 			productID, p.Price, p.RecordedAt)
+		n++
 	}
+	if n == 0 {
+		return 0, nil
+	}
+
 	br := tx.SendBatch(ctx, b)
-	for range points {
+	for i := 0; i < n; i++ {
 		if _, err := br.Exec(); err != nil {
 			br.Close()
 			return 0, err
@@ -208,7 +229,7 @@ func (r *PriceHistoryRepo) BackfillIfEmpty(ctx context.Context, productID int64,
 	if err := tx.Commit(ctx); err != nil {
 		return 0, err
 	}
-	return len(points), nil
+	return n, nil
 }
 
 // GetLatest — последняя записанная цена. Используется как fallback если Redis недоступен.
