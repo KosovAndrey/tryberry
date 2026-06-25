@@ -21,10 +21,11 @@ import (
 // Успех = доставлено хотя бы в один канал (ошибка второго только логируется,
 // иначе kafka-retry задублирует сообщение в доставленный канал).
 type deliverer struct {
-	log   *slog.Logger
-	tg    *telegram.Notifier
-	vk    *vk.Client
-	users *postgres.UserRepo
+	log          *slog.Logger
+	tg           *telegram.Notifier
+	vk           *vk.Client
+	users        *postgres.UserRepo
+	chartBaseURL string // PUBLIC_BASE_URL для ссылки «📈 График цены» в VK-пуше; "" — без неё
 }
 
 // targets — куда слать. userID — основной ключ (users.id), telegramID — фолбэк
@@ -123,7 +124,7 @@ func statusLabel(err error) string {
 func (d *deliverer) SendPriceAlert(ctx context.Context, a telegram.PriceAlert) error {
 	return d.deliver(ctx, a.UserID, a.ChatID,
 		func(ctx context.Context) error { return d.tg.SendPriceAlert(ctx, a) },
-		vkPriceText(a), a.ImageURL)
+		vkPriceText(a, d.chartBaseURL), a.ImageURL)
 }
 
 func (d *deliverer) SendSearchAlert(ctx context.Context, a telegram.SearchAlert) error {
@@ -204,10 +205,15 @@ func (d *deliverer) SendReferralRewardNotice(ctx context.Context, userID int64, 
 
 // ── Plain-text рендер для VK (HTML там не работает) ──────────────────────────
 
-func vkPriceText(a telegram.PriceAlert) string {
+func vkPriceText(a telegram.PriceAlert, chartBaseURL string) string {
+	// chart — строка «📈 График цены: <url>» (или ""), как CTA после ссылки на товар.
+	chart := ""
+	if chartBaseURL != "" && a.PublicID != "" {
+		chart = "\n📈 График цены: " + chartBaseURL + "/p/" + a.PublicID
+	}
 	if a.BackInStock {
-		return fmt.Sprintf("🔔 Снова в наличии!\n\n%s\n\nЦена: %.0f ₽\nТеперь слежу за снижением цены (поменять — /list)\n\n%s",
-			a.ProductName, a.NewPrice, a.ProductURL)
+		return fmt.Sprintf("🔔 Снова в наличии!\n\n%s\n\nЦена: %.0f ₽\nТеперь слежу за снижением цены (поменять — /list)\n\n%s%s",
+			a.ProductName, a.NewPrice, a.ProductURL, chart)
 	}
 	diff := a.OldPrice - a.NewPrice
 	percent := math.Round(diff / a.OldPrice * 100)
@@ -216,8 +222,8 @@ func vkPriceText(a telegram.PriceAlert) string {
 		honest = "\n" + a.HonestLine
 	}
 	return fmt.Sprintf(
-		"📉 Цена снизилась!\n\n%s\n\nБыло: %.0f ₽ → Стало: %.0f ₽\nСкидка: %.0f ₽ (%.0f%%)%s\n\n%s",
-		a.ProductName, a.OldPrice, a.NewPrice, diff, percent, honest, a.ProductURL)
+		"📉 Цена снизилась!\n\n%s\n\nБыло: %.0f ₽ → Стало: %.0f ₽\nСкидка: %.0f ₽ (%.0f%%)%s\n\n%s%s",
+		a.ProductName, a.OldPrice, a.NewPrice, diff, percent, honest, a.ProductURL, chart)
 }
 
 func vkBundledText(a telegram.BundledAlert) string {

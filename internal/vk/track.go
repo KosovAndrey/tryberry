@@ -13,13 +13,51 @@ import (
 )
 
 // Трекинг товаров из VK: та же логика, что в telegram.doTrack (скрейп → upsert
-// товара → лимит тарифа → upsert подписки), но plain-text и без выбора типа
-// уведомления — в VK подписка всегда «любое снижение», тонкая настройка в TG.
+// товара → лимит тарифа → upsert подписки), но plain-text. Тип уведомления тоже
+// выбирается (vkTriggerKeyboard: любое снижение / ниже цены / скидка %).
 
-const (
-	listMaxShown   = 20 // VK режет сообщения ~4096 символов
-	listMaxButtons = 10 // лимит inline-клавиатуры VK
-)
+const listPageSize = 8 // подписок на страницу списка (VK лимитирует inline-кнопки)
+
+// pageBounds — число страниц и срез [start,end) для page по n элементам.
+func pageBounds(n, page int) (pages, start, end int) {
+	pages = (n + listPageSize - 1) / listPageSize
+	if pages < 1 {
+		pages = 1
+	}
+	page = clampPage(page, pages)
+	start = page * listPageSize
+	end = start + listPageSize
+	if end > n {
+		end = n
+	}
+	return
+}
+
+func clampPage(page, pages int) int {
+	if page < 0 {
+		return 0
+	}
+	if page >= pages {
+		return pages - 1
+	}
+	return page
+}
+
+// pageNavRow — строка навигации ◀️/▶️ для списка (cmd несёт целевую страницу в id).
+// nil, если страница одна.
+func pageNavRow(cmd string, page, pages int) []Button {
+	if pages <= 1 {
+		return nil
+	}
+	var nav []Button
+	if page > 0 {
+		nav = append(nav, TextButton("◀️ Назад", fmt.Sprintf(`{"cmd":%q,"id":%d}`, cmd, page-1), ColorSecondary))
+	}
+	if page < pages-1 {
+		nav = append(nav, TextButton("Вперёд ▶️", fmt.Sprintf(`{"cmd":%q,"id":%d}`, cmd, page+1), ColorSecondary))
+	}
+	return nav
+}
 
 func (b *Bot) handleTrack(ctx context.Context, vkID int64, user *domain.User, rawURL string) {
 	s, err := b.registry.FindByURL(rawURL)
@@ -76,9 +114,32 @@ func (b *Bot) handleTrack(ctx context.Context, vkID int64, user *domain.User, ra
 	if !alreadyTracked && len(active) >= plan.MaxProduct {
 		b.send(ctx, vkID, fmt.Sprintf(
 			"🚫 Достигнут лимит тарифа %s: товаров %d из %d.\n\n"+
-				"Отпишись от ненужного («Мои товары») или оформи тариф повыше — "+
-				"тарифы пока в Telegram-боте @TryBerryBot, команда /plans.",
+				"Отпишись от ненужного («Мои товары») или оформи тариф повыше кнопкой «Тарифы» 👇",
 			plan.Title, len(active), plan.MaxProduct), menuKeyboard(user.TelegramID != 0))
+		return
+	}
+
+	// OOS: товара нет в наличии (нет активного оффера) — «слежу за снижением»
+	// неприменимо. Заводим back_in_stock и фиксируем in_stock=false (как TG doTrack).
+	if !result.InStock {
+		if err := b.prodRepo.SetInStock(ctx, product.ID, false); err != nil {
+			b.log.Warn("vk: set product out of stock", "product_id", product.ID, "err", err)
+		}
+		oos, _, err := b.subRepo.UpsertOutOfStock(ctx, user.ID, product.ID, result.Price)
+		if err != nil {
+			b.log.Error("vk: upsert oos subscription", "err", err)
+			b.send(ctx, vkID, "Произошла ошибка, попробуй позже.", nil)
+			return
+		}
+		priceLine := "Цена появится, когда товар вернётся в продажу."
+		if result.Price > 0 {
+			priceLine = fmt.Sprintf("💰 Последняя цена: %.0f ₽", result.Price)
+		}
+		b.send(ctx, vkID, fmt.Sprintf(
+			"✅ Добавил в отслеживание!\n\n%s\n🚫 Сейчас товара нет в наличии (нет активного предложения).\n%s\n\n"+
+				"По умолчанию уведомлю, как только он появится в наличии. Сменить тип — кнопками ниже 👇",
+			result.Name, priceLine),
+			vkTrackOOSKeyboard(oos.ID, result.Price > 0, b.chartURL(product.PublicID)))
 		return
 	}
 
@@ -96,7 +157,7 @@ func (b *Bot) handleTrack(ctx context.Context, vkID int64, user *domain.User, ra
 	b.send(ctx, vkID, fmt.Sprintf(
 		"%s\n\n%s\n💰 Текущая цена: %.0f ₽\n\n"+
 			"🔔 Сейчас уведомлю при любом снижении. Сменить тип уведомления — кнопками ниже 👇",
-		head, result.Name, result.Price), vkTriggerKeyboard(sub.ID, domain.TriggerAnyDrop))
+		head, result.Name, result.Price), vkTriggerKeyboard(sub.ID, domain.TriggerAnyDrop, b.chartURL(product.PublicID)))
 }
 
 // ── Тип триггера товарной подписки ────────────────────────────────────────────
@@ -143,8 +204,9 @@ func (b *Bot) clearTrackFSM(ctx context.Context, vkID int64) {
 }
 
 // vkTriggerKeyboard — inline-выбор стратегии под сообщением товара,
-// текущая помечена галочкой (как в TG).
-func vkTriggerKeyboard(subID int64, current domain.TriggerType) *Keyboard {
+// текущая помечена галочкой (как в TG). chartURL непустой → добавляем link-кнопку
+// «📈 График цены» (open_link) отдельной строкой; "" → без неё.
+func vkTriggerKeyboard(subID int64, current domain.TriggerType, chartURL string) *Keyboard {
 	mark := func(label string, t domain.TriggerType) string {
 		if current == t {
 			return "✅ " + label
@@ -154,13 +216,41 @@ func vkTriggerKeyboard(subID int64, current domain.TriggerType) *Keyboard {
 	pl := func(kind string) string {
 		return fmt.Sprintf(`{"cmd":%q,"id":%d,"k":%q}`, cmdPTrack, subID, kind)
 	}
-	return &Keyboard{Inline: true, Buttons: [][]Button{
+	rows := [][]Button{
 		{TextButton(mark("🔻 Любое снижение", domain.TriggerAnyDrop), pl("any"), ColorPrimary)},
 		{
 			TextButton(mark("📉 Ниже цены", domain.TriggerBelowTarget), pl("below"), ColorSecondary),
 			TextButton(mark("％ Скидка %", domain.TriggerDiscountPct), pl("disc"), ColorSecondary),
 		},
-	}}
+	}
+	if chartURL != "" {
+		rows = append(rows, []Button{LinkButton("📈 График цены", chartURL)})
+	}
+	return &Keyboard{Inline: true, Buttons: rows}
+}
+
+// vkTrackOOSKeyboard — клавиатура для товара БЕЗ активного оффера: по умолчанию
+// «когда появится в наличии» (back_in_stock), а «ниже цены»/«скидка %» — только при
+// известной last-цене (hasPrice). Зеркало telegram.trackOOSKeyboard.
+func vkTrackOOSKeyboard(subID int64, hasPrice bool, chartURL string) *Keyboard {
+	pl := func(kind string) string {
+		return fmt.Sprintf(`{"cmd":%q,"id":%d,"k":%q}`, cmdPTrack, subID, kind)
+	}
+	rows := [][]Button{
+		{TextButton("✅ 🔔 Когда появится в наличии", pl("stock"), ColorPrimary)},
+	}
+	if hasPrice {
+		rows = append(rows, []Button{
+			TextButton("📉 Ниже цены", pl("below"), ColorSecondary),
+			TextButton("％ Скидка %", pl("disc"), ColorSecondary),
+		})
+	} else {
+		rows = append(rows, []Button{TextButton("📉 Ниже цены", pl("below"), ColorSecondary)})
+	}
+	if chartURL != "" {
+		rows = append(rows, []Button{LinkButton("📈 График цены", chartURL)})
+	}
+	return &Keyboard{Inline: true, Buttons: rows}
 }
 
 // handleProductTrigger — нажатие кнопки типа триггера (cmd=ptrack).
@@ -174,13 +264,22 @@ func (b *Bot) handleProductTrigger(ctx context.Context, vkID int64, user *domain
 			return
 		}
 		b.send(ctx, vkID, "🔔 Тип уведомления: "+domain.TriggerDescription(domain.TriggerAnyDrop, nil, nil),
-			vkTriggerKeyboard(p.ID, domain.TriggerAnyDrop))
-	case "below":
-		if err := b.setTrackFSM(ctx, vkID, vkTrackFSM{SubID: p.ID, Trigger: string(domain.TriggerBelowTarget)}); err != nil {
-			b.send(ctx, vkID, "Не получилось начать ввод (нет связи с хранилищем). Останется «Любое снижение».", nil)
+			vkTriggerKeyboard(p.ID, domain.TriggerAnyDrop, b.chartURLForSub(ctx, p.ID)))
+	case "stock":
+		// Товар без оффера: ждать появления в наличии (back_in_stock).
+		if err := b.subRepo.SetTrigger(ctx, p.ID, user.ID, string(domain.TriggerBackInStock), nil, nil); err != nil {
+			b.log.Error("vk: set trigger stock", "sub_id", p.ID, "err", err)
+			b.send(ctx, vkID, "Произошла ошибка, попробуй позже.", nil)
 			return
 		}
-		b.send(ctx, vkID, "💰 Введи целевую цену в рублях (например 1499).\nУведомлю, когда цена опустится до неё или ниже.", nil)
+		hasPrice := false
+		if s, err := b.subRepo.GetByID(ctx, p.ID); err == nil {
+			hasPrice = s.FirstSeenPrice > 0
+		}
+		b.send(ctx, vkID, "🔔 Тип уведомления: "+domain.TriggerDescription(domain.TriggerBackInStock, nil, nil),
+			vkTrackOOSKeyboard(p.ID, hasPrice, b.chartURLForSub(ctx, p.ID)))
+	case "below":
+		b.startBelowTarget(ctx, vkID, p.ID)
 	case "disc":
 		if err := b.setTrackFSM(ctx, vkID, vkTrackFSM{SubID: p.ID, Trigger: string(domain.TriggerDiscountPct)}); err != nil {
 			b.send(ctx, vkID, "Не получилось начать ввод (нет связи с хранилищем). Останется «Любое снижение».", nil)
@@ -188,6 +287,80 @@ func (b *Bot) handleProductTrigger(ctx context.Context, vkID int64, user *domain
 		}
 		b.send(ctx, vkID, "％ Введи процент скидки от текущей цены (1–99, например 20).", nil)
 	}
+}
+
+// startBelowTarget — флоу «ниже цены»: предлагаем подсказанные пороги из honest-price
+// (текущая цена + Stats → SuggestTargets). Нет опорной цены/подсказок → ручной ввод.
+// Зеркало telegram handleTrackTriggerCallback "below".
+func (b *Bot) startBelowTarget(ctx context.Context, vkID, subID int64) {
+	var current float64
+	var stats domain.PriceStats
+	if s, err := b.subRepo.GetByID(ctx, subID); err == nil {
+		current = s.FirstSeenPrice
+		if b.priceRepo != nil {
+			if p, _, e := b.priceRepo.GetLatest(ctx, s.ProductID); e == nil && p > 0 {
+				current = p
+			}
+			if st, e := b.priceRepo.Stats(ctx, s.ProductID, time.Now()); e == nil {
+				stats = st
+			}
+		}
+	}
+	sugg := domain.SuggestTargets(current, stats, time.Now())
+	if current <= 0 || len(sugg) == 0 {
+		b.promptManualTarget(ctx, vkID, subID)
+		return
+	}
+	b.send(ctx, vkID, fmt.Sprintf(
+		"📉 Уведомить, когда подешевеет.\nТекущая цена: %.0f ₽. Выбери порог или задай свой:", current),
+		vkBelowTargetKeyboard(subID, sugg))
+}
+
+// promptManualTarget — фолбэк-ввод целевой цены вручную (FSM).
+func (b *Bot) promptManualTarget(ctx context.Context, vkID, subID int64) {
+	if err := b.setTrackFSM(ctx, vkID, vkTrackFSM{SubID: subID, Trigger: string(domain.TriggerBelowTarget)}); err != nil {
+		b.send(ctx, vkID, "Не получилось начать ввод (нет связи с хранилищем). Останется «Любое снижение».", nil)
+		return
+	}
+	b.send(ctx, vkID, "💰 Введи целевую цену в рублях (например 1499).\nУведомлю, когда цена опустится до неё или ниже.", nil)
+}
+
+// vkBelowTargetKeyboard — кнопки подсказанных целевых цен + «своя цена». Каждая несёт
+// готовую цену (ptgt:<subID>:<rub>); manual → ручной ввод.
+func vkBelowTargetKeyboard(subID int64, sugg []domain.TargetSuggestion) *Keyboard {
+	pl := func(k string) string {
+		return fmt.Sprintf(`{"cmd":%q,"id":%d,"k":%q}`, cmdPTarget, subID, k)
+	}
+	var rows [][]Button
+	for _, s := range sugg {
+		rows = append(rows, []Button{TextButton(
+			fmt.Sprintf("≤ %.0f ₽ · %s", s.Price, s.Label),
+			pl(fmt.Sprintf("%.0f", s.Price)), ColorPrimary)})
+	}
+	rows = append(rows, []Button{TextButton("✏️ Своя цена", pl("manual"), ColorSecondary)})
+	return &Keyboard{Inline: true, Buttons: rows}
+}
+
+// handleProductTarget — выбор подсказанной цены: k=manual → ручной ввод, k=<rub> →
+// ставим below_target сразу. Владельца резолвим по user (фильтр в репозитории).
+func (b *Bot) handleProductTarget(ctx context.Context, vkID int64, user *domain.User, p payloadData) {
+	if p.Kind == "manual" {
+		b.promptManualTarget(ctx, vkID, p.ID)
+		return
+	}
+	price, err := domain.ParsePrice(p.Kind)
+	if err != nil || price <= 0 {
+		b.promptManualTarget(ctx, vkID, p.ID)
+		return
+	}
+	b.clearTrackFSM(ctx, vkID)
+	if err := b.subRepo.SetTrigger(ctx, p.ID, user.ID, string(domain.TriggerBelowTarget), &price, nil); err != nil {
+		b.log.Error("vk: set trigger below (suggested)", "sub_id", p.ID, "err", err)
+		b.send(ctx, vkID, "Произошла ошибка, попробуй позже.", nil)
+		return
+	}
+	b.send(ctx, vkID, "✅ Готово! "+domain.TriggerDescription(domain.TriggerBelowTarget, &price, nil),
+		vkTriggerKeyboard(p.ID, domain.TriggerBelowTarget, b.chartURLForSub(ctx, p.ID)))
 }
 
 // handleTrackThreshold — приём числа (порог/процент) для товарной подписки.
@@ -206,7 +379,7 @@ func (b *Bot) handleTrackThreshold(ctx context.Context, vkID int64, user *domain
 			return
 		}
 		b.send(ctx, vkID, "✅ Готово! "+domain.TriggerDescription(domain.TriggerBelowTarget, &price, nil),
-			vkTriggerKeyboard(fsm.SubID, domain.TriggerBelowTarget))
+			vkTriggerKeyboard(fsm.SubID, domain.TriggerBelowTarget, b.chartURLForSub(ctx, fsm.SubID)))
 
 	case domain.TriggerDiscountPct:
 		pct, err := domain.ParsePct(text)
@@ -221,7 +394,7 @@ func (b *Bot) handleTrackThreshold(ctx context.Context, vkID int64, user *domain
 			return
 		}
 		b.send(ctx, vkID, "✅ Готово! "+domain.TriggerDescription(domain.TriggerDiscountPct, nil, &pct),
-			vkTriggerKeyboard(fsm.SubID, domain.TriggerDiscountPct))
+			vkTriggerKeyboard(fsm.SubID, domain.TriggerDiscountPct, b.chartURLForSub(ctx, fsm.SubID)))
 
 	default:
 		b.clearTrackFSM(ctx, vkID)
@@ -229,9 +402,15 @@ func (b *Bot) handleTrackThreshold(ctx context.Context, vkID int64, user *domain
 	}
 }
 
-// handleList — список подписок + inline-кнопки отписки. prefix — строка над
-// списком (например, подтверждение отписки).
+// handleList — список подписок (страница 0). prefix — строка над списком.
 func (b *Bot) handleList(ctx context.Context, vkID int64, user *domain.User, prefix string) {
+	b.showProductList(ctx, vkID, user, prefix, 0)
+}
+
+// showProductList — постраничный список товарных подписок. VK ограничивает inline-
+// клавиатуру, поэтому листаем по listPageSize с кнопками ◀️/▶️ — так VK-only юзер
+// может управлять ВСЕМИ подписками (паритет с TG, где список не обрезается).
+func (b *Bot) showProductList(ctx context.Context, vkID int64, user *domain.User, prefix string, page int) {
 	subs, err := b.subRepo.GetActiveByUserID(ctx, user.ID)
 	if err != nil {
 		b.log.Error("vk: get subscriptions", "err", err)
@@ -246,17 +425,20 @@ func (b *Bot) handleList(ctx context.Context, vkID int64, user *domain.User, pre
 		b.send(ctx, vkID, text, menuKeyboard(user.TelegramID != 0))
 		return
 	}
+	pages, start, end := pageBounds(len(subs), page)
+	page = clampPage(page, pages)
 
 	var sb strings.Builder
 	if prefix != "" {
 		sb.WriteString(prefix + "\n\n")
 	}
-	fmt.Fprintf(&sb, "📋 Твои подписки — %d активных\n\n", len(subs))
-	for i, sub := range subs {
-		if i == listMaxShown {
-			fmt.Fprintf(&sb, "… и ещё %d. Полный список — в Telegram-боте (/list).\n", len(subs)-listMaxShown)
-			break
-		}
+	fmt.Fprintf(&sb, "📋 Твои подписки — %d активных", len(subs))
+	if pages > 1 {
+		fmt.Fprintf(&sb, " (стр. %d/%d)", page+1, pages)
+	}
+	sb.WriteString("\n\n")
+	for i := start; i < end; i++ {
+		sub := subs[i]
 		current := "нет данных"
 		if sub.CurrentPrice > 0 {
 			emoji := ""
@@ -265,29 +447,23 @@ func (b *Bot) handleList(ctx context.Context, vkID int64, user *domain.User, pre
 			}
 			current = fmt.Sprintf("%s%.0f ₽", emoji, sub.CurrentPrice)
 		}
-		fmt.Fprintf(&sb, "%d. %s\n   сейчас %s | при подписке %.0f ₽\n   %s\n\n",
+		fmt.Fprintf(&sb, "%d. %s\n   сейчас %s | при подписке %.0f ₽\n   %s\n",
 			i+1, sub.ProductName, current, sub.FirstSeenPrice, sub.ProductURL)
+		if cu := b.chartURL(sub.ProductPublicID); cu != "" {
+			fmt.Fprintf(&sb, "   📈 График: %s\n", cu)
+		}
+		sb.WriteString("\n")
 	}
 	sb.WriteString("Отписаться — кнопки «❌ номер» под сообщением 👇")
 
-	// Inline-клавиатура отписки; постоянное меню при этом остаётся на месте.
-	b.send(ctx, vkID, sb.String(), untrackKeyboard(subs))
-}
-
-// untrackKeyboard — inline-кнопки «❌ N» (VK: максимум 10 кнопок в inline).
-func untrackKeyboard(subs []*domain.Subscription) *Keyboard {
 	var rows [][]Button
 	var row []Button
-	for i, sub := range subs {
-		if i == listMaxButtons {
-			break
-		}
+	for i := start; i < end; i++ {
 		row = append(row, TextButton(
 			fmt.Sprintf("❌ %d", i+1),
-			fmt.Sprintf(`{"cmd":%q,"id":%d}`, cmdUntrack, sub.ID),
-			ColorSecondary,
-		))
-		if len(row) == 5 {
+			fmt.Sprintf(`{"cmd":%q,"id":%d}`, cmdUntrack, subs[i].ID),
+			ColorSecondary))
+		if len(row) == 4 {
 			rows = append(rows, row)
 			row = nil
 		}
@@ -295,7 +471,10 @@ func untrackKeyboard(subs []*domain.Subscription) *Keyboard {
 	if len(row) > 0 {
 		rows = append(rows, row)
 	}
-	return &Keyboard{Inline: true, Buttons: rows}
+	if nav := pageNavRow(cmdListPage, page, pages); nav != nil {
+		rows = append(rows, nav)
+	}
+	b.send(ctx, vkID, sb.String(), &Keyboard{Inline: true, Buttons: rows})
 }
 
 func (b *Bot) handleUntrack(ctx context.Context, vkID int64, user *domain.User, subID int64) {

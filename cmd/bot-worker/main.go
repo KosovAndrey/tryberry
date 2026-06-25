@@ -175,9 +175,11 @@ func run(log *slog.Logger) error {
 		if redisClient != nil {
 			linkCodes = redisrepo.NewLinkCodeStore(redisClient)
 		}
-		vkBot = vk.NewBot(vk.NewClient(vkToken), log, userRepo, subRepo, prodRepo,
+		vkBot = vk.NewBot(vk.NewClient(vkToken), log, userRepo, subRepo, prodRepo, priceHistoryRepo,
 			searchQueryRepo, searchSubRepo, promoRepo, referralRepo, registry, linkCodes, redisClient,
-			getEnv("VK_BOT_URL", ""))
+			getEnv("VK_BOT_URL", ""),
+			getEnv("PUBLIC_BASE_URL", "https://tryberry.ru"),
+			parseAdminIDs(getEnv("VK_ADMIN_IDS", "")))
 		vkConsumer := kafka.NewConsumer(kafkaBrokers, "vk-updates", "vk-workers")
 		defer vkConsumer.Close()
 		go func() {

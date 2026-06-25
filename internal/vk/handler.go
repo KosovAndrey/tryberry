@@ -50,7 +50,10 @@ const (
 	cmdAdd         = "add"
 	cmdList        = "list"
 	cmdUntrack     = "untrack"
-	cmdPTrack      = "ptrack"      // тип триггера товарной подписки (k=any|below|disc)
+	cmdPTrack      = "ptrack"      // тип триггера товарной подписки (k=any|stock|below|disc)
+	cmdPTarget     = "ptgt"        // выбор подсказанной целевой цены (k=<rub>|manual)
+	cmdListPage    = "lpage"       // навигация по страницам списка товаров (id=страница)
+	cmdLSearchPage = "lspage"      // навигация по страницам списка поисков (id=страница)
 	cmdSearch      = "search"      // как добавить поиск-подписку
 	cmdLSearch     = "lsearch"     // список поиск-подписок
 	cmdSTrack      = "strack"      // выбор типа триггера поиск-подписки (k=any|below|disc)
@@ -100,6 +103,7 @@ type Bot struct {
 	userRepo        *postgres.UserRepo
 	subRepo         *postgres.SubscriptionRepo
 	prodRepo        *postgres.ProductRepo
+	priceRepo       *postgres.PriceHistoryRepo // honest-price подсказки целевой цены (nilable)
 	searchQueryRepo *postgres.SearchQueryRepo
 	searchSubRepo   *postgres.SearchSubscriptionRepo
 	promoRepo       *postgres.PromoRepo
@@ -108,6 +112,8 @@ type Bot struct {
 	linkCodes       *redisrepo.LinkCodeStore
 	rdb             *redis.Client // FSM ввода порога (может быть nil)
 	botURL          string        // ссылка на VK-бота для приглашений ("" — не показывать)
+	chartBaseURL    string        // PUBLIC_BASE_URL для ссылки «📈 График цены» → /p/<public_id>; "" — не показывать
+	adminIDs        map[int64]bool // VK_ADMIN_IDS — операторы для админ-команд (grant/revoke/promo…)
 
 	// Оплата (как в TG): payments == nil → заглушка; discounts хранит
 	// «ожидающую скидку» (nil без redis); billing — рекуррентные подписки.
@@ -132,6 +138,7 @@ func NewBot(
 	userRepo *postgres.UserRepo,
 	subRepo *postgres.SubscriptionRepo,
 	prodRepo *postgres.ProductRepo,
+	priceRepo *postgres.PriceHistoryRepo,
 	searchQueryRepo *postgres.SearchQueryRepo,
 	searchSubRepo *postgres.SearchSubscriptionRepo,
 	promoRepo *postgres.PromoRepo,
@@ -140,6 +147,8 @@ func NewBot(
 	linkCodes *redisrepo.LinkCodeStore,
 	rdb *redis.Client,
 	botURL string,
+	chartBaseURL string,
+	adminIDs map[int64]bool,
 ) *Bot {
 	var discounts *redisrepo.DiscountStore
 	if rdb != nil {
@@ -151,6 +160,7 @@ func NewBot(
 		userRepo:        userRepo,
 		subRepo:         subRepo,
 		prodRepo:        prodRepo,
+		priceRepo:       priceRepo,
 		searchQueryRepo: searchQueryRepo,
 		searchSubRepo:   searchSubRepo,
 		promoRepo:       promoRepo,
@@ -159,8 +169,41 @@ func NewBot(
 		linkCodes:       linkCodes,
 		rdb:             rdb,
 		botURL:          botURL,
+		chartBaseURL:    chartBaseURL,
+		adminIDs:        adminIDs,
 		discounts:       discounts,
 	}
+}
+
+// isAdmin — VK-оператор (по vk_id из VK_ADMIN_IDS). Зеркало telegram.Bot.isAdmin.
+func (b *Bot) isAdmin(vkID int64) bool {
+	return b.adminIDs[vkID]
+}
+
+// chartURL — публичная ссылка на график товара (chartBaseURL + "/p/" + publicID),
+// либо "" (сайт не задан / нет токена). Зеркалит telegram.Bot.chartURL.
+func (b *Bot) chartURL(publicID string) string {
+	if b.chartBaseURL == "" || publicID == "" {
+		return ""
+	}
+	return b.chartBaseURL + "/p/" + publicID
+}
+
+// chartURLForSub — ссылка на график по id подписки (когда public_id товара под
+// рукой нет: нажатие кнопки типа триггера). Зеркалит telegram.Bot.chartURLForSub.
+func (b *Bot) chartURLForSub(ctx context.Context, subID int64) string {
+	if b.chartBaseURL == "" {
+		return ""
+	}
+	sub, err := b.subRepo.GetByID(ctx, subID)
+	if err != nil {
+		return ""
+	}
+	p, err := b.prodRepo.GetByID(ctx, sub.ProductID)
+	if err != nil {
+		return ""
+	}
+	return b.chartURL(p.PublicID)
 }
 
 // HandleEvent — точка входа для события из Kafka.
@@ -222,6 +265,12 @@ func (b *Bot) handleMessage(ctx context.Context, vkID int64, text, payload strin
 		return
 	}
 	kb := menuKeyboard(user.TelegramID != 0)
+
+	// Слэш-команды (admin + /myplan + алиасы команд TG) — паритет с TG. Прерывают
+	// любой незавершённый ввод; кнопки (payload) сюда не попадают.
+	if strings.HasPrefix(text, "/") && b.handleSlashCommand(ctx, vkID, user, text) {
+		return
+	}
 
 	p := parsePayload(payload)
 	lower := strings.ToLower(text)
@@ -307,6 +356,13 @@ func (b *Bot) handleMessage(ctx context.Context, vkID int64, text, payload strin
 			}
 			return
 		}
+		// 2+ товарных ссылок одним сообщением → массовое добавление одной сводкой
+		// (раньше одиночных веток, как в TG).
+		if prods := b.trackableProductURLs(text); len(prods) >= 2 {
+			metrics.VKMessages.WithLabelValues("bulk_track").Inc()
+			b.handleBulkTrack(ctx, vkID, prods, user)
+			return
+		}
 		// Поисковая ссылка → флоу поиск-подписки.
 		if _, err := b.registry.FindSearchByURL(text); err == nil {
 			metrics.VKMessages.WithLabelValues("search_url").Inc()
@@ -357,10 +413,14 @@ func (b *Bot) handleMessage(ctx context.Context, vkID int64, text, payload strin
 			"Пример:\nhttps://www.wildberries.ru/catalog/252334498/detail.aspx", kb)
 	case cmdList:
 		b.handleList(ctx, vkID, user, "")
+	case cmdListPage:
+		b.showProductList(ctx, vkID, user, "", int(p.ID))
 	case cmdUntrack:
 		b.handleUntrack(ctx, vkID, user, p.ID)
 	case cmdPTrack:
 		b.handleProductTrigger(ctx, vkID, user, p)
+	case cmdPTarget:
+		b.handleProductTarget(ctx, vkID, user, p)
 	case cmdSearch:
 		b.send(ctx, vkID, "🔎 Поиск по ссылке\n\n"+
 			"Отправь ссылку на поисковую выдачу Wildberries — буду следить за всей выдачей и напишу, когда товары подешевеют.\n\n"+
@@ -368,6 +428,8 @@ func (b *Bot) handleMessage(ctx context.Context, vkID int64, text, payload strin
 			"Пример:\nhttps://www.wildberries.ru/catalog/0/search.aspx?search=наушники", kb)
 	case cmdLSearch:
 		b.handleListSearch(ctx, vkID, user, "")
+	case cmdLSearchPage:
+		b.showSearchList(ctx, vkID, user, "", int(p.ID))
 	case cmdSTrack:
 		b.handleSearchTrigger(ctx, vkID, user, p)
 	case cmdSFSkip:

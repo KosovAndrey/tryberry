@@ -303,6 +303,11 @@ func (b *Bot) createSearchSub(ctx context.Context, vkID int64, user *domain.User
 // ── Список поиск-подписок ─────────────────────────────────────────────────────
 
 func (b *Bot) handleListSearch(ctx context.Context, vkID int64, user *domain.User, prefix string) {
+	b.showSearchList(ctx, vkID, user, prefix, 0)
+}
+
+// showSearchList — постраничный список поиск-подписок (как showProductList).
+func (b *Bot) showSearchList(ctx context.Context, vkID int64, user *domain.User, prefix string, page int) {
 	subs, err := b.searchSubRepo.GetActiveByUserID(ctx, user.ID)
 	if err != nil {
 		b.log.Error("vk: get search subscriptions", "err", err)
@@ -317,13 +322,20 @@ func (b *Bot) handleListSearch(ctx context.Context, vkID int64, user *domain.Use
 		b.send(ctx, vkID, text, menuKeyboard(user.TelegramID != 0))
 		return
 	}
+	pages, start, end := pageBounds(len(subs), page)
+	page = clampPage(page, pages)
 
 	var sb strings.Builder
 	if prefix != "" {
 		sb.WriteString(prefix + "\n\n")
 	}
-	fmt.Fprintf(&sb, "📡 Поиск-подписки — %d активных\n\n", len(subs))
-	for i, s := range subs {
+	fmt.Fprintf(&sb, "📡 Поиск-подписки — %d активных", len(subs))
+	if pages > 1 {
+		fmt.Fprintf(&sb, " (стр. %d/%d)", page+1, pages)
+	}
+	sb.WriteString("\n\n")
+	for i := start; i < end; i++ {
+		s := subs[i]
 		fmt.Fprintf(&sb, "%d. %s\n   %s\n   %s\n\n",
 			i+1, s.QueryText, domain.TriggerDescription(s.TriggerType, s.TargetPrice, s.DiscountPct), s.NormalizedURL)
 	}
@@ -331,22 +343,21 @@ func (b *Bot) handleListSearch(ctx context.Context, vkID int64, user *domain.Use
 
 	var rows [][]Button
 	var row []Button
-	for i, s := range subs {
-		if i == listMaxButtons {
-			break
-		}
+	for i := start; i < end; i++ {
 		row = append(row, TextButton(
 			fmt.Sprintf("❌ %d", i+1),
-			fmt.Sprintf(`{"cmd":%q,"id":%d}`, cmdSUntrack, s.ID),
-			ColorSecondary,
-		))
-		if len(row) == 5 {
+			fmt.Sprintf(`{"cmd":%q,"id":%d}`, cmdSUntrack, subs[i].ID),
+			ColorSecondary))
+		if len(row) == 4 {
 			rows = append(rows, row)
 			row = nil
 		}
 	}
 	if len(row) > 0 {
 		rows = append(rows, row)
+	}
+	if nav := pageNavRow(cmdLSearchPage, page, pages); nav != nil {
+		rows = append(rows, nav)
 	}
 	b.send(ctx, vkID, sb.String(), &Keyboard{Inline: true, Buttons: rows})
 }
