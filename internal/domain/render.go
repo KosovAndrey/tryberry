@@ -183,34 +183,48 @@ func HasTextFilter(rawURL string) bool {
 	return strings.TrimSpace(u.Query().Get(tbTextFilterParam)) != ""
 }
 
-// searchNonFilterParams — query-параметры поисковой ссылки, которые НЕ сужают
-// выдачу (сам запрос, пагинация, сортировка, регион, трекинг). Всё остальное в
-// query трактуем как фильтр маркетплейса (категория hid/nid, бренд/цена glfilter,
-// WB f<digits>/priceU и т.п.). Список — нижний регистр.
-var searchNonFilterParams = map[string]bool{
-	"text": true, "search": true, "tb_q": true, // сам запрос / наш текст-фильтр
-	"page": true, "sort": true, "sorting": true,
-	"lr": true, "clid": true, "rs": true, "rt": true, // регион/трекинг Я.Маркета
-	"suggest_text": true, "suggesttext": true, "was_redir": true,
-	"from": true, "from_global": true,
-	"utm_source": true, "utm_medium": true, "utm_campaign": true,
-	"utm_term": true, "utm_content": true,
+// searchFilterParams — query-параметры, которые ДЕЙСТВИТЕЛЬНО сужают выдачу
+// (бренд, цена, явный фасет), выбранные пользователем. Подход — «белый список»:
+// перечисляем сами фильтры, а не пытаемся отсеять открытый набор трекинга. Так
+// надёжнее — трекинг/регион/пагинация/авто-категория у каждого маркетплейса свои
+// и бесконечны, а реальные фильтры наперечёт и стабильны. ВАЖНО: hid/nid у
+// Я.Маркета — авто-категория поисковой выдачи (приходят с любым запросом «слово»),
+// поэтому фильтром НЕ считаются; реальный фильтр у YM — glfilter/цена. Список —
+// нижний регистр.
+var searchFilterParams = map[string]bool{
+	// Я.Маркет: бренд/фасеты и цена.
+	"glfilter": true, "gfilter": true,
+	"pricefrom": true, "priceto": true, "onstock": true,
+	// Wildberries: цена, предмет, бренд, поставщик, цвет (числовые фасеты f<digits>
+	// ловит wbFacetRe ниже).
+	"priceu": true, "dprice": true, "xsubject": true,
+	"fbrand": true, "fsupplier": true, "fcolor": true,
+	// Ozon: бренд/цена, если попадают в query (обычно у Ozon фильтр в пути).
+	"brand": true,
 }
 
-// SearchHasSiteFilter — заданы ли в поисковой ссылке сужающие фильтры маркетплейса
-// (категория, бренд, цена и пр.), помимо самого текста запроса. Эвристика: любой
-// query-параметр вне searchNonFilterParams ИЛИ категорийный путь Я.Маркета. Нужно,
-// чтобы не советовать «добавь фильтры», когда они уже есть. Ошибаемся в безопасную
-// сторону: незнакомый трекинг-параметр → решим, что фильтр есть, и просто не
-// покажем совет (лучше не надоесть, чем надоесть зря).
+// wbFacetRe — фасетный фильтр Wildberries вида f204557=... (числовой id предмета/
+// бренда/цвета). Именованные fbrand/fcolor — в searchFilterParams.
+var wbFacetRe = regexp.MustCompile(`^f\d+$`)
+
+// SearchHasSiteFilter — выбрал ли пользователь сужающий фильтр (бренд, цена,
+// категория-фасет) поверх самого текста запроса. Нужно, чтобы советовать «добавь
+// фильтры» только на голом поиске. Сигналы: известный фильтр-параметр в query
+// (searchFilterParams / wbFacetRe), категорийная страница Я.Маркета (catalog--/
+// category--) или выбранный бренд/подкатегория в пути Ozon (второй slug-сегмент
+// под /category/). Всё остальное — трекинг, регион, пагинация, авто-категория
+// (hid/nid у YM) — фильтром не считаем и совет показываем.
 func SearchHasSiteFilter(rawURL string) bool {
 	u, err := url.Parse(rawURL)
 	if err != nil {
 		return false
 	}
-	p := strings.ToLower(u.Path)
+	p := strings.ToLower(strings.Trim(u.Path, "/"))
 	if strings.Contains(p, "catalog--") || strings.Contains(p, "category--") {
 		return true // категорийная страница Я.Маркета
+	}
+	if ozonCategoryNarrowed(p) {
+		return true // на Ozon выбран бренд/подкатегория поверх категории
 	}
 	// RawQuery парсим вручную (по «&»): url.Query() отбрасывает пары с «;» —
 	// а WB-фильтры бывают вида priceU=1000;5000 / f5023=a;b;c.
@@ -219,11 +233,28 @@ func SearchHasSiteFilter(rawURL string) bool {
 		if i := strings.IndexByte(pair, '='); i >= 0 {
 			key = pair[:i]
 		}
-		if key == "" {
-			continue
-		}
-		if !searchNonFilterParams[strings.ToLower(key)] {
+		key = strings.ToLower(key)
+		if searchFilterParams[key] || wbFacetRe.MatchString(key) {
 			return true
+		}
+	}
+	return false
+}
+
+// ozonCategoryNarrowed — путь Ozon вида /category/<категория>/<бренд|подкатегория>/
+// означает выбранный фильтр (второй slug-сегмент). Один сегмент после /category/ —
+// авто-категория поисковой выдачи (фильтром не считаем).
+func ozonCategoryNarrowed(path string) bool {
+	parts := strings.Split(path, "/")
+	for i, s := range parts {
+		if s == "category" {
+			n := 0
+			for _, seg := range parts[i+1:] {
+				if seg != "" {
+					n++
+				}
+			}
+			return n >= 2
 		}
 	}
 	return false
