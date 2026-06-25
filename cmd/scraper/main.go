@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"math"
 	"os"
 	"os/signal"
 	"strconv"
@@ -250,7 +251,7 @@ func makeHandler(
 			// «цена X действует с t0» восстанавливаем на чтении (PriceHistoryRepo.Stats
 			// взвешивает по длительности). prevPrice<=0 → первая точка по товару.
 			// Кэш последней цены обновляем ВСЕГДА — на нём держится детект снижения.
-			if prevPrice <= 0 || result.Price != prevPrice {
+			if prevPrice <= 0 || !pricesEqual(result.Price, prevPrice) {
 				// Первая точка по товару + маркетплейс отдал свою историю (WB
 				// price-history.json) → одноразовый бэкфилл: график и «честная цена»
 				// работают сразу, без ожидания накопления. Best-effort: ошибка
@@ -356,6 +357,16 @@ func backfillHistory(
 	if n > 0 {
 		log.Info("price history backfilled", "product_id", productID, "points", n)
 	}
+}
+
+// pricesEqual — равенство ДЕНЕГ с точностью до копейки, а не строгое float-сравнение.
+// Корень бага: WB отдаёт цену делением kopecks/100, а pgx конвертит NUMERIC(12,2)
+// из БД в float64 умножением на 10^-2 — у дробных цен (копейки) младшие биты
+// расходятся, и строгое `!=` считало цену «изменившейся» на КАЖДОМ скрейпе →
+// price_history WB пухла тысячами идентичных точек (у Ozon/ЯМ цены целые, эффекта
+// не было). Округляем до копеек: реальное изменение цены всегда ≥ 0.01.
+func pricesEqual(a, b float64) bool {
+	return math.Round(a*100) == math.Round(b*100)
 }
 
 func getEnv(key, fallback string) string {
