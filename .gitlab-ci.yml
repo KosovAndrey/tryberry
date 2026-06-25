@@ -1,0 +1,45 @@
+# CI/CD на self-hosted GitLab-раннере (shell executor) на ТОМ ЖЕ VPS, где крутится
+# прод. Так деплой остаётся локальным `docker compose up` — без SSH и без выноса
+# секретов в CI (они лежат в .env/xray/wireguard прямо на сервере).
+#
+# Настройка раннера — см. docs/CI-CD.md (одноразово).
+#
+#   test   — на каждый push/MR: сборка + тесты в изолированном golang-контейнере.
+#   deploy — ВРУЧНУЮ, только main: тянет main в рабочий каталог на VPS (там секреты,
+#            которых нет в чистом клоне раннера) и пересобирает/перезапускает.
+
+stages:
+  - test
+  - deploy
+
+variables:
+  # Каталог с рабочим прод-деплоем (там .env и git-ignored секреты). Меняется в
+  # настройках проекта (Settings → CI/CD → Variables) при другом пути/пользователе.
+  DEPLOY_DIR: "/home/kosovandrey/projects/tryberrybot"
+
+test:
+  stage: test
+  tags: [tryberry]
+  interruptible: true
+  script:
+    # Тесты в официальном образе Go — не зависим от тулчейна на хосте и не пускаем
+    # код репозитория к docker/секретам хоста (монтируем только исходники).
+    - docker run --rm -v "$CI_PROJECT_DIR":/app -w /app golang:1.26
+        sh -c "go build ./... && go test ./..."
+
+deploy:
+  stage: deploy
+  tags: [tryberry]
+  rules:
+    - if: '$CI_COMMIT_BRANCH == "main"'
+      when: manual            # запуск кнопкой в пайплайне — без сюрприз-деплоев
+  environment:
+    name: production
+    url: https://tryberry.ru
+  script:
+    - cd "$DEPLOY_DIR"
+    - git fetch origin
+    - git checkout main
+    - git pull --ff-only origin main
+    # make deploy: пересборка api (+воркеры) с GIT_COMMIT=<хеш>, up -d, reload nginx.
+    - make deploy

@@ -1,6 +1,11 @@
-.PHONY: up down down-v migrate migrate-down migrate-status lint test test-short test-cover build tidy help
+.PHONY: up down down-v migrate migrate-down migrate-status lint test test-short test-cover build tidy help \
+        deploy deploy-api nginx-reload ci-test
 
 DB_URL ?= postgres://user:password@localhost:5433/tryberrybot?sslmode=disable
+
+# Prod-окружение на VPS: основной compose + overlay. GIT_COMMIT → ?v= у статики api.
+COMPOSE_PROD = docker compose -f docker-compose.yml -f docker-compose.prod.yml
+GIT_COMMIT   := $(shell git rev-parse --short HEAD 2>/dev/null || echo dev)
 
 # Docker
 up:
@@ -55,6 +60,25 @@ build:
 	go build -o bin/notifier      ./cmd/notifier
 	go build -o bin/scheduler     ./cmd/scheduler
 	go build -o bin/search-worker ./cmd/search-worker
+
+# Deploy (на VPS, из каталога с .env и секретами)
+# Любая пересборка api идёт с GIT_COMMIT → версионирование ассетов (?v=) корректное.
+ci-test:
+	docker run --rm -v "$(PWD)":/app -w /app golang:1.26 \
+		sh -c "go build ./... && go test ./..."
+
+deploy-api:
+	GIT_COMMIT=$(GIT_COMMIT) $(COMPOSE_PROD) build api
+	$(COMPOSE_PROD) up -d api
+
+deploy:
+	GIT_COMMIT=$(GIT_COMMIT) $(COMPOSE_PROD) build api bot-worker scraper search-worker reseller-worker notifier scheduler
+	$(COMPOSE_PROD) up -d
+	$(MAKE) nginx-reload
+
+nginx-reload:
+	$(COMPOSE_PROD) exec -T nginx nginx -t
+	$(COMPOSE_PROD) exec -T nginx nginx -s reload
 
 # Help
 help:
