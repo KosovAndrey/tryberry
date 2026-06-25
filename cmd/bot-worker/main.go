@@ -177,7 +177,8 @@ func run(log *slog.Logger) error {
 		}
 		vkBot = vk.NewBot(vk.NewClient(vkToken), log, userRepo, subRepo, prodRepo,
 			searchQueryRepo, searchSubRepo, promoRepo, referralRepo, registry, linkCodes, redisClient,
-			getEnv("VK_BOT_URL", ""))
+			getEnv("VK_BOT_URL", ""),
+			getEnv("PUBLIC_BASE_URL", "https://tryberry.ru"))
 		vkConsumer := kafka.NewConsumer(kafkaBrokers, "vk-updates", "vk-workers")
 		defer vkConsumer.Close()
 		go func() {

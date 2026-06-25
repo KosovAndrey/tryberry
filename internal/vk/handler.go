@@ -108,6 +108,7 @@ type Bot struct {
 	linkCodes       *redisrepo.LinkCodeStore
 	rdb             *redis.Client // FSM ввода порога (может быть nil)
 	botURL          string        // ссылка на VK-бота для приглашений ("" — не показывать)
+	chartBaseURL    string        // PUBLIC_BASE_URL для ссылки «📈 График цены» → /p/<public_id>; "" — не показывать
 
 	// Оплата (как в TG): payments == nil → заглушка; discounts хранит
 	// «ожидающую скидку» (nil без redis); billing — рекуррентные подписки.
@@ -140,6 +141,7 @@ func NewBot(
 	linkCodes *redisrepo.LinkCodeStore,
 	rdb *redis.Client,
 	botURL string,
+	chartBaseURL string,
 ) *Bot {
 	var discounts *redisrepo.DiscountStore
 	if rdb != nil {
@@ -159,8 +161,35 @@ func NewBot(
 		linkCodes:       linkCodes,
 		rdb:             rdb,
 		botURL:          botURL,
+		chartBaseURL:    chartBaseURL,
 		discounts:       discounts,
 	}
+}
+
+// chartURL — публичная ссылка на график товара (chartBaseURL + "/p/" + publicID),
+// либо "" (сайт не задан / нет токена). Зеркалит telegram.Bot.chartURL.
+func (b *Bot) chartURL(publicID string) string {
+	if b.chartBaseURL == "" || publicID == "" {
+		return ""
+	}
+	return b.chartBaseURL + "/p/" + publicID
+}
+
+// chartURLForSub — ссылка на график по id подписки (когда public_id товара под
+// рукой нет: нажатие кнопки типа триггера). Зеркалит telegram.Bot.chartURLForSub.
+func (b *Bot) chartURLForSub(ctx context.Context, subID int64) string {
+	if b.chartBaseURL == "" {
+		return ""
+	}
+	sub, err := b.subRepo.GetByID(ctx, subID)
+	if err != nil {
+		return ""
+	}
+	p, err := b.prodRepo.GetByID(ctx, sub.ProductID)
+	if err != nil {
+		return ""
+	}
+	return b.chartURL(p.PublicID)
 }
 
 // HandleEvent — точка входа для события из Kafka.

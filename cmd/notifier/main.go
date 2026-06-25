@@ -107,7 +107,7 @@ func run(log *slog.Logger) error {
 
 	// Маршрутизация по каналам: без VK_GROUP_TOKEN ведёт себя ровно как раньше
 	// (всё в Telegram). С токеном — смотрит на users.notify_channel.
-	sender := &deliverer{log: log, tg: tgNotifier, users: userRepo}
+	sender := &deliverer{log: log, tg: tgNotifier, users: userRepo, chartBaseURL: publicBaseURL}
 	if vkToken := os.Getenv("VK_GROUP_TOKEN"); vkToken != "" {
 		sender.vk = vk.NewClient(vkToken)
 		log.Info("vk delivery enabled")

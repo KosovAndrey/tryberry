@@ -96,7 +96,7 @@ func (b *Bot) handleTrack(ctx context.Context, vkID int64, user *domain.User, ra
 	b.send(ctx, vkID, fmt.Sprintf(
 		"%s\n\n%s\n💰 Текущая цена: %.0f ₽\n\n"+
 			"🔔 Сейчас уведомлю при любом снижении. Сменить тип уведомления — кнопками ниже 👇",
-		head, result.Name, result.Price), vkTriggerKeyboard(sub.ID, domain.TriggerAnyDrop))
+		head, result.Name, result.Price), vkTriggerKeyboard(sub.ID, domain.TriggerAnyDrop, b.chartURL(product.PublicID)))
 }
 
 // ── Тип триггера товарной подписки ────────────────────────────────────────────
@@ -143,8 +143,9 @@ func (b *Bot) clearTrackFSM(ctx context.Context, vkID int64) {
 }
 
 // vkTriggerKeyboard — inline-выбор стратегии под сообщением товара,
-// текущая помечена галочкой (как в TG).
-func vkTriggerKeyboard(subID int64, current domain.TriggerType) *Keyboard {
+// текущая помечена галочкой (как в TG). chartURL непустой → добавляем link-кнопку
+// «📈 График цены» (open_link) отдельной строкой; "" → без неё.
+func vkTriggerKeyboard(subID int64, current domain.TriggerType, chartURL string) *Keyboard {
 	mark := func(label string, t domain.TriggerType) string {
 		if current == t {
 			return "✅ " + label
@@ -154,13 +155,17 @@ func vkTriggerKeyboard(subID int64, current domain.TriggerType) *Keyboard {
 	pl := func(kind string) string {
 		return fmt.Sprintf(`{"cmd":%q,"id":%d,"k":%q}`, cmdPTrack, subID, kind)
 	}
-	return &Keyboard{Inline: true, Buttons: [][]Button{
+	rows := [][]Button{
 		{TextButton(mark("🔻 Любое снижение", domain.TriggerAnyDrop), pl("any"), ColorPrimary)},
 		{
 			TextButton(mark("📉 Ниже цены", domain.TriggerBelowTarget), pl("below"), ColorSecondary),
 			TextButton(mark("％ Скидка %", domain.TriggerDiscountPct), pl("disc"), ColorSecondary),
 		},
-	}}
+	}
+	if chartURL != "" {
+		rows = append(rows, []Button{LinkButton("📈 График цены", chartURL)})
+	}
+	return &Keyboard{Inline: true, Buttons: rows}
 }
 
 // handleProductTrigger — нажатие кнопки типа триггера (cmd=ptrack).
@@ -174,7 +179,7 @@ func (b *Bot) handleProductTrigger(ctx context.Context, vkID int64, user *domain
 			return
 		}
 		b.send(ctx, vkID, "🔔 Тип уведомления: "+domain.TriggerDescription(domain.TriggerAnyDrop, nil, nil),
-			vkTriggerKeyboard(p.ID, domain.TriggerAnyDrop))
+			vkTriggerKeyboard(p.ID, domain.TriggerAnyDrop, b.chartURLForSub(ctx, p.ID)))
 	case "below":
 		if err := b.setTrackFSM(ctx, vkID, vkTrackFSM{SubID: p.ID, Trigger: string(domain.TriggerBelowTarget)}); err != nil {
 			b.send(ctx, vkID, "Не получилось начать ввод (нет связи с хранилищем). Останется «Любое снижение».", nil)
@@ -206,7 +211,7 @@ func (b *Bot) handleTrackThreshold(ctx context.Context, vkID int64, user *domain
 			return
 		}
 		b.send(ctx, vkID, "✅ Готово! "+domain.TriggerDescription(domain.TriggerBelowTarget, &price, nil),
-			vkTriggerKeyboard(fsm.SubID, domain.TriggerBelowTarget))
+			vkTriggerKeyboard(fsm.SubID, domain.TriggerBelowTarget, b.chartURLForSub(ctx, fsm.SubID)))
 
 	case domain.TriggerDiscountPct:
 		pct, err := domain.ParsePct(text)
@@ -221,7 +226,7 @@ func (b *Bot) handleTrackThreshold(ctx context.Context, vkID int64, user *domain
 			return
 		}
 		b.send(ctx, vkID, "✅ Готово! "+domain.TriggerDescription(domain.TriggerDiscountPct, nil, &pct),
-			vkTriggerKeyboard(fsm.SubID, domain.TriggerDiscountPct))
+			vkTriggerKeyboard(fsm.SubID, domain.TriggerDiscountPct, b.chartURLForSub(ctx, fsm.SubID)))
 
 	default:
 		b.clearTrackFSM(ctx, vkID)
@@ -265,8 +270,12 @@ func (b *Bot) handleList(ctx context.Context, vkID int64, user *domain.User, pre
 			}
 			current = fmt.Sprintf("%s%.0f ₽", emoji, sub.CurrentPrice)
 		}
-		fmt.Fprintf(&sb, "%d. %s\n   сейчас %s | при подписке %.0f ₽\n   %s\n\n",
+		fmt.Fprintf(&sb, "%d. %s\n   сейчас %s | при подписке %.0f ₽\n   %s\n",
 			i+1, sub.ProductName, current, sub.FirstSeenPrice, sub.ProductURL)
+		if cu := b.chartURL(sub.ProductPublicID); cu != "" {
+			fmt.Fprintf(&sb, "   📈 График: %s\n", cu)
+		}
+		sb.WriteString("\n")
 	}
 	sb.WriteString("Отписаться — кнопки «❌ номер» под сообщением 👇")
 
