@@ -114,8 +114,7 @@ func (b *Bot) handleTrack(ctx context.Context, vkID int64, user *domain.User, ra
 	if !alreadyTracked && len(active) >= plan.MaxProduct {
 		b.send(ctx, vkID, fmt.Sprintf(
 			"🚫 Достигнут лимит тарифа %s: товаров %d из %d.\n\n"+
-				"Отпишись от ненужного («Мои товары») или оформи тариф повыше — "+
-				"тарифы пока в Telegram-боте @TryBerryBot, команда /plans.",
+				"Отпишись от ненужного («Мои товары») или оформи тариф повыше кнопкой «Тарифы» 👇",
 			plan.Title, len(active), plan.MaxProduct), menuKeyboard(user.TelegramID != 0))
 		return
 	}
