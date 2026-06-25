@@ -3,6 +3,7 @@ package scraper
 import (
 	"context"
 	"errors"
+	"time"
 )
 
 // Marketplace — идентификатор маркетплейса (используется в БД и логах)
@@ -24,6 +25,18 @@ type Result struct {
 	// товара валидна, но сейчас не продаётся» (нет buy-box). Скрейперы с ценой
 	// всегда ставят true; ситуацию «нет оффера» пока отдаёт только Я.Маркет.
 	InStock bool
+
+	// History — НЕОБЯЗАТЕЛЬНАЯ историческая серия цен от самого маркетплейса (для
+	// бэкфилла price_history на первом скрейпе товара, чтобы график/«честная цена»
+	// работали сразу). Сейчас заполняет только WB (basket-CDN price-history.json).
+	// Точки в прошлом, отсортированы по времени; текущую цену добавляет обычный путь.
+	History []PriceHistoryPoint
+}
+
+// PriceHistoryPoint — точка исторической серии маркетплейса (см. Result.History).
+type PriceHistoryPoint struct {
+	At    time.Time
+	Price float64
 }
 
 // MarketplaceScraper — интерфейс который реализует каждый маркетплейс.

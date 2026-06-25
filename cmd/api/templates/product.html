@@ -1,0 +1,114 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>{{ .Title }} · TryBerry</title>
+<meta name="description" content="{{ .Description }}">
+<meta name="robots" content="index,follow">
+<link rel="canonical" href="{{ .Canonical }}">
+<link rel="icon" type="image/png" href="/logo.png">
+
+<meta property="og:type" content="website">
+<meta property="og:title" content="{{ .Title }}">
+<meta property="og:description" content="{{ .Description }}">
+<meta property="og:url" content="{{ .Canonical }}">
+{{ if .ImageURL }}<meta property="og:image" content="{{ .ImageURL }}">{{ end }}
+<meta name="twitter:card" content="summary{{ if .ImageURL }}_large_image{{ end }}">
+
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Unbounded:wght@400;500;600;700;800&family=Onest:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="/vendor/uPlot.min.css">
+<link rel="stylesheet" href="/assets/chart.css">
+
+<script type="application/ld+json">{{ .LDJSON }}</script>
+</head>
+<body class="v-{{ .VerdictClass }}">
+<div class="grain" aria-hidden="true"></div>
+
+<header class="topbar">
+  <a class="brand" href="/">
+    <img src="/logo.png" alt="" width="26" height="26">
+    <span>TryBerry</span>
+  </a>
+  <a class="topcta" href="/#how">Следить за ценой</a>
+</header>
+
+<main class="wrap">
+
+  <section class="hero">
+    <div class="hero__meta">
+      {{ if .MarketplaceLabel }}<span class="badge badge--{{ .Marketplace }}">{{ .MarketplaceLabel }}</span>{{ end }}
+      {{ if not .InStock }}<span class="badge badge--oos">Нет в наличии</span>{{ end }}
+    </div>
+    <h1 class="hero__name">{{ .Name }}</h1>
+
+    <div class="verdict">
+      <div class="verdict__body">
+        <p class="verdict__title">{{ .VerdictTitle }}</p>
+        <p class="verdict__note">{{ .VerdictNote }}</p>
+      </div>
+      <div class="verdict__price">
+        <span class="verdict__price-label">Сейчас</span>
+        <span class="verdict__price-value">{{ if .HasPrice }}{{ rub .Current }}{{ else }}—{{ end }}</span>
+      </div>
+    </div>
+  </section>
+
+  <section class="panel">
+    <div class="ranges" role="tablist" aria-label="Период">
+      <button data-range="30d" role="tab">30 дней</button>
+      <button data-range="90d" class="active" role="tab" aria-selected="true">90 дней</button>
+      <button data-range="365d" role="tab">Год</button>
+      <button data-range="all" role="tab">Всё время</button>
+    </div>
+
+    <div id="chart" class="chart"></div>
+    <div id="empty" class="empty" hidden>Истории пока мало — линия появится, когда накопится несколько замеров цены.</div>
+
+    {{ if .HasData }}
+    <div class="reflegend">
+      <span class="reflegend__item reflegend__item--min">Минимум</span>
+      <span class="reflegend__item reflegend__item--usual">Обычная цена</span>
+    </div>
+    {{ end }}
+  </section>
+
+  {{ if .HasData }}
+  <section class="facts">
+    <div class="fact">
+      <span class="fact__k">Минимум за всё время</span>
+      <span class="fact__v">{{ rub .MinAll }}</span>
+    </div>
+    <div class="fact">
+      <span class="fact__k">Обычная цена · 30 дней</span>
+      <span class="fact__v">{{ rub .Median30 }}</span>
+    </div>
+    <div class="fact">
+      <span class="fact__k">Минимум за 90 дней</span>
+      <span class="fact__v">{{ rub .Min90 }}</span>
+    </div>
+  </section>
+  {{ end }}
+
+  <div class="actions">
+    <a class="open" href="{{ .ProductURL }}" rel="nofollow noopener" target="_blank">
+      Открыть на {{ if .MarketplaceLabel }}{{ .MarketplaceLabel }}{{ else }}маркетплейсе{{ end }}
+      <span aria-hidden="true">→</span>
+    </a>
+    <p class="src">История по наблюдениям TryBerry{{ if .SinceISO }} с {{ .SinceISO }}{{ end }}. Цена держится до следующей смены.</p>
+  </div>
+
+  <p class="disclaimer">TryBerry не продаёт товар и не связан с маркетплейсом. Мы показываем динамику цены по своим наблюдениям, чтобы отличить настоящую скидку от накрученной.</p>
+</main>
+
+<footer class="foot">
+  <a href="/">TryBerry</a><span>·</span><a href="/#offer">Оферта</a><span>·</span><a href="https://t.me/kosov_andrey" rel="nofollow">Поддержка</a>
+</footer>
+
+<script>window.__CHART__ = {publicId:"{{ .PublicID }}", series:{{ .SeriesJSON }}, refs:{min:{{ .RefMin }}, usual:{{ .RefUsual }}}};</script>
+<script src="/vendor/uPlot.iife.min.js"></script>
+<script src="/assets/chart.js" defer></script>
+</body>
+</html>

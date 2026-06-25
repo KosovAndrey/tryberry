@@ -69,6 +69,7 @@ func run(log *slog.Logger) error {
 	webhookEnabled := getEnv("WEBHOOK_ENABLED", "true") == "true"
 	port := getEnv("PORT", "8081")
 	otlpEndpoint := getEnv("OTLP_ENDPOINT", "jaeger:4317")
+	publicBaseURL := getEnv("PUBLIC_BASE_URL", "https://tryberry.ru")
 
 	shutdownTracing, err := tracing.Init(ctx, "api", otlpEndpoint)
 	if err != nil {
@@ -368,6 +369,19 @@ func run(log *slog.Logger) error {
 	mux.HandleFunc("/health", healthChecker.Handler())
 	mux.HandleFunc("/live", health.LivenessHandler())
 	mux.Handle("/metrics", promhttp.Handler())
+
+	// Публичные read-only страницы графиков цены (/p/<public_id>) + их JSON-API,
+	// sitemap и robots. Reuse пула: api уже держит подключение к Postgres.
+	webHandlers, err := NewWebHandlers(
+		postgres.NewProductRepo(pool),
+		postgres.NewPriceHistoryRepo(pool),
+		publicBaseURL,
+		log,
+	)
+	if err != nil {
+		return fmt.Errorf("init web handlers: %w", err)
+	}
+	webHandlers.Register(mux)
 
 	srv := &http.Server{Addr: ":" + port, Handler: mux}
 

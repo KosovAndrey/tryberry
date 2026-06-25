@@ -101,6 +101,116 @@ func (r *PriceHistoryRepo) Stats(ctx context.Context, productID int64, now time.
 	return s, nil
 }
 
+// PricePoint — одна точка серии для графика: момент смены цены + цена сегмента,
+// действующая до следующей точки (последняя — до now, дорисовывает клиент).
+type PricePoint struct {
+	RecordedAt time.Time
+	Price      float64
+}
+
+// seriesMaxPoints — потолок числа точек, отдаваемых на график. На change-only
+// хранении почти недостижим; защищает память/трафик от аномального товара.
+const seriesMaxPoints = 5000
+
+// Series — точки истории цены товара в окне [from, to] ДЛЯ ступенчатого графика.
+// Из-за change-only хранения добавляем «якорь» — последнюю запись со временем
+// строго до from (сегмент, активный на левой границе окна), смещая её время к
+// from, чтобы линия начиналась ровно от края, а не повисала. Опирается на индекс
+// (product_id, recorded_at); партиции прунятся по recorded_at.
+func (r *PriceHistoryRepo) Series(ctx context.Context, productID int64, from, to time.Time) ([]PricePoint, error) {
+	const q = `
+		(
+			SELECT $3::timestamptz AS recorded_at, price
+			FROM price_history
+			WHERE product_id = $1 AND recorded_at < $3::timestamptz
+			ORDER BY recorded_at DESC
+			LIMIT 1
+		)
+		UNION ALL
+		(
+			SELECT recorded_at, price
+			FROM price_history
+			WHERE product_id = $1
+			  AND recorded_at >= $3::timestamptz
+			  AND recorded_at <= $4::timestamptz
+			ORDER BY recorded_at
+			LIMIT $2
+		)
+		ORDER BY recorded_at`
+
+	rows, err := r.db.Query(ctx, q, productID, seriesMaxPoints, from, to)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var out []PricePoint
+	for rows.Next() {
+		var p PricePoint
+		if err := rows.Scan(&p.RecordedAt, &p.Price); err != nil {
+			return nil, err
+		}
+		out = append(out, p)
+	}
+	return out, rows.Err()
+}
+
+// BackfillIfEmpty одноразово заливает историческую серию (от самого маркетплейса,
+// напр. WB price-history.json) в price_history — ТОЛЬКО если по товару ещё нет
+// записей. Так график и «честная цена» работают с первого скрейпа, без ожидания
+// накопления. Возвращает число вставленных точек (0 = история уже была).
+//
+// Гонко-безопасно: транзакция + xact-advisory-lock по product_id (параллельные
+// скрейпы одного товара не задвоят), внутри — повторная проверка пустоты.
+// ВНИМАНИЕ: партиции под прошлые месяцы серии должны существовать (вызывающий
+// заранее делает partition.Manager.EnsureForTimes) — иначе INSERT упадёт.
+func (r *PriceHistoryRepo) BackfillIfEmpty(ctx context.Context, productID int64, points []PricePoint) (int, error) {
+	if len(points) == 0 {
+		return 0, nil
+	}
+
+	tx, err := r.db.Begin(ctx)
+	if err != nil {
+		return 0, err
+	}
+	defer tx.Rollback(ctx)
+
+	// Сериализуем бэкфиллы одного товара; лок снимется на commit/rollback.
+	if _, err := tx.Exec(ctx, `SELECT pg_advisory_xact_lock($1)`, productID); err != nil {
+		return 0, err
+	}
+
+	var existing int64
+	if err := tx.QueryRow(ctx,
+		`SELECT count(*) FROM price_history WHERE product_id = $1`, productID).Scan(&existing); err != nil {
+		return 0, err
+	}
+	if existing > 0 {
+		return 0, nil // история уже есть — ничего не делаем
+	}
+
+	b := &pgx.Batch{}
+	for _, p := range points {
+		b.Queue(
+			`INSERT INTO price_history (product_id, price, recorded_at) VALUES ($1, $2, $3)`,
+			productID, p.Price, p.RecordedAt)
+	}
+	br := tx.SendBatch(ctx, b)
+	for range points {
+		if _, err := br.Exec(); err != nil {
+			br.Close()
+			return 0, err
+		}
+	}
+	if err := br.Close(); err != nil {
+		return 0, err
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return 0, err
+	}
+	return len(points), nil
+}
+
 // GetLatest — последняя записанная цена. Используется как fallback если Redis недоступен.
 func (r *PriceHistoryRepo) GetLatest(ctx context.Context, productID int64) (float64, time.Time, error) {
 	const q = `
