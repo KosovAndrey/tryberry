@@ -93,7 +93,7 @@ func (h *WebHandlers) Register(mux *http.ServeMux) {
 // ── /p/<public_id>[/slug] ───────────────────────────────────────────────────
 
 func (h *WebHandlers) handleProductPage(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodGet {
+	if r.Method != http.MethodGet && r.Method != http.MethodHead {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
@@ -177,7 +177,7 @@ func (h *WebHandlers) notFound(w http.ResponseWriter) {
 // ── /api/price-history?p=<public_id>&range=30d|90d|365d|all ──────────────────
 
 func (h *WebHandlers) handlePriceHistory(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodGet {
+	if r.Method != http.MethodGet && r.Method != http.MethodHead {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
@@ -231,7 +231,7 @@ func (h *WebHandlers) writeJSON(w http.ResponseWriter, body []byte) {
 // ── /sitemap.xml ────────────────────────────────────────────────────────────
 
 func (h *WebHandlers) handleSitemap(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodGet {
+	if r.Method != http.MethodGet && r.Method != http.MethodHead {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
