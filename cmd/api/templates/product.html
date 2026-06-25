@@ -38,11 +38,20 @@
 <main class="wrap">
 
   <section class="hero">
-    <div class="hero__meta">
-      {{ if .MarketplaceLabel }}<span class="badge badge--{{ .Marketplace }}">{{ .MarketplaceLabel }}</span>{{ end }}
-      {{ if not .InStock }}<span class="badge badge--oos">Нет в наличии</span>{{ end }}
+    <div class="hero__head">
+      {{ if .ImageURL }}
+      <div class="hero__img" id="prodimg-box">
+        <img id="prodimg" src="{{ .ImageURL }}" alt="{{ .Name }}" loading="lazy" decoding="async" referrerpolicy="no-referrer">
+      </div>
+      {{ end }}
+      <div class="hero__headtext">
+        <div class="hero__meta">
+          {{ if .MarketplaceLabel }}<span class="badge badge--{{ .Marketplace }}">{{ .MarketplaceLabel }}</span>{{ end }}
+          {{ if not .InStock }}<span class="badge badge--oos">Нет в наличии</span>{{ end }}
+        </div>
+        <h1 class="hero__name">{{ .Name }}</h1>
+      </div>
     </div>
-    <h1 class="hero__name">{{ .Name }}</h1>
 
     <div class="verdict">
       <div class="verdict__body">
