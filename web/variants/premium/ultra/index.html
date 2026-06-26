@@ -365,28 +365,24 @@ footer{background:var(--plum-deep);padding:70px 0 40px;border-top:1px solid var(
   .burger{display:block}
   .plan-grid{grid-template-columns:1fr}
 }
-/* ---------- MARKETPLACES (вращающийся стенд) ---------- */
-.markets-head{max-width:640px;margin:0 auto;text-align:center}
-.mp-stage{margin:clamp(46px,7vw,84px) auto 0;display:flex;justify-content:center;perspective:1500px}
-.mp-cube{position:relative;width:300px;height:188px;transform-style:preserve-3d;animation:mpspin 18s cubic-bezier(.76,0,.24,1) infinite;will-change:transform}
-@keyframes mpspin{0%,17%{transform:rotateY(0deg)}25%,42%{transform:rotateY(-90deg)}50%,67%{transform:rotateY(-180deg)}75%,92%{transform:rotateY(-270deg)}100%{transform:rotateY(-360deg)}}
-.mp-face{position:absolute;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:13px;border-radius:24px;border:1px solid rgba(255,255,255,.16);box-shadow:0 34px 80px rgba(0,0,0,.5),inset 0 1px 0 rgba(255,255,255,.14);backface-visibility:hidden}
-.mp-name{font-family:var(--font-display);font-weight:700;font-size:clamp(1.5rem,4.4vw,2.2rem);color:#fff;letter-spacing:-.01em}
-.mp-tag{font-size:.72rem;font-weight:600;letter-spacing:.08em;text-transform:uppercase;padding:5px 13px;border-radius:100px;background:rgba(0,0,0,.22);color:#fff}
-.mp-tag.live{background:rgba(58,210,159,.9);color:#06281c}
-.mp-wb{background:linear-gradient(135deg,#cb11ab,#5b1d80);transform:rotateY(0deg) translateZ(150px)}
-.mp-ozon{background:linear-gradient(135deg,#0a7cff,#0040c0);transform:rotateY(90deg) translateZ(150px)}
-.mp-ym{background:linear-gradient(135deg,#ff4b2b,#c41e0a);transform:rotateY(180deg) translateZ(150px)}
-.mp-ali{background:linear-gradient(135deg,#ff5a3c,#e62e04);transform:rotateY(270deg) translateZ(150px)}
-.mp-dots{display:flex;gap:9px;justify-content:center;margin-top:30px}
-.mp-dots i{width:7px;height:7px;border-radius:50%;background:rgba(255,255,255,.22)}
-@media(max-width:360px){.mp-stage{transform:scale(.82)}}
+/* ---------- MARKETPLACES (бегущая строка) ---------- */
+.mp-marquee{margin-top:clamp(40px,6vw,72px);overflow:hidden;-webkit-mask-image:linear-gradient(90deg,transparent,#000 7%,#000 93%,transparent);mask-image:linear-gradient(90deg,transparent,#000 7%,#000 93%,transparent)}
+.mp-track{display:flex;width:max-content;animation:mpscroll 28s linear infinite}
+.mp-marquee:hover .mp-track{animation-play-state:paused}
+@keyframes mpscroll{to{transform:translateX(-50%)}}
+.mp-chip{display:inline-flex;align-items:center;gap:11px;white-space:nowrap;margin-right:18px;font-family:var(--font-display);font-weight:700;font-size:clamp(1.05rem,2vw,1.5rem);color:#fff;padding:14px 26px;border-radius:16px;border:1px solid rgba(255,255,255,.16);box-shadow:0 16px 40px rgba(0,0,0,.4),inset 0 1px 0 rgba(255,255,255,.14)}
+.mp-chip .dot{width:9px;height:9px;border-radius:50%;background:rgba(255,255,255,.5);flex:none}
+.mp-chip .dot.on{background:#3ad29f;box-shadow:0 0 10px #3ad29f}
+.mp-wb{background:linear-gradient(135deg,#cb11ab,#5b1d80)}
+.mp-ozon{background:linear-gradient(135deg,#0a7cff,#0040c0)}
+.mp-ym{background:linear-gradient(135deg,#ff4b2b,#c41e0a)}
+.mp-ali{background:linear-gradient(135deg,#ff5a3c,#e62e04)}
 @media(prefers-reduced-motion:reduce){
   *{animation-duration:.001s!important;transition-duration:.1s!important}
   [data-reveal]{opacity:1;transform:none}
   .hero h1 .kline > span{transform:none;animation:none}
-  .hero h1 .accent{animation:none}
-  .mp-cube{animation:none}
+  .accent{animation:none}
+  .mp-track{animation:none;flex-wrap:wrap;justify-content:center}
   html{scroll-behavior:auto}
 }
 </style>
@@ -473,37 +469,19 @@ footer{background:var(--plum-deep);padding:70px 0 40px;border-top:1px solid var(
             <div><div class="nm">TryBerry</div><div class="st">bot · онлайн</div></div>
           </div>
           <div class="bubble">
-            <div class="ttl good">✓ Это честная скидка</div>
+            <div class="ttl">📉 Цена снизилась</div>
             <div class="prod">Наушники беспроводные TWS, чёрные</div>
-            <div class="spark" aria-hidden="true">
-              <svg viewBox="0 0 240 50" preserveAspectRatio="none">
-                <defs>
-                  <linearGradient id="spark-fill" x1="0" y1="0" x2="0" y2="1">
-                    <stop offset="0" stop-color="#3ad29f" stop-opacity=".28"/>
-                    <stop offset="1" stop-color="#3ad29f" stop-opacity="0"/>
-                  </linearGradient>
-                </defs>
-                <path class="area" d="M0,16 L24,15 L48,20 L72,13 L96,19 L120,14 L144,24 L168,21 L192,33 L216,39 L232,44 L232,50 L0,50 Z"/>
-                <path class="ln" d="M0,16 L24,15 L48,20 L72,13 L96,19 L120,14 L144,24 L168,21 L192,33 L216,39 L232,44"/>
-                <circle class="nowring" cx="232" cy="44" r="6"/>
-                <circle class="now" cx="232" cy="44" r="3.4"/>
-              </svg>
-            </div>
             <div class="price-row">
               <span class="price-old">2 490 ₽</span>
               <span class="price-new">1 690 ₽</span>
-              <span class="price-badge good">минимум за всё время</span>
+              <span class="price-badge">−32%</span>
             </div>
-            <div class="meta">Дешевле, чем было все 90 дней · с учётом баллов за отзыв</div>
+            <div class="meta">С учётом баллов за отзыв · ваш порог 1 800 ₽</div>
           </div>
           <div class="bubble b2">
-            <div class="ttl warn">⚠ А вот тут скидка накручена</div>
-            <div class="prod">Кроссовки мужские, белые — на витрине «−40%»</div>
-            <div class="price-row">
-              <span class="price-new" style="font-size:1.15rem">1 990 ₽</span>
-              <span class="price-badge warn">обычная цена</span>
-            </div>
-            <div class="meta">Цену подняли 5 дней назад — это не распродажа</div>
+            <div class="ttl">🔎 В вашей выдаче</div>
+            <div class="prod">«кроссовки мужские» — 3 товара подешевели</div>
+            <div class="meta">Слежу за всей страницей результатов</div>
           </div>
         </div>
       </div>
@@ -556,15 +534,18 @@ footer{background:var(--plum-deep);padding:70px 0 40px;border-top:1px solid var(
       <h2 data-reveal style="--d:.05s">Следим за ценами там,<br>где вы <span class="accent">покупаете</span>.</h2>
       <p data-reveal style="--d:.1s;margin-left:auto;margin-right:auto">Сейчас полностью работает Wildberries. Ozon, Яндекс&nbsp;Маркет и AliExpress — на&nbsp;подходе.</p>
     </div>
-    <div class="mp-stage" data-reveal style="--d:.15s">
-      <div class="mp-cube">
-        <div class="mp-face mp-wb"><div class="mp-name">Wildberries</div><div class="mp-tag live">уже работает</div></div>
-        <div class="mp-face mp-ozon"><div class="mp-name">OZON</div><div class="mp-tag">скоро</div></div>
-        <div class="mp-face mp-ym"><div class="mp-name">Яндекс Маркет</div><div class="mp-tag">скоро</div></div>
-        <div class="mp-face mp-ali"><div class="mp-name">AliExpress</div><div class="mp-tag">скоро</div></div>
+    <div class="mp-marquee" data-reveal style="--d:.15s">
+      <div class="mp-track">
+        <span class="mp-chip mp-wb"><span class="dot on"></span>Wildberries</span>
+        <span class="mp-chip mp-ozon"><span class="dot"></span>OZON</span>
+        <span class="mp-chip mp-ym"><span class="dot"></span>Яндекс Маркет</span>
+        <span class="mp-chip mp-ali"><span class="dot"></span>AliExpress</span>
+        <span class="mp-chip mp-wb" aria-hidden="true"><span class="dot on"></span>Wildberries</span>
+        <span class="mp-chip mp-ozon" aria-hidden="true"><span class="dot"></span>OZON</span>
+        <span class="mp-chip mp-ym" aria-hidden="true"><span class="dot"></span>Яндекс Маркет</span>
+        <span class="mp-chip mp-ali" aria-hidden="true"><span class="dot"></span>AliExpress</span>
       </div>
     </div>
-    <div class="mp-dots"><i></i><i></i><i></i><i></i></div>
   </div>
 </section>
 
