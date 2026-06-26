@@ -72,7 +72,8 @@ main,.nav,.foot{position:relative;z-index:2}
 .h1{font-family:var(--dsp);font-weight:700;font-size:clamp(2.6rem,6.4vw,5.2rem);line-height:.98;letter-spacing:-.035em}
 .h1 .line{display:block;overflow:hidden;padding-bottom:.04em}
 .h1 .line span{display:block}
-.h1 .accent{background:linear-gradient(110deg,var(--berry-bright),var(--berry));-webkit-background-clip:text;background-clip:text;color:transparent}
+.h1 .accent{background:linear-gradient(100deg,var(--berry-deep),var(--berry-bright) 35%,var(--rose) 50%,var(--berry-bright) 65%,var(--berry-deep));background-size:240% auto;-webkit-background-clip:text;background-clip:text;color:transparent;animation:shine 5s linear infinite}
+@keyframes shine{to{background-position:240% center}}
 .lead{margin-top:26px;font-size:clamp(1.05rem,1.5vw,1.28rem);color:#e7d3dd;max-width:38ch}
 .lead b{color:var(--rose);font-weight:600}
 .cta{display:flex;flex-wrap:wrap;gap:15px;margin-top:36px}
@@ -107,29 +108,22 @@ main,.nav,.foot{position:relative;z-index:2}
 .stat .num{font-family:var(--dsp);font-weight:700;font-size:clamp(2rem,4vw,3rem);letter-spacing:-.02em;background:linear-gradient(120deg,var(--berry-bright),var(--rose));-webkit-background-clip:text;background-clip:text;color:transparent}
 .stat .lab{margin-top:6px;font-size:.82rem;color:var(--muted)}
 
-/* SCROLL STORY (GSAP-pinned) */
-.story-stage{height:100vh;display:flex;align-items:center;overflow:hidden}
-.story-stage .wrap{display:grid;grid-template-columns:1fr;gap:40px;width:100%;align-items:center}
-@media(min-width:920px){.story-stage .wrap{grid-template-columns:.85fr 1.15fr}}
-.beats{position:relative;min-height:230px}
-.beat{position:absolute;inset:0}
+/* SCROLL STORY — липкий график + проявление битов (без pin) */
+.story{padding:clamp(64px,9vw,120px) 0;border-top:1px solid var(--line)}
+.story .wrap{display:grid;grid-template-columns:1fr;gap:clamp(30px,4vw,56px);align-items:start}
+@media(min-width:920px){.story .wrap{grid-template-columns:1fr 1.05fr}}
+.beats{display:flex;flex-direction:column;gap:clamp(40px,9vh,104px)}
 .beat .bk{font-family:var(--dsp);font-weight:700;font-size:.78rem;letter-spacing:.18em;color:var(--berry-bright)}
-.beat h3{font-family:var(--dsp);font-weight:600;font-size:clamp(1.7rem,3.4vw,2.7rem);letter-spacing:-.025em;line-height:1.05;margin:14px 0 14px}
-.beat p{color:#d7bccb;max-width:38ch}
+.beat h3{font-family:var(--dsp);font-weight:600;font-size:clamp(1.6rem,3.2vw,2.5rem);letter-spacing:-.025em;line-height:1.06;margin:14px 0 14px}
+.beat p{color:#d7bccb;max-width:40ch}
 .scene{position:relative;background:var(--glass);border:1px solid var(--line);border-radius:22px;padding:24px;backdrop-filter:blur(12px);box-shadow:0 40px 90px rgba(0,0,0,.45)}
+@media(min-width:920px){.scene{position:sticky;top:90px}}
 .ssvg{width:100%;height:auto}
 .sline{fill:none;stroke:url(#sg);stroke-width:2.6;stroke-linecap:round;stroke-linejoin:round}
 .sgrid{stroke:rgba(255,255,255,.06);stroke-width:1}
 .sbase{stroke:var(--good);stroke-width:1.3;stroke-dasharray:5 4;opacity:.8}
 .stxt{font-family:var(--body);font-size:12px;font-weight:500;fill:var(--muted)}
 .stxt.g{fill:var(--good)}.stxt.r{fill:#ff8a7d}
-.progress{position:absolute;left:0;bottom:42px;width:100%;display:flex;gap:8px;justify-content:center}
-.progress i{width:32px;height:3px;border-radius:3px;background:rgba(255,255,255,.16);transition:background .4s}
-.progress i.on{background:var(--berry-bright)}
-/* reduced-motion / no-JS: статичная читаемая раскладка */
-html:not(.anim) .story-stage{height:auto;display:block;padding:60px 0}
-html:not(.anim) .beat{position:relative;margin-bottom:26px}
-html:not(.anim) .progress{display:none}
 
 /* SECTION */
 .section{padding:clamp(64px,9vw,120px) 0;border-top:1px solid var(--line)}
@@ -176,7 +170,7 @@ html:not(.anim) .progress{display:none}
 /* end cta */
 .endcta{text-align:center;padding:clamp(80px,12vw,150px) 0;border-top:1px solid var(--line)}
 .endcta h2{font-family:var(--dsp);font-weight:700;font-size:clamp(2.1rem,5vw,3.8rem);letter-spacing:-.03em;line-height:1.05;max-width:16ch;margin:0 auto 36px}
-.endcta .accent{background:linear-gradient(110deg,var(--berry-bright),var(--berry));-webkit-background-clip:text;background-clip:text;color:transparent}
+.endcta .accent{background:linear-gradient(100deg,var(--berry-deep),var(--berry-bright) 40%,var(--rose) 52%,var(--berry-bright) 64%,var(--berry-deep));background-size:220% auto;-webkit-background-clip:text;background-clip:text;color:transparent;animation:shine 5s linear infinite}
 
 /* footer */
 .foot{border-top:1px solid var(--line);padding:clamp(44px,6vw,64px) 0 40px}
@@ -248,16 +242,15 @@ html:not(.anim) .progress{display:none}
 </section>
 
 <!-- SCROLL STORY -->
-<section id="story">
-  <div class="story-stage" id="stage">
-    <div class="wrap">
-      <div class="beats" id="beats">
-        <div class="beat" data-b="0"><span class="bk">КАК ЭТО РАБОТАЕТ</span><h3>Мы помним каждую цену</h3><p>По вашей ссылке TryBerry ведёт собственную историю — спокойную линию реальных значений за месяцы.</p></div>
-        <div class="beat" data-b="1"><span class="bk">МАНИПУЛЯЦИЯ</span><h3>Цену задирают перед «акцией»</h3><p>За пять дней до «распродажи» ценник тихо поднимают — чтобы потом было от чего считать жирный процент.</p></div>
-        <div class="beat" data-b="2"><span class="bk">ВЕРДИКТ</span><h3>«−40 %» = обычная цена</h3><p>Скидка возвращает цену ровно к той, что держалась весь месяц. TryBerry это видит — и промолчит.</p></div>
-      </div>
-      <div class="scene">
-        <svg class="ssvg" viewBox="0 0 520 280" role="img" aria-label="История цены за 90 дней с разоблачением накрутки">
+<section class="story" id="story">
+  <div class="wrap">
+    <div class="beats">
+      <div class="beat" data-rv><span class="bk">КАК ЭТО РАБОТАЕТ</span><h3>Мы помним каждую цену</h3><p>По вашей ссылке TryBerry ведёт собственную историю — спокойную линию реальных значений за месяцы.</p></div>
+      <div class="beat" data-rv><span class="bk">МАНИПУЛЯЦИЯ</span><h3>Цену задирают перед «акцией»</h3><p>За пять дней до «распродажи» ценник тихо поднимают — чтобы потом было от чего считать жирный процент.</p></div>
+      <div class="beat" data-rv><span class="bk">ВЕРДИКТ</span><h3>«−40 %» = обычная цена</h3><p>Скидка возвращает цену ровно к той, что держалась весь месяц. TryBerry это видит — и промолчит.</p></div>
+    </div>
+    <div class="scene">
+      <svg class="ssvg" viewBox="0 0 520 280" role="img" aria-label="История цены за 90 дней с разоблачением накрутки">
           <defs><linearGradient id="sg" x1="0" y1="0" x2="1" y2="0"><stop offset="0" stop-color="#ff5d8f"/><stop offset="1" stop-color="#e8336c"/></linearGradient></defs>
           <line class="sgrid" x1="20" y1="60" x2="500" y2="60"/><line class="sgrid" x1="20" y1="130" x2="500" y2="130"/><line class="sgrid" x1="20" y1="200" x2="500" y2="200"/>
           <line class="sbase" id="sbase" x1="20" y1="160" x2="476" y2="160"/>
@@ -277,8 +270,6 @@ html:not(.anim) .progress{display:none}
         </svg>
       </div>
     </div>
-    <div class="progress" id="prog"><i class="on"></i><i></i><i></i></div>
-  </div>
 </section>
 
 <section class="section" id="strategies">
@@ -390,24 +381,8 @@ if(RM||typeof gsap==='undefined'){
   /* появления секций */
   gsap.utils.toArray('[data-rv]').forEach(el=>gsap.fromTo(el,{opacity:0,y:28},{opacity:1,y:0,duration:.9,ease:'power3.out',scrollTrigger:{trigger:el,start:'top 86%'}}));
 
-  /* PINNED STORY — линия рисуется по скроллу, биты сменяются, штамп в конце */
-  const dots=gsap.utils.toArray('#prog i');
-  gsap.set(['#peak','#stamp','#sbase'],{opacity:0});
-  gsap.set('#stamp',{scale:.82,transformOrigin:'center'});
-  gsap.set('.beat[data-b="1"],.beat[data-b="2"]',{opacity:0,y:26});
-
-  const st=gsap.timeline({scrollTrigger:{
-    trigger:'#story',start:'top top',end:'+=320%',pin:'#stage',scrub:1,anticipatePin:1,
-    onUpdate:s=>{const i=s.progress<.42?0:s.progress<.74?1:2;dots.forEach((d,k)=>d.classList.toggle('on',k===i))}
-  }});
-  st.fromTo('#sline',{strokeDasharray:1,strokeDashoffset:1},{strokeDashoffset:0,ease:'none',duration:1.4})
-    .to('#sbase',{opacity:.8,duration:.3},.5)
-    .to('.beat[data-b="0"]',{opacity:0,y:-26,duration:.3},1.5)
-    .to('.beat[data-b="1"]',{opacity:1,y:0,duration:.3},'<')
-    .to('#peak',{opacity:1,duration:.3},'<')
-    .to('.beat[data-b="1"]',{opacity:0,y:-26,duration:.3},2.7)
-    .to('.beat[data-b="2"]',{opacity:1,y:0,duration:.3},'<')
-    .to('#stamp',{opacity:1,scale:1,duration:.45,ease:'back.out(1.6)'},'<');
+  /* график-разоблачение — линия рисуется при появлении сцены (без pin) */
+  gsap.fromTo('#sline',{strokeDasharray:1,strokeDashoffset:1},{strokeDashoffset:0,duration:1.7,ease:'power2.out',scrollTrigger:{trigger:'.scene',start:'top 80%'}});
 }
 </script>
 </body>
