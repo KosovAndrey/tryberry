@@ -6,90 +6,132 @@
 <meta name="robots" content="noindex, nofollow">
 <title>TryBerry — варианты дизайна для сравнения</title>
 <style>
-  :root{--bg:#0e0e10;--card:#17171b;--ink:#f2f2f0;--mut:#9a9aa2;--line:#2a2a30;--acc:#ff5d8f}
+  :root{--bg:#0e0e10;--card:#17171b;--ink:#f2f2f0;--mut:#9a9aa2;--line:#2a2a30;--acc:#ff5d8f;--berry:#e8336c}
   *{box-sizing:border-box;margin:0}
-  body{font-family:ui-sans-serif,system-ui,'Segoe UI',Roboto,sans-serif;background:var(--bg);color:var(--ink);line-height:1.6;padding:clamp(28px,6vw,72px) clamp(20px,5vw,40px)}
-  .wrap{max-width:880px;margin:0 auto}
+  body{font-family:ui-sans-serif,system-ui,'Segoe UI',Roboto,sans-serif;background:var(--bg);color:var(--ink);line-height:1.6;padding:clamp(28px,6vw,64px) clamp(20px,5vw,40px)}
+  .wrap{max-width:960px;margin:0 auto}
   h1{font-size:clamp(1.8rem,4vw,2.6rem);letter-spacing:-.02em;font-weight:800}
-  .sub{color:var(--mut);margin:14px 0 36px;max-width:60ch}
+  .sub{color:var(--mut);margin:14px 0 8px;max-width:64ch}
+  .branch{margin-top:48px}
+  .branch-h{display:flex;align-items:baseline;gap:14px;flex-wrap:wrap;padding-bottom:14px;border-bottom:1px solid var(--line);margin-bottom:22px}
+  .branch-h .n{font-family:ui-monospace,monospace;font-size:.72rem;letter-spacing:.12em;text-transform:uppercase;color:var(--acc);border:1px solid var(--line);padding:4px 10px;border-radius:100px}
+  .branch-h h2{font-size:1.4rem;letter-spacing:-.01em}
+  .branch-h p{color:var(--mut);font-size:.92rem;flex-basis:100%;margin-top:2px}
   .grid{display:grid;gap:16px;grid-template-columns:1fr}
   @media(min-width:640px){.grid{grid-template-columns:1fr 1fr}}
-  .card{display:block;background:var(--card);border:1px solid var(--line);border-radius:12px;padding:22px;transition:border-color .2s,transform .2s}
+  @media(min-width:920px){.grid.three{grid-template-columns:1fr 1fr 1fr}}
+  .card{display:block;background:var(--card);border:1px solid var(--line);border-radius:14px;padding:22px;transition:border-color .2s,transform .2s}
   .card:hover{border-color:var(--acc);transform:translateY(-3px)}
+  .card.live{border-color:rgba(232,51,108,.4)}
   .tag{font-family:ui-monospace,monospace;font-size:.7rem;letter-spacing:.1em;text-transform:uppercase;color:var(--mut)}
-  .card h2{font-size:1.25rem;margin:8px 0 6px;letter-spacing:-.01em}
-  .card p{color:var(--mut);font-size:.92rem}
+  .card h3{font-size:1.22rem;margin:8px 0 6px;letter-spacing:-.01em}
+  .card p{color:var(--mut);font-size:.9rem}
   .card .go{color:var(--acc);font-weight:600;font-size:.9rem;margin-top:14px;display:inline-block}
   .swatch{display:flex;gap:6px;margin-top:14px}
   .swatch i{width:20px;height:20px;border-radius:4px;border:1px solid rgba(255,255,255,.12)}
-  .note{margin-top:34px;color:var(--mut);font-size:.86rem;border-top:1px solid var(--line);padding-top:20px}
+  .note{margin-top:44px;color:var(--mut);font-size:.86rem;border-top:1px solid var(--line);padding-top:20px}
   a{color:inherit;text-decoration:none}
 </style>
 </head>
 <body>
 <div class="wrap">
   <h1>Варианты сайта TryBerry</h1>
-  <p class="sub">Сравни направления и выбери, что нравится. Можно смешивать — взять структуру одного и подачу другого. Скажи номер/название — доведу выбранный до продакшна.</p>
-  <div class="grid">
+  <p class="sub">Две ветки. <b style="color:var(--ink)">Премиум</b> — в стиле текущего сайта, но с богатой анимацией и «дорогим» ощущением (Apple-like). <b style="color:var(--ink)">Эксперименты</b> — другие стили целиком. Скажи фаворита — доведу до прода.</p>
 
-    <a class="card" href="https://tryberry.ru" target="_blank" rel="noopener">
-      <span class="tag">Текущий · в проде</span>
-      <h2>Berry / Night</h2>
-      <p>Тёмный, глянцевый, градиенты и свечение, кинетика, телефон-мокап. Энергичный, «маркетинговый».</p>
-      <div class="swatch"><i style="background:#170711"></i><i style="background:#e8336c"></i><i style="background:#ff5d8f"></i><i style="background:#f9f3ef"></i></div>
-      <span class="go">Открыть прод →</span>
-    </a>
+  <a class="card live" href="https://tryberry.ru" target="_blank" rel="noopener" style="display:block;margin-top:26px">
+    <span class="tag">Сейчас в проде · опорный стиль</span>
+    <h3>Berry / Night — текущий сайт</h3>
+    <p>Тёмный плюм, berry-акцент, Unbounded/Onest, зерно и свечение. Этот стиль ты выбрал как основной — премиум-ветка ниже его развивает.</p>
+    <div class="swatch"><i style="background:#170711"></i><i style="background:#e8336c"></i><i style="background:#ff5d8f"></i><i style="background:#f9f3ef"></i></div>
+    <span class="go">Открыть прод →</span>
+  </a>
 
-    <a class="card" href="./ledger/">
-      <span class="tag">Вариант 01 · Ledger</span>
-      <h2>Чек / Бухгалтерия</h2>
-      <p>Светлый, «бумага», моноширинные цифры, ноль градиентов. Герой — настоящий график, разоблачающий накрутку. Точный, доверительный, «финансовый».</p>
-      <div class="swatch"><i style="background:#f4f5f1"></i><i style="background:#15171c"></i><i style="background:#117a43"></i><i style="background:#c8382e"></i></div>
-      <span class="go">Открыть вариант →</span>
-    </a>
+  <!-- BRANCH 1: PREMIUM (berry, как прод) -->
+  <section class="branch">
+    <div class="branch-h">
+      <span class="n">Ветка 1 · Премиум</span>
+      <h2>В стиле текущего сайта, но дороже</h2>
+      <p>Та же berry-эстетика — больше красивой анимации, скролл-сторителлинг, Apple-уровень полировки. Контент реальный.</p>
+    </div>
+    <div class="grid three">
+      <a class="card" href="./premium/aurora/">
+        <span class="tag">P1 · Aurora</span>
+        <h3>Кинематограф</h3>
+        <p>Дрейфующий градиент-фон, magnetic-кнопка, count-up цифры и scroll-pinned «разоблачение» цены (как Apple-скроллинг).</p>
+        <div class="swatch"><i style="background:#160710"></i><i style="background:#e8336c"></i><i style="background:#ff5d8f"></i><i style="background:#3ad29f"></i></div>
+        <span class="go">Открыть →</span>
+      </a>
+      <a class="card" href="./premium/stage/">
+        <span class="tag">P2 · Stage</span>
+        <h3>Apple-keynote</h3>
+        <p>Слова заголовка проявляются с blur, прожектор следует за курсором, полноэкранные «утверждения» по скроллу. Драматично и минимально.</p>
+        <div class="swatch"><i style="background:#120509"></i><i style="background:#e8336c"></i><i style="background:#ff5d8f"></i><i style="background:#ffd3e1"></i></div>
+        <span class="go">Открыть →</span>
+      </a>
+      <a class="card" href="./premium/gloss/">
+        <span class="tag">P3 · Gloss</span>
+        <h3>Глянец / 3D</h3>
+        <p>3D-телефон наклоняется за курсором (parallax-слои), мерцающий заголовок, блик на кнопке, бегущая строка вердиктов.</p>
+        <div class="swatch"><i style="background:#170711"></i><i style="background:#e8336c"></i><i style="background:#ff5d8f"></i><i style="background:#ffb23e"></i></div>
+        <span class="go">Открыть →</span>
+      </a>
+    </div>
+  </section>
 
-    <a class="card" href="./bold/">
-      <span class="tag">Вариант 02 · Bold</span>
-      <h2>Брутализм / Стикер</h2>
-      <p>Дерзкий: жирные чёрные рамки, хард-шэдоу, лаймовый и красный. Герой — ценник со стикером «−40 %», под которым обычная цена. Энергия охотника за скидками.</p>
-      <div class="swatch"><i style="background:#fffcf2"></i><i style="background:#121212"></i><i style="background:#c7f032"></i><i style="background:#ff4438"></i></div>
-      <span class="go">Открыть вариант →</span>
-    </a>
+  <!-- BRANCH 2: EXPERIMENTS (other styles) -->
+  <section class="branch">
+    <div class="branch-h">
+      <span class="n">Ветка 2 · Эксперименты</span>
+      <h2>Совсем другие стили</h2>
+      <p>Если захочется уйти от текущей эстетики — шесть разных направлений на том же контенте.</p>
+    </div>
+    <div class="grid">
+      <a class="card" href="./explore/ledger/">
+        <span class="tag">E1 · Ledger</span>
+        <h3>Чек / Бухгалтерия</h3>
+        <p>Светлый, «бумага», моноцифры, ноль градиентов. Точный, доверительный, «финансовый».</p>
+        <div class="swatch"><i style="background:#f4f5f1"></i><i style="background:#15171c"></i><i style="background:#117a43"></i><i style="background:#c8382e"></i></div>
+        <span class="go">Открыть →</span>
+      </a>
+      <a class="card" href="./explore/bold/">
+        <span class="tag">E2 · Bold</span>
+        <h3>Брутализм / Стикер</h3>
+        <p>Жирные рамки, хард-шэдоу, лайм и красный. Ценник со стикером «−40 %», под ним обычная цена.</p>
+        <div class="swatch"><i style="background:#fffcf2"></i><i style="background:#121212"></i><i style="background:#c7f032"></i><i style="background:#ff4438"></i></div>
+        <span class="go">Открыть →</span>
+      </a>
+      <a class="card" href="./explore/quiet/">
+        <span class="tag">E3 · Quiet</span>
+        <h3>Премиум-тёмный</h3>
+        <p>В духе Linear/Vercel: стекло, мягкое свечение, ирисовый акцент. Сдержанно и «дорого», без berry.</p>
+        <div class="swatch"><i style="background:#0a0a0d"></i><i style="background:#7c7cf0"></i><i style="background:#52d3a2"></i><i style="background:#ededf1"></i></div>
+        <span class="go">Открыть →</span>
+      </a>
+      <a class="card" href="./explore/editorial/">
+        <span class="tag">E4 · Editorial</span>
+        <h3>Журнал-расследование</h3>
+        <p>Крупный Playfair, буквица, врезка-цитата, график как «вещдок». «Дело о скидке, которой не было».</p>
+        <div class="swatch"><i style="background:#fdfcf9"></i><i style="background:#1a1612"></i><i style="background:#c2271d"></i><i style="background:#1f7a44"></i></div>
+        <span class="go">Открыть →</span>
+      </a>
+      <a class="card" href="./explore/zen/">
+        <span class="tag">E5 · Zen</span>
+        <h3>Светлый минимал</h3>
+        <p>Ультралёгкий шрифт, много воздуха, шалфейный акцент, «дышащая» точка. Спокойствие и тишина.</p>
+        <div class="swatch"><i style="background:#fbfaf7"></i><i style="background:#2c2b27"></i><i style="background:#6f9075"></i><i style="background:#f4f2ec"></i></div>
+        <span class="go">Открыть →</span>
+      </a>
+      <a class="card" href="./explore/dashboard/">
+        <span class="tag">E6 · Dashboard</span>
+        <h3>Дашборд / Данные</h3>
+        <p>Продукт как пульт: KPI-плитки, график, watchlist с вердиктами и спарклайнами. Для реселлеров.</p>
+        <div class="swatch"><i style="background:#eef1f5"></i><i style="background:#2563eb"></i><i style="background:#16a34a"></i><i style="background:#dc2626"></i></div>
+        <span class="go">Открыть →</span>
+      </a>
+    </div>
+  </section>
 
-    <a class="card" href="./quiet/">
-      <span class="tag">Вариант 03 · Quiet</span>
-      <h2>Премиум-тёмный</h2>
-      <p>В духе Linear/Vercel: глубокий тёмный, стекло, мягкое свечение, один благородный ирисовый акцент. Сдержанно, точно, «дорого». Без berry-китча.</p>
-      <div class="swatch"><i style="background:#0a0a0d"></i><i style="background:#7c7cf0"></i><i style="background:#52d3a2"></i><i style="background:#ededf1"></i></div>
-      <span class="go">Открыть вариант →</span>
-    </a>
-
-    <a class="card" href="./editorial/">
-      <span class="tag">Вариант 04 · Editorial</span>
-      <h2>Журнал-расследование</h2>
-      <p>Магазинная афера как материал издания: крупный Playfair, буквица, врезка-цитата, график как «вещдок». «Дело о скидке, которой не было». Доверие через подачу.</p>
-      <div class="swatch"><i style="background:#fdfcf9"></i><i style="background:#1a1612"></i><i style="background:#c2271d"></i><i style="background:#1f7a44"></i></div>
-      <span class="go">Открыть вариант →</span>
-    </a>
-
-    <a class="card" href="./zen/">
-      <span class="tag">Вариант 05 · Zen</span>
-      <h2>Светлый минимал</h2>
-      <p>Дзен: ультралёгкий шрифт, много воздуха, один мягкий шалфейный акцент, «дышащая» точка. Тишина — бот следит, вы не отвлекаетесь. Спокойствие и доверие.</p>
-      <div class="swatch"><i style="background:#fbfaf7"></i><i style="background:#2c2b27"></i><i style="background:#6f9075"></i><i style="background:#f4f2ec"></i></div>
-      <span class="go">Открыть вариант →</span>
-    </a>
-
-    <a class="card" href="./dashboard/">
-      <span class="tag">Вариант 06 · Dashboard</span>
-      <h2>Дашборд / Данные</h2>
-      <p>Продукт как пульт: KPI-плитки, график, watchlist с вердиктами «честно / накрутка / ждём» и спарклайнами. Для реселлеров и охотников за выгодой.</p>
-      <div class="swatch"><i style="background:#eef1f5"></i><i style="background:#2563eb"></i><i style="background:#16a34a"></i><i style="background:#dc2626"></i></div>
-      <span class="go">Открыть вариант →</span>
-    </a>
-
-  </div>
-  <p class="note">Все варианты используют один реальный контент (тарифы, FAQ, НПД-реквизиты), без выдуманных цифр. Выбери направление целиком — или скажи «структуру A с подачей B», и я доведу выбранное до прода (self-host шрифтов, JSON-LD, аналитика).</p>
+  <p class="note">Все варианты — на одном реальном контенте (тарифы, FAQ, НПД-реквизиты), без выдуманных цифр; шрифты с CDN (прототипы), <code>noindex</code>. Выбери фаворита — или «структура A + подача B». Дальше довожу до прода: self-host шрифтов, JSON-LD, версионирование ассетов, аналитика, и чищу <code>variants/</code>.</p>
 </div>
 </body>
 </html>

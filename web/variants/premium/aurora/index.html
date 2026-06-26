@@ -1,0 +1,388 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<meta name="robots" content="noindex, nofollow">
+<title>TryBerry — Aurora · честная скидка</title>
+<meta name="description" content="TryBerry помнит историю цен Wildberries и отличает настоящую скидку от накрученной.">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Unbounded:wght@400;500;600;700;800&family=Onest:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+<style>
+:root{
+  --ink:#160710;--plum:#3a0f2b;--plum-deep:#250a1c;--cream:#f9f3ef;
+  --berry:#e8336c;--berry-bright:#ff5d8f;--berry-deep:#a01651;--rose:#ffd3e1;
+  --muted:#b89aa8;--muted-2:#8c7180;--good:#3ad29f;--warn:#ffb23e;
+  --line:rgba(255,93,143,.16);--glass:rgba(255,255,255,.04);
+  --dsp:'Unbounded',sans-serif;--body:'Onest',sans-serif;--maxw:1160px;
+  --ease:cubic-bezier(.2,.8,.2,1);
+}
+*{margin:0;padding:0;box-sizing:border-box}
+html{-webkit-text-size-adjust:100%;scroll-behavior:smooth}
+body{font-family:var(--body);background:var(--ink);color:var(--cream);line-height:1.6;-webkit-font-smoothing:antialiased;overflow-x:hidden}
+a{color:inherit;text-decoration:none}svg{display:block}
+::selection{background:var(--berry);color:#fff}
+.wrap{max-width:var(--maxw);margin:0 auto;padding:0 clamp(20px,5vw,44px)}
+.eyebrow{font-family:var(--dsp);font-weight:500;font-size:.72rem;letter-spacing:.26em;text-transform:uppercase;color:var(--berry-bright)}
+
+/* aurora bg */
+.aurora{position:fixed;inset:0;z-index:0;overflow:hidden;pointer-events:none}
+.aurora b{position:absolute;border-radius:50%;filter:blur(80px);opacity:.5;mix-blend-mode:screen}
+.aurora .a1{width:60vw;height:60vw;background:radial-gradient(circle,var(--berry-deep),transparent 65%);top:-18%;right:-12%;animation:drift1 26s var(--ease) infinite alternate}
+.aurora .a2{width:52vw;height:52vw;background:radial-gradient(circle,#5b1342,transparent 68%);bottom:-22%;left:-14%;animation:drift2 32s var(--ease) infinite alternate}
+.aurora .a3{width:40vw;height:40vw;background:radial-gradient(circle,#7a1d52,transparent 70%);top:35%;left:30%;opacity:.32;animation:drift3 38s var(--ease) infinite alternate}
+@keyframes drift1{to{transform:translate(-10%,12%) scale(1.15)}}
+@keyframes drift2{to{transform:translate(12%,-10%) scale(1.1)}}
+@keyframes drift3{to{transform:translate(18%,-16%) scale(1.2)}}
+.grain{position:fixed;inset:0;z-index:1;pointer-events:none;opacity:.04;mix-blend-mode:overlay;background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='140' height='140'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='.85' numOctaves='3'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E")}
+main,.nav,.foot{position:relative;z-index:2}
+
+/* NAV */
+.nav{position:sticky;top:0;z-index:50;padding:16px 0;transition:padding .4s var(--ease),background .4s,border-color .4s;border-bottom:1px solid transparent}
+.nav.stuck{background:rgba(22,7,16,.6);backdrop-filter:blur(18px) saturate(160%);padding:10px 0;border-color:var(--line)}
+.nav-in{max-width:var(--maxw);margin:0 auto;padding:0 clamp(20px,5vw,44px);display:flex;align-items:center;justify-content:space-between}
+.brand{display:flex;align-items:center;gap:9px;font-family:var(--dsp);font-weight:700;font-size:1.12rem;letter-spacing:-.01em}
+.brand .mk{width:26px;height:26px;filter:drop-shadow(0 0 14px rgba(232,51,108,.6))}
+.nav-links{display:flex;align-items:center;gap:30px;font-size:.92rem}
+.nav-links a.pl{display:none;color:var(--muted);transition:color .25s}
+.nav-links a.pl:hover{color:var(--cream)}
+@media(min-width:860px){.nav-links a.pl{display:inline}}
+.nbtn{font-weight:600;font-size:.9rem;padding:9px 20px;border-radius:100px;background:var(--cream);color:var(--ink)!important;transition:transform .3s var(--ease),box-shadow .3s}
+.nbtn:hover{transform:translateY(-2px);box-shadow:0 10px 30px rgba(255,93,143,.4)}
+
+/* HERO */
+.hero{padding:clamp(56px,8vw,104px) 0 clamp(40px,5vw,64px)}
+.hero-grid{display:grid;grid-template-columns:1fr;gap:clamp(36px,4vw,56px);align-items:center}
+@media(min-width:980px){.hero-grid{grid-template-columns:1.08fr .92fr}}
+.hero .eyebrow{display:inline-block;margin-bottom:22px}
+.h1{font-family:var(--dsp);font-weight:700;font-size:clamp(2.6rem,6.4vw,5.2rem);line-height:.98;letter-spacing:-.035em}
+.h1 .line{display:block;overflow:hidden}
+.h1 .line span{display:block;transform:translateY(105%);animation:rise .9s var(--ease) forwards}
+.h1 .line:nth-child(2) span{animation-delay:.12s}
+.h1 .accent{background:linear-gradient(110deg,var(--berry-bright),var(--berry));-webkit-background-clip:text;background-clip:text;color:transparent}
+@keyframes rise{to{transform:translateY(0)}}
+.lead{margin-top:26px;font-size:clamp(1.05rem,1.5vw,1.28rem);color:#e7d3dd;max-width:38ch;opacity:0;animation:fadeUp .8s var(--ease) .5s forwards}
+.lead b{color:var(--rose);font-weight:600}
+@keyframes fadeUp{from{opacity:0;transform:translateY(16px)}to{opacity:1;transform:none}}
+.cta{display:flex;flex-wrap:wrap;gap:15px;margin-top:36px;opacity:0;animation:fadeUp .8s var(--ease) .65s forwards}
+.btn{font-weight:600;font-size:1rem;padding:15px 30px;border-radius:100px;display:inline-flex;align-items:center;gap:10px;transition:transform .25s var(--ease),box-shadow .3s}
+.btn-pri{position:relative;background:linear-gradient(120deg,var(--berry-bright),var(--berry-deep));color:#fff;box-shadow:0 14px 40px rgba(232,51,108,.34);will-change:transform}
+.btn-pri:hover{box-shadow:0 22px 54px rgba(232,51,108,.5)}
+.btn-ghost{border:1px solid var(--line);color:var(--cream)}
+.btn-ghost:hover{border-color:var(--berry);background:rgba(232,51,108,.08)}
+.heronote{margin-top:22px;font-size:.86rem;color:var(--muted-2);opacity:0;animation:fadeUp .8s var(--ease) .8s forwards}
+.heronote b{color:var(--rose)}
+
+/* hero glass chart */
+.gcard{position:relative;background:var(--glass);border:1px solid var(--line);border-radius:22px;padding:22px;backdrop-filter:blur(14px);box-shadow:0 40px 90px rgba(0,0,0,.5),inset 0 1px 0 rgba(255,255,255,.07);opacity:0;animation:fadeUp 1s var(--ease) .4s forwards}
+.gcard .gh{display:flex;align-items:baseline;justify-content:space-between;gap:10px;margin-bottom:6px}
+.gh .gp{font-weight:600;font-size:.92rem}
+.gh .gt{font-size:.72rem;color:var(--muted-2);font-family:var(--dsp);letter-spacing:.06em;text-transform:uppercase}
+.gsvg{width:100%;height:auto}
+.hline{fill:none;stroke:url(#hg);stroke-width:2.6;stroke-linecap:round;stroke-linejoin:round;stroke-dasharray:1;stroke-dashoffset:1;animation:hdraw 1.8s var(--ease) .8s forwards}
+@keyframes hdraw{to{stroke-dashoffset:0}}
+.harea{fill:url(#ha);opacity:0;animation:fadeIn 1s ease 1.8s forwards}
+@keyframes fadeIn{to{opacity:1}}
+.hbase{stroke:var(--good);stroke-width:1.3;stroke-dasharray:5 4;opacity:.7}
+.hgrid{stroke:rgba(255,255,255,.06);stroke-width:1}
+.htxt{font-family:var(--body);font-size:11px;font-weight:500;fill:var(--muted)}
+.htxt.g{fill:var(--good)}.htxt.r{fill:#ff8a7d}
+.hdot-r{fill:#ff6a5d}.hdot-g{fill:var(--good)}
+.gfoot{margin-top:12px;padding-top:12px;border-top:1px solid var(--line);display:flex;justify-content:space-between;align-items:center;gap:10px;font-size:.84rem;color:var(--muted)}
+.gfoot .vb{font-family:var(--dsp);font-size:.72rem;font-weight:600;letter-spacing:.04em;text-transform:uppercase;color:#ffb4ad;background:rgba(255,90,80,.12);padding:5px 10px;border-radius:7px}
+
+/* STATS count-up */
+.stats{display:grid;grid-template-columns:repeat(2,1fr);gap:18px;padding:clamp(40px,5vw,70px) 0;border-top:1px solid var(--line)}
+@media(min-width:760px){.stats{grid-template-columns:repeat(4,1fr)}}
+.stat{text-align:center}
+.stat .num{font-family:var(--dsp);font-weight:700;font-size:clamp(2rem,4vw,3rem);letter-spacing:-.02em;background:linear-gradient(120deg,var(--berry-bright),var(--rose));-webkit-background-clip:text;background-clip:text;color:transparent}
+.stat .lab{margin-top:6px;font-size:.82rem;color:var(--muted)}
+
+/* SCROLL STORY (signature) */
+.story-track{position:relative;height:320vh}
+.story-stage{position:sticky;top:0;height:100vh;display:flex;align-items:center;overflow:hidden}
+.story-stage .wrap{display:grid;grid-template-columns:1fr;gap:40px;width:100%;align-items:center}
+@media(min-width:920px){.story-stage .wrap{grid-template-columns:.85fr 1.15fr}}
+.beats{position:relative;min-height:220px}
+.beat{position:absolute;inset:0;opacity:0;transform:translateY(24px);transition:opacity .6s var(--ease),transform .6s var(--ease);pointer-events:none}
+.beat.on{opacity:1;transform:none}
+.beat .bk{font-family:var(--dsp);font-weight:700;font-size:.78rem;letter-spacing:.18em;color:var(--berry-bright)}
+.beat h3{font-family:var(--dsp);font-weight:600;font-size:clamp(1.7rem,3.4vw,2.7rem);letter-spacing:-.025em;line-height:1.05;margin:14px 0 14px}
+.beat p{color:#d7bccb;max-width:38ch}
+.scene{position:relative;background:var(--glass);border:1px solid var(--line);border-radius:22px;padding:24px;backdrop-filter:blur(12px);box-shadow:0 40px 90px rgba(0,0,0,.45)}
+.ssvg{width:100%;height:auto}
+.sline{fill:none;stroke:url(#sg);stroke-width:2.6;stroke-linecap:round;stroke-linejoin:round;stroke-dasharray:1}
+.sgrid{stroke:rgba(255,255,255,.06);stroke-width:1}
+.sbase{stroke:var(--good);stroke-width:1.3;stroke-dasharray:5 4;opacity:0;transition:opacity .5s}
+.peak{opacity:0;transition:opacity .5s}
+.stampg{opacity:0;transform:scale(.8) rotate(-6deg);transform-origin:center;transition:opacity .5s,transform .5s var(--ease)}
+.stxt{font-family:var(--body);font-size:12px;font-weight:500;fill:var(--muted)}
+.stxt.g{fill:var(--good)}.stxt.r{fill:#ff8a7d}
+.story-stage.s1 .sbase{opacity:.8}
+.story-stage.s2 .peak{opacity:1}
+.story-stage.s2 .sbase{opacity:.8}
+.story-stage.s2 .stampg,.story-stage.s3 .stampg{opacity:1;transform:scale(1) rotate(-6deg)}
+.story-stage.s2 .sbase,.story-stage.s3 .sbase,.story-stage.s3 .peak{opacity:.8}
+.story-stage.s3 .peak{opacity:1}
+.progress{position:absolute;left:0;bottom:42px;width:100%;display:flex;gap:8px;justify-content:center}
+.progress i{width:32px;height:3px;border-radius:3px;background:rgba(255,255,255,.16);transition:background .4s}
+.progress i.on{background:var(--berry-bright)}
+
+/* SECTION */
+.section{padding:clamp(64px,9vw,120px) 0;border-top:1px solid var(--line)}
+.shead{max-width:32ch;margin:0 auto clamp(40px,5vw,60px);text-align:center}
+.shead h2{font-family:var(--dsp);font-weight:600;font-size:clamp(1.9rem,4vw,3.2rem);letter-spacing:-.025em;line-height:1.05}
+.shead p{margin-top:16px;color:var(--muted)}
+.cards{display:grid;grid-template-columns:1fr;gap:16px}
+@media(min-width:760px){.cards{grid-template-columns:repeat(3,1fr)}}
+.card{position:relative;background:var(--glass);border:1px solid var(--line);border-radius:20px;padding:30px 26px;overflow:hidden;transition:transform .5s var(--ease),border-color .4s}
+.card::before{content:"";position:absolute;width:160px;height:160px;background:radial-gradient(circle,rgba(255,93,143,.22),transparent 70%);top:var(--my,50%);left:var(--mx,50%);transform:translate(-50%,-50%);opacity:0;transition:opacity .4s;pointer-events:none}
+.card:hover{transform:translateY(-6px);border-color:rgba(255,93,143,.35)}
+.card:hover::before{opacity:1}
+.card .ic{width:48px;height:48px;border-radius:14px;background:linear-gradient(135deg,var(--berry-bright),var(--berry-deep));display:grid;place-items:center;margin-bottom:20px}
+.card .ic svg{width:22px;height:22px;stroke:#fff;fill:none;stroke-width:2}
+.card h3{font-family:var(--dsp);font-weight:500;font-size:1.16rem;letter-spacing:-.01em;margin-bottom:10px}
+.card p{color:var(--muted);font-size:.96rem}
+.card .v{margin-top:16px;font-family:var(--dsp);font-weight:500;font-size:1.05rem;color:var(--rose)}
+
+/* plans */
+.plans{display:grid;grid-template-columns:1fr;gap:16px}
+@media(min-width:560px){.plans{grid-template-columns:1fr 1fr}}
+@media(min-width:920px){.plans{grid-template-columns:repeat(4,1fr)}}
+.pl{background:var(--glass);border:1px solid var(--line);border-radius:20px;padding:28px 22px;display:flex;flex-direction:column;transition:transform .45s var(--ease)}
+.pl:hover{transform:translateY(-6px)}
+.pl.feat{border-color:var(--berry);background:linear-gradient(180deg,rgba(232,51,108,.16),rgba(232,51,108,.03))}
+.pl h3{font-family:var(--dsp);font-weight:600;font-size:1.16rem}
+.pl .pr{font-family:var(--dsp);font-weight:700;font-size:1.7rem;margin:12px 0 2px}
+.pl .pr small{font-family:var(--body);font-size:.72rem;font-weight:400;color:var(--muted-2)}
+.pl .pd{font-size:.84rem;color:var(--muted);min-height:38px}
+.pl ul{list-style:none;margin-top:16px;padding-top:16px;border-top:1px solid var(--line);display:flex;flex-direction:column;gap:9px;font-size:.86rem;color:var(--muted)}
+.pl li{display:flex;gap:8px}.pl li svg{width:14px;height:14px;flex:none;margin-top:4px;stroke:var(--berry-bright);fill:none;stroke-width:2.6}
+.tagp{align-self:flex-start;font-family:var(--dsp);font-size:.66rem;letter-spacing:.08em;text-transform:uppercase;color:var(--berry-bright);margin-bottom:7px}
+.pnote{margin-top:22px;text-align:center;font-size:.92rem;color:var(--muted)}.pnote b{color:var(--rose)}
+
+/* faq */
+.faq{max-width:780px;margin:0 auto}
+.qa{border-bottom:1px solid var(--line)}
+.q{width:100%;text-align:left;background:none;border:0;cursor:pointer;padding:24px 44px 24px 0;font-family:var(--body);font-weight:500;font-size:1.1rem;color:var(--cream);position:relative}
+.q::after{content:"";position:absolute;right:6px;top:50%;width:11px;height:11px;border-right:2px solid var(--berry-bright);border-bottom:2px solid var(--berry-bright);transform:translateY(-65%) rotate(45deg);transition:transform .3s}
+.qa.open .q::after{transform:translateY(-35%) rotate(-135deg)}
+.a{max-height:0;overflow:hidden;transition:max-height .35s var(--ease)}
+.a-in{padding:0 20px 24px 0;color:var(--muted);font-size:.97rem}
+
+/* end cta */
+.endcta{text-align:center;padding:clamp(80px,12vw,150px) 0;border-top:1px solid var(--line)}
+.endcta h2{font-family:var(--dsp);font-weight:700;font-size:clamp(2.1rem,5vw,3.8rem);letter-spacing:-.03em;line-height:1.05;max-width:16ch;margin:0 auto 36px}
+.endcta .accent{background:linear-gradient(110deg,var(--berry-bright),var(--berry));-webkit-background-clip:text;background-clip:text;color:transparent}
+
+/* footer */
+.foot{border-top:1px solid var(--line);padding:clamp(44px,6vw,64px) 0 40px}
+.fgrid{display:grid;grid-template-columns:1fr;gap:28px}
+@media(min-width:720px){.fgrid{grid-template-columns:1.5fr 1fr 1fr}}
+.foot p{color:var(--muted-2);font-size:.9rem;max-width:32ch;margin-top:12px}
+.foot h4{font-family:var(--dsp);font-size:.72rem;letter-spacing:.12em;text-transform:uppercase;color:var(--berry-bright);margin-bottom:13px}
+.foot a.fl{display:block;color:var(--muted);font-size:.92rem;margin-bottom:9px}.foot a.fl:hover{color:var(--cream)}
+.legal{margin-top:34px;padding-top:20px;border-top:1px solid var(--line);font-size:.78rem;color:var(--muted-2);line-height:1.8}
+
+[data-rv]{opacity:0;transform:translateY(26px);transition:opacity .9s var(--ease),transform .9s var(--ease)}
+[data-rv].in{opacity:1;transform:none}
+@media(prefers-reduced-motion:reduce){
+  *{animation:none!important;transition-duration:.01s!important}
+  .h1 .line span,.lead,.cta,.heronote,.gcard{opacity:1!important;transform:none!important}
+  .hline,.sline{stroke-dasharray:none!important;stroke-dashoffset:0!important}
+  [data-rv]{opacity:1;transform:none}.aurora b{animation:none}
+}
+</style>
+</head>
+<body id="top">
+<div class="aurora"><b class="a1"></b><b class="a2"></b><b class="a3"></b></div>
+<div class="grain"></div>
+
+<header class="nav" id="nav">
+  <div class="nav-in">
+    <a href="#top" class="brand"><svg class="mk" viewBox="0 0 24 24" fill="none"><circle cx="12" cy="12" r="9" stroke="#ff5d8f" stroke-width="1.7"/><path d="M8 13l2.5 2.5L16 9" stroke="#ff5d8f" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"/></svg>TryBerry</a>
+    <nav class="nav-links">
+      <a class="pl" href="#story">Как ловим</a>
+      <a class="pl" href="#plans">Тарифы</a>
+      <a class="pl" href="#faq">Вопросы</a>
+      <a class="nbtn" href="https://t.me/TryBerryBot" target="_blank" rel="noopener">Открыть бота</a>
+    </nav>
+  </div>
+</header>
+
+<main>
+<section class="hero">
+  <div class="wrap hero-grid">
+    <div>
+      <span class="eyebrow">Честная цена · Wildberries</span>
+      <h1 class="h1"><span class="line"><span>Скидка настоящая</span></span><span class="line"><span>или <span class="accent">нарисованная?</span></span></span></h1>
+      <p class="lead">Перед «−40&nbsp;%» цену часто задирают. TryBerry помнит всю историю цены и пишет в Telegram, только когда подешевело <b>по-честному</b>.</p>
+      <div class="cta">
+        <a class="btn btn-pri" id="magnet" href="https://t.me/TryBerryBot" target="_blank" rel="noopener">Проверить скидку</a>
+        <a class="btn btn-ghost" href="#plans">Тарифы</a>
+      </div>
+      <p class="heronote"><b>Free</b> навсегда · без карты · без логина Wildberries</p>
+    </div>
+
+    <figure class="gcard">
+      <div class="gh"><span class="gp">Наушники TWS, чёрные</span><span class="gt">90 дней</span></div>
+      <svg class="gsvg" viewBox="0 0 440 200" role="img" aria-label="История цены: перед распродажей цену подняли, скидка равна обычной цене">
+        <defs>
+          <linearGradient id="hg" x1="0" y1="0" x2="1" y2="0"><stop offset="0" stop-color="#ff5d8f"/><stop offset="1" stop-color="#e8336c"/></linearGradient>
+          <linearGradient id="ha" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#ff5d8f" stop-opacity=".26"/><stop offset="1" stop-color="#ff5d8f" stop-opacity="0"/></linearGradient>
+        </defs>
+        <line class="hgrid" x1="14" y1="48" x2="426" y2="48"/><line class="hgrid" x1="14" y1="100" x2="426" y2="100"/><line class="hgrid" x1="14" y1="150" x2="426" y2="150"/>
+        <line class="hbase" x1="14" y1="120" x2="408" y2="120"/>
+        <text class="htxt g" x="16" y="113">обычная · 1 990 ₽</text>
+        <path class="harea" d="M14,118 L54,122 L96,114 L140,126 L180,120 L222,148 L264,144 L306,128 L346,120 L380,100 L404,66 L424,120 L424,180 L14,180 Z"/>
+        <path class="hline" pathLength="1" d="M14,118 L54,122 L96,114 L140,126 L180,120 L222,148 L264,144 L306,128 L346,120 L380,100 L404,66 L424,120"/>
+        <circle class="hdot-g" cx="222" cy="148" r="4"/><text class="htxt g" x="190" y="167">мин 1 750 ₽</text>
+        <circle class="hdot-r" cx="424" cy="120" r="4.5"/><text class="htxt r" x="420" y="110" text-anchor="end">«−40%»=1 990 ₽</text>
+      </svg>
+      <div class="gfoot"><span>«Скидка» = цена, что держалась весь месяц.</span><span class="vb">не скидка</span></div>
+    </figure>
+  </div>
+</section>
+
+<section class="wrap stats" id="stats">
+  <div class="stat"><div class="num" data-count="90" data-suffix=" дн">0</div><div class="lab">истории по каждому товару</div></div>
+  <div class="stat"><div class="num" data-count="3">0</div><div class="lab">стратегии срабатывания</div></div>
+  <div class="stat"><div class="num" data-count="1" data-prefix="от " data-suffix=" мин">0</div><div class="lab">частота проверки цены</div></div>
+  <div class="stat"><div class="num" data-count="0" data-prefix="" data-suffix=" ₽">0</div><div class="lab">бесплатный план навсегда</div></div>
+</section>
+
+<!-- SCROLL STORY -->
+<section id="story">
+  <div class="story-track">
+    <div class="story-stage" id="stage">
+      <div class="wrap">
+        <div class="beats" id="beats">
+          <div class="beat on" data-b="0"><span class="bk">КАК ЭТО РАБОТАЕТ</span><h3>Мы помним каждую цену</h3><p>По вашей ссылке TryBerry ведёт собственную историю — спокойную линию реальных значений за месяцы.</p></div>
+          <div class="beat" data-b="1"><span class="bk">МАНИПУЛЯЦИЯ</span><h3>Цену задирают перед «акцией»</h3><p>За пять дней до «распродажи» ценник тихо поднимают — чтобы потом было от чего считать жирный процент.</p></div>
+          <div class="beat" data-b="2"><span class="bk">ВЕРДИКТ</span><h3>«−40 %» = обычная цена</h3><p>Скидка возвращает цену ровно к той, что держалась весь месяц. TryBerry это видит — и промолчит.</p></div>
+        </div>
+        <div class="scene">
+          <svg class="ssvg" viewBox="0 0 520 280" role="img" aria-label="История цены за 90 дней с разоблачением накрутки">
+            <defs><linearGradient id="sg" x1="0" y1="0" x2="1" y2="0"><stop offset="0" stop-color="#ff5d8f"/><stop offset="1" stop-color="#e8336c"/></linearGradient></defs>
+            <line class="sgrid" x1="20" y1="60" x2="500" y2="60"/><line class="sgrid" x1="20" y1="130" x2="500" y2="130"/><line class="sgrid" x1="20" y1="200" x2="500" y2="200"/>
+            <line class="sbase" x1="20" y1="160" x2="476" y2="160"/>
+            <text class="stxt g sbase-lbl" x="24" y="152" style="opacity:inherit">обычная цена · 1 990 ₽</text>
+            <path class="sline" id="sline" pathLength="1" d="M20,158 L70,162 L120,152 L176,166 L220,159 L268,192 L320,187 L372,168 L420,159 L456,138 L490,96 L512,160"/>
+            <g class="peak">
+              <circle cx="490" cy="96" r="5" fill="#ff8a7d"/>
+              <text class="stxt r" x="490" y="84" text-anchor="middle">подняли за 5 дней</text>
+            </g>
+            <circle class="peak" cx="268" cy="192" r="4.5" fill="#3ad29f"/>
+            <g class="stampg">
+              <circle cx="512" cy="160" r="7" fill="none" stroke="#ff6a5d" stroke-width="2"/>
+              <circle cx="512" cy="160" r="3.4" fill="#ff6a5d"/>
+              <rect x="356" y="206" width="150" height="34" rx="5" fill="none" stroke="#ff6a5d" stroke-width="2"/>
+              <text class="stxt r" x="431" y="228" text-anchor="middle" style="font-weight:700;letter-spacing:.04em">ЦЕНУ ЗАДРАЛИ</text>
+            </g>
+          </svg>
+        </div>
+      </div>
+      <div class="progress" id="prog"><i class="on"></i><i></i><i></i></div>
+    </div>
+  </div>
+</section>
+
+<section class="section" id="strategies">
+  <div class="wrap">
+    <div class="shead" data-rv><h2>Скажите, что считать выгодным</h2><p>Три стратегии. Бот молчит, пока условие не выполнено.</p></div>
+    <div class="cards" id="cards">
+      <div class="card" data-rv><div class="ic"><svg viewBox="0 0 24 24"><path d="M4 12h16M12 4v16" stroke-linecap="round"/></svg></div><h3>Порог цены</h3><p>Назовите сумму — уведомим, когда цена дойдёт до планки.</p><div class="v">≤ 1 800 ₽</div></div>
+      <div class="card" data-rv><div class="ic"><svg viewBox="0 0 24 24"><path d="M6 9l6 6 6-6" stroke-linecap="round" stroke-linejoin="round"/></svg></div><h3>Любое снижение</h3><p>Сигнал при первом падении относительно цены на момент подписки.</p><div class="v">−1 ₽ и ниже</div></div>
+      <div class="card" data-rv><div class="ic"><svg viewBox="0 0 24 24"><path d="M5 19 19 5M8 7h.01M16 17h.01" stroke-linecap="round"/></svg></div><h3>Скидка от %</h3><p>Только крупные распродажи — мелкий шум не побеспокоит.</p><div class="v">−30 %</div></div>
+    </div>
+  </div>
+</section>
+
+<section class="section" id="plans">
+  <div class="wrap">
+    <div class="shead" data-rv><h2>Начните бесплатно</h2><p>Free — навсегда и без карты. Триал «Поиска по ссылке» — в один клик.</p></div>
+    <div class="plans">
+      <div class="pl" data-rv><h3>Free</h3><div class="pr">0 ₽<small> / навсегда</small></div><div class="pd">Старт и слежка за избранным.</div><ul><li><svg viewBox="0 0 24 24"><path d="M20 6 9 17l-5-5"/></svg>5 подписок</li><li><svg viewBox="0 0 24 24"><path d="M20 6 9 17l-5-5"/></svg>раз в 60 мин</li><li><svg viewBox="0 0 24 24"><path d="M20 6 9 17l-5-5"/></svg>3 стратегии + баллы</li></ul></div>
+      <div class="pl" data-rv><h3>Триал</h3><div class="pr">0 ₽<small> / 3 дня</small></div><div class="pd">Полный доступ без карты.</div><ul><li><svg viewBox="0 0 24 24"><path d="M20 6 9 17l-5-5"/></svg>100 подписок</li><li><svg viewBox="0 0 24 24"><path d="M20 6 9 17l-5-5"/></svg>10 поиск-подписок</li><li><svg viewBox="0 0 24 24"><path d="M20 6 9 17l-5-5"/></svg>раз в 15 мин</li></ul></div>
+      <div class="pl" data-rv><h3>Lite</h3><div class="pr">199 ₽<small> / мес</small></div><div class="pd">Для личных покупок.</div><ul><li><svg viewBox="0 0 24 24"><path d="M20 6 9 17l-5-5"/></svg>20 подписок</li><li><svg viewBox="0 0 24 24"><path d="M20 6 9 17l-5-5"/></svg>3 поиск-подписки</li><li><svg viewBox="0 0 24 24"><path d="M20 6 9 17l-5-5"/></svg>раз в 30 мин</li></ul></div>
+      <div class="pl feat" data-rv><span class="tagp">популярный</span><h3>Pro</h3><div class="pr">499 ₽<small> / мес</small></div><div class="pd">Максимум подписок и скорости.</div><ul><li><svg viewBox="0 0 24 24"><path d="M20 6 9 17l-5-5"/></svg>100 подписок</li><li><svg viewBox="0 0 24 24"><path d="M20 6 9 17l-5-5"/></svg>10 поиск-подписок</li><li><svg viewBox="0 0 24 24"><path d="M20 6 9 17l-5-5"/></svg>раз в 15 мин</li></ul></div>
+    </div>
+    <p class="pnote" data-rv>Реселлерам — проверка <b>раз в минуту</b> (от 990 ₽/мес). Оплата в боте через <b>Робокассу</b>.</p>
+  </div>
+</section>
+
+<section class="section" id="faq">
+  <div class="wrap">
+    <div class="shead" data-rv><h2>Вопросы</h2></div>
+    <div class="faq">
+      <div class="qa" data-rv><button class="q">Нужно ли давать боту логин от Wildberries?</button><div class="a"><div class="a-in">Нет. Работаем только с публичной ценой по ссылке, аккаунт не трогаем.</div></div></div>
+      <div class="qa" data-rv><button class="q">Какие маркетплейсы поддерживаются?</button><div class="a"><div class="a-in">Сейчас Wildberries. Ozon и Яндекс Маркет в проработке.</div></div></div>
+      <div class="qa" data-rv><button class="q">Это правда бесплатно?</button><div class="a"><div class="a-in">Да. Free (5 подписок) — навсегда и без карты. «Поиск по ссылке» — 3 дня по триалу командой /trial.</div></div></div>
+      <div class="qa" data-rv><button class="q">Что значит «учёт баллов за отзыв»?</button><div class="a"><div class="a-in">Вычитаем баллы за отзыв и показываем эффективную цену — реальную, а не витринную.</div></div></div>
+    </div>
+  </div>
+</section>
+
+<section class="endcta">
+  <div class="wrap">
+    <h2 data-rv>Перестаньте верить ценнику.<br><span class="accent">Начните видеть историю.</span></h2>
+    <a class="btn btn-pri" data-rv href="https://t.me/TryBerryBot" target="_blank" rel="noopener">Открыть в Telegram</a>
+  </div>
+</section>
+</main>
+
+<footer class="foot">
+  <div class="wrap">
+    <div class="fgrid">
+      <div><a href="#top" class="brand"><svg class="mk" viewBox="0 0 24 24" fill="none"><circle cx="12" cy="12" r="9" stroke="#ff5d8f" stroke-width="1.7"/><path d="M8 13l2.5 2.5L16 9" stroke="#ff5d8f" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"/></svg>TryBerry</a><p>Бот, который помнит историю цен Wildberries и отличает настоящую скидку от накрученной.</p></div>
+      <div><h4>Продукт</h4><a class="fl" href="#story">Как работает</a><a class="fl" href="#strategies">Стратегии</a><a class="fl" href="#plans">Тарифы</a></div>
+      <div><h4>Связаться</h4><a class="fl" href="https://t.me/TryBerryBot" target="_blank" rel="noopener">@TryBerryBot</a><a class="fl" href="https://t.me/kosov_andrey" target="_blank" rel="noopener">@kosov_andrey</a><a class="fl" href="mailto:contact@kosovandrey.ru">contact@kosovandrey.ru</a></div>
+    </div>
+    <div class="legal">© 2026 TryBerry · Самозанятый Косов Андрей Александрович, ИНН 132608943050 · плательщик НПД. Не является частью или сервисом Wildberries.</div>
+  </div>
+</footer>
+
+<script>
+const nav=document.getElementById('nav');
+addEventListener('scroll',()=>nav.classList.toggle('stuck',scrollY>10),{passive:true});
+
+/* reveal */
+const io=new IntersectionObserver((es)=>es.forEach(e=>{if(e.isIntersecting){e.target.classList.add('in');io.unobserve(e.target)}}),{threshold:.12});
+document.querySelectorAll('[data-rv]').forEach(el=>io.observe(el));
+
+/* card glow follows cursor */
+document.querySelectorAll('.card').forEach(c=>{c.addEventListener('pointermove',e=>{const r=c.getBoundingClientRect();c.style.setProperty('--mx',(e.clientX-r.left)+'px');c.style.setProperty('--my',(e.clientY-r.top)+'px')})});
+
+/* magnetic CTA */
+const mag=document.getElementById('magnet');
+if(mag&&!matchMedia('(prefers-reduced-motion: reduce)').matches){
+  mag.addEventListener('pointermove',e=>{const r=mag.getBoundingClientRect();mag.style.transform=`translate(${(e.clientX-r.left-r.width/2)*.25}px,${(e.clientY-r.top-r.height/2)*.35}px)`});
+  mag.addEventListener('pointerleave',()=>mag.style.transform='');
+}
+
+/* count-up */
+const fmt=n=>n.toLocaleString('ru-RU');
+const cio=new IntersectionObserver((es)=>es.forEach(e=>{if(!e.isIntersecting)return;cio.unobserve(e.target);const el=e.target,to=+el.dataset.count,pre=el.dataset.prefix||'',suf=el.dataset.suffix||'';let t0=null;const dur=1100;const step=t=>{t0=t0||t;const p=Math.min(1,(t-t0)/dur);el.textContent=pre+fmt(Math.round(to*(1-Math.pow(1-p,3))))+suf;if(p<1)requestAnimationFrame(step)};requestAnimationFrame(step)})},{threshold:.5});
+document.querySelectorAll('.num[data-count]').forEach(el=>cio.observe(el));
+
+/* scroll story */
+const track=document.querySelector('.story-track'),stage=document.getElementById('stage'),sline=document.getElementById('sline'),beats=[...document.querySelectorAll('.beat')],dots=[...document.querySelectorAll('#prog i')];
+function story(){
+  const r=track.getBoundingClientRect(),total=track.offsetHeight-innerHeight;
+  let p=Math.max(0,Math.min(.999,(-r.top)/total));
+  /* line draws over first 55% of scroll */
+  sline.style.strokeDashoffset=Math.max(0,1-p/.55);
+  const b=p<.40?0:p<.72?1:2;
+  beats.forEach((el,i)=>el.classList.toggle('on',i===b));
+  dots.forEach((el,i)=>el.classList.toggle('on',i===b));
+  stage.classList.toggle('s1',b>=0);stage.classList.toggle('s2',b>=1);stage.classList.toggle('s3',b>=2);
+}
+if(!matchMedia('(prefers-reduced-motion: reduce)').matches){addEventListener('scroll',story,{passive:true});addEventListener('resize',story);story();}
+else{sline.style.strokeDashoffset=0;stage.classList.add('s1','s2','s3')}
+
+/* faq */
+document.querySelectorAll('.qa').forEach(item=>{const q=item.querySelector('.q'),a=item.querySelector('.a');q.addEventListener('click',()=>{const o=item.classList.contains('open');document.querySelectorAll('.qa.open').forEach(x=>{x.classList.remove('open');x.querySelector('.a').style.maxHeight=null});if(!o){item.classList.add('open');a.style.maxHeight=a.scrollHeight+'px'}})});
+</script>
+</body>
+</html>
