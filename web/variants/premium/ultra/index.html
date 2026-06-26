@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <meta name="robots" content="noindex, nofollow">
 <title>TryBerry — Ultra · покажет, настоящая ли это скидка</title>
-<meta name="description" content="Telegram-бот помнит историю цен Wildberries и отличает настоящую скидку от накрученной. Пишет, когда товар подешевел по-честному. Бесплатный план и 3-дневный триал.">
+<meta name="description" content="Telegram-бот помнит историю цен на Wildberries, Ozon, Яндекс Маркете и AliExpress и отличает настоящую скидку от накрученной. Пишет, когда товар подешевел по-честному. Бесплатный план и 3-дневный триал.">
 <link rel="icon" type="image/png" href="/logo.png">
 <link rel="apple-touch-icon" href="/logo.png">
 <link rel="preload" href="/fonts/onest-400-cyrillic.woff2" as="font" type="font/woff2" crossorigin>
@@ -394,7 +394,7 @@ footer{background:var(--plum-deep);padding:70px 0 40px;border-top:1px solid var(
   "name": "TryBerry",
   "url": "https://tryberry.ru",
   "logo": "https://tryberry.ru/logo.png",
-  "description": "Telegram-бот, который помнит историю цен Wildberries и отличает настоящую скидку от накрученной.",
+  "description": "Telegram-бот, который помнит историю цен на Wildberries, Ozon, Яндекс Маркете и AliExpress и отличает настоящую скидку от накрученной.",
   "founder": { "@type": "Person", "name": "Косов Андрей Александрович" },
   "contactPoint": {
     "@type": "ContactPoint",
@@ -411,8 +411,8 @@ footer{background:var(--plum-deep);padding:70px 0 40px;border-top:1px solid var(
   "@context": "https://schema.org",
   "@type": "FAQPage",
   "mainEntity": [
-    { "@type": "Question", "name": "Какие маркетплейсы поддерживаются?", "acceptedAnswer": { "@type": "Answer", "text": "Сейчас полностью работает Wildberries. Ozon и Яндекс Маркет в проработке — добавим, когда будем уверены в стабильности и качестве данных." } },
-    { "@type": "Question", "name": "Нужно ли давать боту логин или доступ к аккаунту WB?", "acceptedAnswer": { "@type": "Answer", "text": "Нет. TryBerry работает только с публичной ценой по ссылке и не запрашивает ваши данные от Wildberries. Достаточно ссылки на товар или на страницу выдачи." } },
+    { "@type": "Question", "name": "Какие маркетплейсы поддерживаются?", "acceptedAnswer": { "@type": "Answer", "text": "Поддерживаем Wildberries, Ozon, Яндекс Маркет и AliExpress — следим за ценами на всех четырёх." } },
+    { "@type": "Question", "name": "Нужно ли давать боту логин или доступ к аккаунту маркетплейса?", "acceptedAnswer": { "@type": "Answer", "text": "Нет. TryBerry работает только с публичной ценой по ссылке и не запрашивает ваши данные от маркетплейса. Достаточно ссылки на товар или на страницу выдачи." } },
     { "@type": "Question", "name": "Чем «поиск по ссылке» отличается от отслеживания товара?", "acceptedAnswer": { "@type": "Answer", "text": "Отслеживание товара следит за одной карточкой. Поиск по ссылке следит за целой страницей результатов — сотнями товаров сразу — и присылает те, что подешевели по вашей стратегии." } },
     { "@type": "Question", "name": "Что за три стратегии срабатывания?", "acceptedAnswer": { "@type": "Answer", "text": "Порог цены — уведомить при достижении вашей суммы. Любое снижение — при первом падении относительно цены на момент подписки. Скидка от процента — только когда падение превысит заданный процент." } },
     { "@type": "Question", "name": "Это правда бесплатно?", "acceptedAnswer": { "@type": "Answer", "text": "Да. Бесплатный план (5 товарных подписок) доступен навсегда и без карты. Поиск по ссылке можно бесплатно попробовать 3 дня по триалу — он включается один раз на аккаунт командой /trial. Платные тарифы оплачиваются в боте через Робокассу." } },
@@ -448,7 +448,7 @@ footer{background:var(--plum-deep);padding:70px 0 40px;border-top:1px solid var(
   <div class="hero-bg"><div class="glow g1"></div><div class="glow g2"></div></div>
   <div class="wrap">
     <div>
-      <span class="eyebrow" data-reveal>Честная цена · Wildberries</span>
+      <span class="eyebrow" data-reveal>Честная цена · Wildberries · Ozon · Маркет · AliExpress</span>
       <h1><span class="kline"><span style="--d:.08s">Скидка настоящая</span></span><span class="kline"><span style="--d:.22s">или <span class="accent">нарисованная?</span></span></span></h1>
       <p class="lead" data-reveal style="--d:.15s">Перед «−40%» цену часто задирают. TryBerry помнит всю историю цены товара, отличает реальное снижение от накрутки — и пишет в Telegram, когда подешевело <b style="color:var(--rose);font-weight:600">по-честному</b>.</p>
       <div class="hero-actions" data-reveal style="--d:.25s">
@@ -503,7 +503,7 @@ footer{background:var(--plum-deep);padding:70px 0 40px;border-top:1px solid var(
     <div class="sec-head">
       <span class="eyebrow" data-reveal>Что умеет</span>
       <h2 data-reveal style="--d:.05s">Достаточно одной ссылки.</h2>
-      <p data-reveal style="--d:.1s">TryBerry не требует логина Wildberries и не трогает ваш аккаунт. Он просто наблюдает за публичной ценой — за товаром или за целой выдачей поиска.</p>
+      <p data-reveal style="--d:.1s">TryBerry не требует логина маркетплейса и не трогает ваш аккаунт. Он просто наблюдает за публичной ценой — за товаром или за целой выдачей поиска на Wildberries, Ozon, Яндекс Маркете и AliExpress.</p>
     </div>
     <div class="fgrid">
       <div class="fcard" data-reveal>
@@ -532,18 +532,18 @@ footer{background:var(--plum-deep);padding:70px 0 40px;border-top:1px solid var(
     <div class="sec-head" style="text-align:center;max-width:680px;margin-left:auto;margin-right:auto">
       <span class="eyebrow" data-reveal>Маркетплейсы</span>
       <h2 data-reveal style="--d:.05s">Следим за ценами там,<br>где вы <span class="accent">покупаете</span>.</h2>
-      <p data-reveal style="--d:.1s;margin-left:auto;margin-right:auto">Сейчас полностью работает Wildberries. Ozon, Яндекс&nbsp;Маркет и AliExpress — на&nbsp;подходе.</p>
+      <p data-reveal style="--d:.1s;margin-left:auto;margin-right:auto">Wildberries, Ozon, Яндекс&nbsp;Маркет и AliExpress — следим за ценами на всех четырёх маркетплейсах.</p>
     </div>
     <div class="mp-marquee" data-reveal style="--d:.15s">
       <div class="mp-track">
         <span class="mp-chip mp-wb"><span class="dot on"></span>Wildberries</span>
-        <span class="mp-chip mp-ozon"><span class="dot"></span>OZON</span>
-        <span class="mp-chip mp-ym"><span class="dot"></span>Яндекс Маркет</span>
-        <span class="mp-chip mp-ali"><span class="dot"></span>AliExpress</span>
+        <span class="mp-chip mp-ozon"><span class="dot on"></span>OZON</span>
+        <span class="mp-chip mp-ym"><span class="dot on"></span>Яндекс Маркет</span>
+        <span class="mp-chip mp-ali"><span class="dot on"></span>AliExpress</span>
         <span class="mp-chip mp-wb" aria-hidden="true"><span class="dot on"></span>Wildberries</span>
-        <span class="mp-chip mp-ozon" aria-hidden="true"><span class="dot"></span>OZON</span>
-        <span class="mp-chip mp-ym" aria-hidden="true"><span class="dot"></span>Яндекс Маркет</span>
-        <span class="mp-chip mp-ali" aria-hidden="true"><span class="dot"></span>AliExpress</span>
+        <span class="mp-chip mp-ozon" aria-hidden="true"><span class="dot on"></span>OZON</span>
+        <span class="mp-chip mp-ym" aria-hidden="true"><span class="dot on"></span>Яндекс Маркет</span>
+        <span class="mp-chip mp-ali" aria-hidden="true"><span class="dot on"></span>AliExpress</span>
       </div>
     </div>
   </div>
@@ -690,11 +690,11 @@ footer{background:var(--plum-deep);padding:70px 0 40px;border-top:1px solid var(
     <div class="faq" id="faq">
       <div class="faq-item" data-reveal>
         <button class="faq-q">Какие маркетплейсы поддерживаются?</button>
-        <div class="faq-a"><div class="faq-a-in">Сейчас полностью работает Wildberries. Ozon и Яндекс Маркет в проработке — добавим, когда будем уверены в стабильности и качестве данных.</div></div>
+        <div class="faq-a"><div class="faq-a-in">Поддерживаем Wildberries, Ozon, Яндекс Маркет и AliExpress — следим за ценами на всех четырёх.</div></div>
       </div>
       <div class="faq-item" data-reveal>
-        <button class="faq-q">Нужно ли давать боту логин или доступ к аккаунту WB?</button>
-        <div class="faq-a"><div class="faq-a-in">Нет. TryBerry работает только с публичной ценой по ссылке и не запрашивает ваши данные от Wildberries. Достаточно ссылки на товар или на страницу выдачи.</div></div>
+        <button class="faq-q">Нужно ли давать боту логин или доступ к аккаунту маркетплейса?</button>
+        <div class="faq-a"><div class="faq-a-in">Нет. TryBerry работает только с публичной ценой по ссылке и не запрашивает ваши данные от маркетплейса. Достаточно ссылки на товар или на страницу выдачи.</div></div>
       </div>
       <div class="faq-item" data-reveal>
         <button class="faq-q">Чем «поиск по ссылке» отличается от отслеживания товара?</button>
@@ -759,7 +759,7 @@ footer{background:var(--plum-deep);padding:70px 0 40px;border-top:1px solid var(
     <div class="foot-top">
       <div class="foot-brand">
         <a href="#top" class="brand"><img src="/logo.png" class="brand-logo" alt="TryBerry">TryBerry</a>
-        <p>Telegram-бот, который ловит снижение цен на Wildberries и пишет вам ровно тогда, когда выгодно.</p>
+        <p>Telegram-бот, который ловит снижение цен на Wildberries, Ozon, Яндекс Маркете и AliExpress и пишет вам ровно тогда, когда выгодно.</p>
       </div>
       <div class="foot-cols">
         <div class="foot-col">
@@ -785,7 +785,7 @@ footer{background:var(--plum-deep);padding:70px 0 40px;border-top:1px solid var(
       </div>
     </div>
     <div class="foot-bottom">
-      <span>© 2026 TryBerry · Самозанятый Косов Андрей Александрович, ИНН 132608943050. Не является частью или сервисом Wildberries.</span>
+      <span>© 2026 TryBerry · Самозанятый Косов Андрей Александрович, ИНН 132608943050. Не является частью или сервисом перечисленных маркетплейсов.</span>
       <span>Сделано для тех, кто не хочет переплачивать.</span>
     </div>
   </div>
