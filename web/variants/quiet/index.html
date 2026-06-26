@@ -1,0 +1,284 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<meta name="robots" content="noindex, nofollow">
+<title>TryBerry — честная цена, без шума</title>
+<meta name="description" content="TryBerry помнит историю цен Wildberries и отличает настоящую скидку от накрученной. Тихий, точный сигнал в Telegram — только когда подешевело по-настоящему.">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+<style>
+:root{
+  --bg:#0a0a0d;--bg2:#101016;--ink:#ededf1;--mut:#9a9aa6;--mut2:#6b6b78;
+  --panel:rgba(255,255,255,.025);--bd:rgba(255,255,255,.08);--bd2:rgba(255,255,255,.06);
+  --iris:#7c7cf0;--iris2:#a6a6ff;--good:#52d3a2;
+  --f:'Inter',system-ui,sans-serif;--maxw:1080px;--ease:cubic-bezier(.22,.7,.2,1);
+}
+*{margin:0;padding:0;box-sizing:border-box}
+html{-webkit-text-size-adjust:100%}
+body{font-family:var(--f);background:var(--bg);color:var(--ink);line-height:1.6;-webkit-font-smoothing:antialiased;overflow-x:hidden;letter-spacing:-.011em}
+a{color:inherit;text-decoration:none}
+svg{display:block}
+::selection{background:var(--iris);color:#fff}
+.wrap{max-width:var(--maxw);margin:0 auto;padding:0 clamp(20px,5vw,32px)}
+.eyebrow{font-size:.74rem;font-weight:600;letter-spacing:.13em;text-transform:uppercase;color:var(--mut);display:inline-flex;align-items:center;gap:8px}
+.eyebrow::before{content:"";width:6px;height:6px;border-radius:50%;background:var(--iris);box-shadow:0 0 10px var(--iris)}
+
+/* ambient glow */
+.glow{position:fixed;top:-30%;left:50%;transform:translateX(-50%);width:min(900px,120vw);height:600px;background:radial-gradient(ellipse at center,rgba(124,124,240,.16),transparent 62%);pointer-events:none;z-index:0}
+
+/* NAV */
+.nav{position:sticky;top:0;z-index:40;backdrop-filter:blur(12px);background:rgba(10,10,13,.6);border-bottom:1px solid transparent;transition:border-color .3s}
+.nav.stuck{border-color:var(--bd2)}
+.nav-in{max-width:var(--maxw);margin:0 auto;padding:14px clamp(20px,5vw,32px);display:flex;align-items:center;justify-content:space-between;gap:18px}
+.brand{display:flex;align-items:center;gap:9px;font-weight:700;font-size:1.05rem;letter-spacing:-.02em}
+.brand .mk{width:24px;height:24px}
+.nav-links{display:flex;align-items:center;gap:24px;font-size:.9rem}
+.nav-links a.pl{display:none;color:var(--mut);transition:color .2s}
+.nav-links a.pl:hover{color:var(--ink)}
+@media(min-width:820px){.nav-links a.pl{display:inline}}
+.nbtn{font-size:.86rem;font-weight:600;padding:8px 16px;border-radius:8px;background:var(--ink);color:var(--bg)!important;transition:opacity .2s,transform .2s}
+.nbtn:hover{opacity:.9;transform:translateY(-1px)}
+
+/* HERO */
+.hero{position:relative;z-index:1;padding:clamp(56px,9vw,120px) 0 clamp(40px,6vw,72px);text-align:center}
+.h1{font-size:clamp(2.5rem,6.2vw,4.6rem);font-weight:700;line-height:1.02;letter-spacing:-.04em;margin:24px auto 0;max-width:16ch;background:linear-gradient(180deg,#fff,#bdbdcb);-webkit-background-clip:text;background-clip:text;color:transparent}
+.lead{margin:22px auto 0;font-size:clamp(1.05rem,1.5vw,1.22rem);color:var(--mut);max-width:52ch}
+.cta{display:flex;justify-content:center;flex-wrap:wrap;gap:12px;margin-top:32px}
+.btn{font-weight:600;font-size:.96rem;padding:13px 22px;border-radius:10px;display:inline-flex;align-items:center;gap:8px;transition:transform .2s var(--ease),box-shadow .3s,background .2s}
+.btn-pri{background:var(--iris);color:#fff;box-shadow:0 8px 30px rgba(124,124,240,.35)}
+.btn-pri:hover{transform:translateY(-2px);box-shadow:0 14px 40px rgba(124,124,240,.5)}
+.btn-sec{border:1px solid var(--bd);color:var(--ink);background:var(--panel)}
+.btn-sec:hover{border-color:var(--mut2)}
+.microcta{margin-top:16px;font-size:.82rem;color:var(--mut2)}
+
+/* glass chart panel */
+.panelwrap{position:relative;z-index:1;margin:clamp(36px,5vw,56px) auto 0;max-width:760px}
+.panel{position:relative;background:linear-gradient(180deg,rgba(255,255,255,.04),rgba(255,255,255,.012));border:1px solid var(--bd);border-radius:16px;padding:22px 22px 16px;box-shadow:0 30px 80px rgba(0,0,0,.5),inset 0 1px 0 rgba(255,255,255,.06)}
+.p-head{display:flex;align-items:center;justify-content:space-between;gap:12px;margin-bottom:8px}
+.p-prod{font-size:.92rem;font-weight:600;color:var(--ink)}
+.pill{font-size:.74rem;font-weight:600;letter-spacing:.02em;padding:5px 11px;border-radius:100px;display:inline-flex;align-items:center;gap:6px}
+.pill.bad{color:#ffb4ad;background:rgba(255,90,80,.12);border:1px solid rgba(255,90,80,.25)}
+.pill.bad::before{content:"";width:6px;height:6px;border-radius:50%;background:#ff6a5d}
+.p-svg{width:100%;height:auto}
+.qline{fill:none;stroke:url(#qg);stroke-width:2.4;stroke-linecap:round;stroke-linejoin:round}
+.qarea{fill:url(#qa)}
+.qbase{stroke:var(--good);stroke-width:1.3;stroke-dasharray:5 4;opacity:.6}
+.qgrid{stroke:rgba(255,255,255,.05);stroke-width:1}
+.qlbl{font-family:var(--f);font-size:11px;font-weight:500;fill:var(--mut)}
+.qlbl.g{fill:var(--good)}
+.qlbl.b{fill:#ff8077}
+.qdot{fill:#ff6a5d}
+.qdot-g{fill:var(--good)}
+.p-foot{margin-top:12px;padding-top:12px;border-top:1px solid var(--bd2);display:flex;justify-content:space-between;align-items:center;gap:12px;font-size:.84rem;color:var(--mut)}
+.p-foot b{color:var(--ink);font-weight:600}
+@keyframes qdraw{to{stroke-dashoffset:0}}
+.panel .qline{stroke-dasharray:1;stroke-dashoffset:1;animation:qdraw 1.6s var(--ease) .3s forwards}
+
+/* SECTION */
+.section{position:relative;z-index:1;padding:clamp(60px,9vw,110px) 0;border-top:1px solid var(--bd2)}
+.shead{max-width:30ch;margin:0 auto clamp(40px,5vw,60px);text-align:center}
+.shead h2{font-size:clamp(1.8rem,3.8vw,2.8rem);font-weight:700;letter-spacing:-.03em;line-height:1.05}
+.shead p{margin-top:14px;color:var(--mut);font-size:1.02rem}
+
+.cards{display:grid;grid-template-columns:1fr;gap:14px}
+@media(min-width:760px){.cards{grid-template-columns:repeat(3,1fr)}}
+.card{background:var(--panel);border:1px solid var(--bd2);border-radius:14px;padding:24px 22px;transition:border-color .25s,transform .25s,background .25s}
+.card:hover{border-color:var(--bd);transform:translateY(-3px);background:rgba(255,255,255,.04)}
+.card .ic{width:34px;height:34px;border-radius:9px;background:rgba(124,124,240,.14);border:1px solid rgba(124,124,240,.25);display:grid;place-items:center;margin-bottom:16px}
+.card .ic svg{width:17px;height:17px;stroke:var(--iris2);fill:none;stroke-width:1.8}
+.card h3{font-size:1.12rem;font-weight:600;letter-spacing:-.01em;margin-bottom:7px}
+.card p{color:var(--mut);font-size:.93rem}
+.card .v{margin-top:14px;font-size:.84rem;font-weight:600;color:var(--iris2)}
+
+/* steps */
+.steps{display:grid;grid-template-columns:1fr;gap:14px;counter-reset:s}
+@media(min-width:820px){.steps{grid-template-columns:repeat(3,1fr)}}
+.stp{position:relative;padding:24px 22px;border:1px solid var(--bd2);border-radius:14px;background:var(--panel)}
+.stp::before{counter-increment:s;content:"0" counter(s);font-size:.82rem;font-weight:700;color:var(--iris2);letter-spacing:.05em}
+.stp h3{font-size:1.1rem;font-weight:600;margin:12px 0 6px}
+.stp p{color:var(--mut);font-size:.92rem}
+
+/* plans */
+.plans{display:grid;grid-template-columns:1fr;gap:12px}
+@media(min-width:560px){.plans{grid-template-columns:1fr 1fr}}
+@media(min-width:920px){.plans{grid-template-columns:repeat(4,1fr)}}
+.pl{background:var(--panel);border:1px solid var(--bd2);border-radius:14px;padding:24px 20px;display:flex;flex-direction:column}
+.pl.feat{border-color:rgba(124,124,240,.45);background:linear-gradient(180deg,rgba(124,124,240,.1),rgba(124,124,240,.02))}
+.pl h3{font-size:1.08rem;font-weight:600}
+.pl .pr{font-size:1.7rem;font-weight:700;margin:10px 0 2px;letter-spacing:-.02em}
+.pl .pr small{font-size:.7rem;font-weight:500;color:var(--mut2)}
+.pl .pd{font-size:.84rem;color:var(--mut);min-height:36px}
+.pl ul{list-style:none;margin-top:14px;padding-top:14px;border-top:1px solid var(--bd2);display:flex;flex-direction:column;gap:8px;font-size:.86rem;color:var(--mut)}
+.pl li{display:flex;gap:8px}
+.pl li svg{width:14px;height:14px;flex:none;margin-top:4px;stroke:var(--good);fill:none;stroke-width:2.4}
+.tagp{align-self:flex-start;font-size:.68rem;font-weight:600;letter-spacing:.04em;text-transform:uppercase;color:var(--iris2);margin-bottom:6px}
+.pnote{margin-top:18px;text-align:center;font-size:.9rem;color:var(--mut)}
+.pnote b{color:var(--ink)}
+
+/* faq */
+.faq{max-width:760px;margin:0 auto}
+.qa{border-bottom:1px solid var(--bd2)}
+.q{width:100%;text-align:left;background:none;border:0;cursor:pointer;padding:20px 40px 20px 0;font-family:var(--f);font-weight:600;font-size:1.02rem;color:var(--ink);position:relative}
+.q::after{content:"";position:absolute;right:4px;top:50%;width:11px;height:11px;border-right:2px solid var(--mut);border-bottom:2px solid var(--mut);transform:translateY(-65%) rotate(45deg);transition:transform .25s}
+.qa.open .q::after{transform:translateY(-35%) rotate(-135deg)}
+.a{max-height:0;overflow:hidden;transition:max-height .3s var(--ease)}
+.a-in{padding:0 20px 22px 0;color:var(--mut);font-size:.95rem}
+
+/* footer */
+.foot{position:relative;z-index:1;border-top:1px solid var(--bd2);padding:clamp(44px,6vw,64px) 0 38px}
+.fgrid{display:grid;grid-template-columns:1fr;gap:26px}
+@media(min-width:720px){.fgrid{grid-template-columns:1.6fr 1fr 1fr}}
+.foot p{color:var(--mut);font-size:.9rem;max-width:32ch;margin-top:12px}
+.foot h4{font-size:.74rem;font-weight:600;letter-spacing:.1em;text-transform:uppercase;color:var(--mut2);margin-bottom:13px}
+.foot a.fl{display:block;color:var(--mut);font-size:.92rem;margin-bottom:9px;transition:color .2s}
+.foot a.fl:hover{color:var(--ink)}
+.legal{margin-top:36px;padding-top:20px;border-top:1px solid var(--bd2);font-size:.78rem;color:var(--mut2);line-height:1.8}
+
+[data-rv]{opacity:0;transform:translateY(18px);transition:opacity .7s var(--ease),transform .7s var(--ease)}
+[data-rv].in{opacity:1;transform:none}
+@media(prefers-reduced-motion:reduce){*{animation:none!important;transition-duration:.01s!important}[data-rv]{opacity:1;transform:none}.panel .qline{stroke-dasharray:none}}
+</style>
+</head>
+<body id="top">
+<div class="glow"></div>
+
+<header class="nav" id="nav">
+  <div class="nav-in">
+    <a href="#top" class="brand">
+      <svg class="mk" viewBox="0 0 24 24" fill="none"><rect x="2.5" y="2.5" width="19" height="19" rx="6" stroke="#7c7cf0" stroke-width="1.6"/><path d="M7 14.5 10.5 11l2.5 2.5L17 8.5" stroke="#a6a6ff" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>
+      TryBerry
+    </a>
+    <nav class="nav-links">
+      <a class="pl" href="#features">Возможности</a>
+      <a class="pl" href="#plans">Тарифы</a>
+      <a class="pl" href="#faq">Вопросы</a>
+      <a class="nbtn" href="https://t.me/TryBerryBot" target="_blank" rel="noopener">Открыть бота</a>
+    </nav>
+  </div>
+</header>
+
+<section class="hero">
+  <div class="wrap">
+    <span class="eyebrow" data-rv>История цены · Wildberries</span>
+    <h1 class="h1" data-rv style="transition-delay:.05s">Честная цена.<br>Без шума.</h1>
+    <p class="lead" data-rv style="transition-delay:.1s">TryBerry помнит историю цены каждого товара и отличает настоящее снижение от накрутки. Один тихий сигнал в Telegram — ровно тогда, когда подешевело по-настоящему.</p>
+    <div class="cta" data-rv style="transition-delay:.15s">
+      <a class="btn btn-pri" href="https://t.me/TryBerryBot" target="_blank" rel="noopener">Открыть в Telegram</a>
+      <a class="btn btn-sec" href="#plans">Тарифы</a>
+    </div>
+    <p class="microcta" data-rv style="transition-delay:.2s">Free навсегда · без карты · без логина Wildberries</p>
+  </div>
+
+  <div class="wrap panelwrap" data-rv style="transition-delay:.15s">
+    <div class="panel">
+      <div class="p-head">
+        <span class="p-prod">Наушники TWS, чёрные · 90 дней</span>
+        <span class="pill bad">цену задрали перед «−40%»</span>
+      </div>
+      <svg class="p-svg" viewBox="0 0 720 250" role="img" aria-label="График цены: перед распродажей цену подняли, скидка равна обычной цене">
+        <defs>
+          <linearGradient id="qg" x1="0" y1="0" x2="1" y2="0"><stop offset="0" stop-color="#7c7cf0"/><stop offset="1" stop-color="#a6a6ff"/></linearGradient>
+          <linearGradient id="qa" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#7c7cf0" stop-opacity=".22"/><stop offset="1" stop-color="#7c7cf0" stop-opacity="0"/></linearGradient>
+        </defs>
+        <line class="qgrid" x1="30" y1="60" x2="700" y2="60"/>
+        <line class="qgrid" x1="30" y1="130" x2="700" y2="130"/>
+        <line class="qgrid" x1="30" y1="195" x2="700" y2="195"/>
+        <line class="qbase" x1="30" y1="150" x2="675" y2="150"/>
+        <text class="qlbl g" x="34" y="143">обычная цена · 1 990 ₽</text>
+        <path class="qarea" d="M30,148 L80,152 L130,144 L185,156 L225,150 L270,182 L320,178 L370,160 L420,151 L470,148 L515,146 L555,132 L595,96 L635,66 L668,54 L700,150 L700,210 L30,210 Z"/>
+        <path class="qline" pathLength="1" d="M30,148 L80,152 L130,144 L185,156 L225,150 L270,182 L320,178 L370,160 L420,151 L470,148 L515,146 L555,132 L595,96 L635,66 L668,54 L700,150"/>
+        <circle class="qdot-g" cx="270" cy="182" r="4"/>
+        <text class="qlbl g" x="236" y="202">мин · 1 750 ₽</text>
+        <circle class="qdot" cx="700" cy="150" r="4.5"/>
+        <text class="qlbl b" x="694" y="138" text-anchor="end">«−40%» = 1 990 ₽</text>
+      </svg>
+      <div class="p-foot">
+        <span>«Скидка» совпала с ценой, что держалась весь месяц.</span>
+        <span><b>Это не скидка.</b></span>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section class="section" id="features">
+  <div class="wrap">
+    <div class="shead" data-rv><h2>Скажите, что считать выгодным</h2><p>Три стратегии. TryBerry молчит, пока условие не выполнено.</p></div>
+    <div class="cards">
+      <div class="card" data-rv>
+        <div class="ic"><svg viewBox="0 0 24 24"><path d="M4 12h16M12 4v16" stroke-linecap="round"/></svg></div>
+        <h3>Порог цены</h3><p>Назовите сумму — уведомим, когда цена дойдёт до планки.</p><div class="v">≤ 1 800 ₽</div>
+      </div>
+      <div class="card" data-rv style="transition-delay:.06s">
+        <div class="ic"><svg viewBox="0 0 24 24"><path d="M6 9l6 6 6-6" stroke-linecap="round" stroke-linejoin="round"/></svg></div>
+        <h3>Любое снижение</h3><p>Сигнал при первом падении относительно цены на момент подписки.</p><div class="v">−1 ₽ и ниже</div>
+      </div>
+      <div class="card" data-rv style="transition-delay:.12s">
+        <div class="ic"><svg viewBox="0 0 24 24"><path d="M5 19 19 5M8 7h.01M16 17h.01" stroke-linecap="round"/></svg></div>
+        <h3>Скидка от %</h3><p>Только крупные распродажи — мелкий шум вас не побеспокоит.</p><div class="v">−30 %</div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section class="section" id="how">
+  <div class="wrap">
+    <div class="shead" data-rv><h2>Одна ссылка — и дальше тихо</h2><p>Без логина Wildberries. Только публичная цена по ссылке.</p></div>
+    <div class="steps">
+      <div class="stp" data-rv><h3>Кидаете ссылку</h3><p>На товар или на целую выдачу. Бот начинает вести историю цены.</p></div>
+      <div class="stp" data-rv style="transition-delay:.06s"><h3>Ведём историю</h3><p>Проверяем по расписанию тарифа — от 1 до 60 минут — и копим, с чем сравнивать.</p></div>
+      <div class="stp" data-rv style="transition-delay:.12s"><h3>Пишем, когда честно</h3><p>Сигнал приходит, только если цена упала по вашей стратегии.</p></div>
+    </div>
+  </div>
+</section>
+
+<section class="section" id="plans">
+  <div class="wrap">
+    <div class="shead" data-rv><h2>Начните бесплатно</h2><p>Free — навсегда и без карты. Триал «Поиска по ссылке» — в один клик.</p></div>
+    <div class="plans">
+      <div class="pl" data-rv><h3>Free</h3><div class="pr">0 ₽<small> / навсегда</small></div><div class="pd">Старт и слежка за избранным.</div><ul><li><svg viewBox="0 0 24 24"><path d="M20 6 9 17l-5-5"/></svg>5 подписок</li><li><svg viewBox="0 0 24 24"><path d="M20 6 9 17l-5-5"/></svg>раз в 60 мин</li><li><svg viewBox="0 0 24 24"><path d="M20 6 9 17l-5-5"/></svg>3 стратегии + баллы</li></ul></div>
+      <div class="pl" data-rv><h3>Триал</h3><div class="pr">0 ₽<small> / 3 дня</small></div><div class="pd">Полный доступ без карты.</div><ul><li><svg viewBox="0 0 24 24"><path d="M20 6 9 17l-5-5"/></svg>100 подписок</li><li><svg viewBox="0 0 24 24"><path d="M20 6 9 17l-5-5"/></svg>10 поиск-подписок</li><li><svg viewBox="0 0 24 24"><path d="M20 6 9 17l-5-5"/></svg>раз в 15 мин</li></ul></div>
+      <div class="pl" data-rv><h3>Lite</h3><div class="pr">199 ₽<small> / мес</small></div><div class="pd">Для личных покупок.</div><ul><li><svg viewBox="0 0 24 24"><path d="M20 6 9 17l-5-5"/></svg>20 подписок</li><li><svg viewBox="0 0 24 24"><path d="M20 6 9 17l-5-5"/></svg>3 поиск-подписки</li><li><svg viewBox="0 0 24 24"><path d="M20 6 9 17l-5-5"/></svg>раз в 30 мин</li></ul></div>
+      <div class="pl feat" data-rv><span class="tagp">популярный</span><h3>Pro</h3><div class="pr">499 ₽<small> / мес</small></div><div class="pd">Максимум подписок и скорости.</div><ul><li><svg viewBox="0 0 24 24"><path d="M20 6 9 17l-5-5"/></svg>100 подписок</li><li><svg viewBox="0 0 24 24"><path d="M20 6 9 17l-5-5"/></svg>10 поиск-подписок</li><li><svg viewBox="0 0 24 24"><path d="M20 6 9 17l-5-5"/></svg>раз в 15 мин</li></ul></div>
+    </div>
+    <p class="pnote" data-rv>Реселлерам — проверка <b>раз в минуту</b> (от 990 ₽/мес). Оплата в боте через <b>Робокассу</b>, картой или СБП.</p>
+  </div>
+</section>
+
+<section class="section" id="faq">
+  <div class="wrap">
+    <div class="shead" data-rv><h2>Вопросы</h2></div>
+    <div class="faq">
+      <div class="qa" data-rv><button class="q">Нужно ли давать боту логин от Wildberries?</button><div class="a"><div class="a-in">Нет. Работаем только с публичной ценой по ссылке, аккаунт не трогаем.</div></div></div>
+      <div class="qa" data-rv><button class="q">Какие маркетплейсы поддерживаются?</button><div class="a"><div class="a-in">Сейчас Wildberries. Ozon и Яндекс Маркет в проработке.</div></div></div>
+      <div class="qa" data-rv><button class="q">Это правда бесплатно?</button><div class="a"><div class="a-in">Да. Free (5 подписок) — навсегда и без карты. «Поиск по ссылке» — 3 дня по триалу командой /trial.</div></div></div>
+      <div class="qa" data-rv><button class="q">Что значит «учёт баллов за отзыв»?</button><div class="a"><div class="a-in">Вычитаем баллы за отзыв и показываем эффективную цену — реальную, а не витринную.</div></div></div>
+    </div>
+  </div>
+</section>
+
+<footer class="foot">
+  <div class="wrap">
+    <div class="fgrid">
+      <div>
+        <a href="#top" class="brand"><svg class="mk" viewBox="0 0 24 24" fill="none"><rect x="2.5" y="2.5" width="19" height="19" rx="6" stroke="#7c7cf0" stroke-width="1.6"/><path d="M7 14.5 10.5 11l2.5 2.5L17 8.5" stroke="#a6a6ff" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>TryBerry</a>
+        <p>Бот, который помнит историю цен Wildberries и отличает настоящую скидку от накрученной.</p>
+      </div>
+      <div><h4>Продукт</h4><a class="fl" href="#features">Возможности</a><a class="fl" href="#how">Как работает</a><a class="fl" href="#plans">Тарифы</a></div>
+      <div><h4>Связаться</h4><a class="fl" href="https://t.me/TryBerryBot" target="_blank" rel="noopener">@TryBerryBot</a><a class="fl" href="https://t.me/kosov_andrey" target="_blank" rel="noopener">@kosov_andrey</a><a class="fl" href="mailto:contact@kosovandrey.ru">contact@kosovandrey.ru</a></div>
+    </div>
+    <div class="legal">© 2026 TryBerry · Самозанятый Косов Андрей Александрович, ИНН 132608943050 · плательщик НПД. Не является частью или сервисом Wildberries.</div>
+  </div>
+</footer>
+
+<script>
+const nav=document.getElementById('nav');
+addEventListener('scroll',()=>nav.classList.toggle('stuck',scrollY>8),{passive:true});
+const io=new IntersectionObserver((es)=>es.forEach(e=>{if(e.isIntersecting){e.target.classList.add('in');io.unobserve(e.target)}}),{threshold:.1});
+document.querySelectorAll('[data-rv]').forEach(el=>io.observe(el));
+document.querySelectorAll('.qa').forEach(item=>{const q=item.querySelector('.q'),a=item.querySelector('.a');q.addEventListener('click',()=>{const o=item.classList.contains('open');document.querySelectorAll('.qa.open').forEach(x=>{x.classList.remove('open');x.querySelector('.a').style.maxHeight=null});if(!o){item.classList.add('open');a.style.maxHeight=a.scrollHeight+'px'}})});
+</script>
+</body>
+</html>
