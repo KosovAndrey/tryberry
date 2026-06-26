@@ -3,13 +3,13 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>TryBerry — следит за ценой, пока вы заняты</title>
-<meta name="description" content="Telegram-бот, который отслеживает цены на Wildberries и пишет вам, когда товар или вся выдача подешевели. Бесплатный план и 3-дневный триал.">
+<title>TryBerry — покажет, настоящая ли это скидка на Wildberries</title>
+<meta name="description" content="Telegram-бот помнит историю цен Wildberries и отличает настоящую скидку от накрученной. Пишет, когда товар подешевел по-честному. Бесплатный план и 3-дневный триал.">
 <link rel="icon" type="image/png" href="/logo.png">
 <link rel="apple-touch-icon" href="/logo.png">
-<link rel="preconnect" href="https://fonts.googleapis.com">
-<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link href="https://fonts.googleapis.com/css2?family=Unbounded:wght@300;400;500;600;700;800&family=Onest:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+<link rel="preload" href="/fonts/onest-400-cyrillic.woff2" as="font" type="font/woff2" crossorigin>
+<link rel="preload" href="/fonts/unbounded-700-cyrillic.woff2" as="font" type="font/woff2" crossorigin>
+<link rel="stylesheet" href="/fonts/fonts.css">
 <style>
 :root{
   --ink:#170711;
@@ -24,6 +24,8 @@
   --rose:#ffd3e1;
   --muted:#9a7d8c;
   --muted-light:#7d5f6e;
+  --good:#3ad29f;
+  --warn:#ffb23e;
   --line:rgba(232,51,108,.16);
   --font-display:'Unbounded',sans-serif;
   --font-body:'Onest',sans-serif;
@@ -146,6 +148,18 @@ nav.scrolled{
 .price-badge{margin-left:auto;font-size:.72rem;font-weight:600;color:#fff;background:linear-gradient(120deg,var(--berry),var(--berry-deep));padding:3px 9px;border-radius:7px}
 .bubble .meta{font-size:.68rem;color:var(--muted);margin-top:9px}
 @keyframes bubbleIn{to{opacity:1;transform:translateY(0)}}
+/* honest / fake verdict accents */
+.ttl.good{color:var(--good)}
+.ttl.warn{color:var(--warn)}
+.price-badge.good{background:linear-gradient(120deg,var(--good),#1c9d72)}
+.price-badge.warn{background:linear-gradient(120deg,var(--warn),#d97a16);color:#1f0e00}
+.spark{margin:4px 0 11px}
+.spark svg{width:100%;height:50px;display:block;overflow:visible}
+.spark .area{fill:url(#spark-fill)}
+.spark .ln{fill:none;stroke:var(--good);stroke-width:2.4;stroke-linecap:round;stroke-linejoin:round}
+.spark .now{fill:var(--good);stroke:#160710;stroke-width:2}
+.spark .nowring{fill:none;stroke:var(--good);stroke-width:1.5;opacity:.5}
+.spark .fakedrop{fill:none;stroke:var(--warn);stroke-width:2.2;stroke-dasharray:3 3;stroke-linecap:round}
 
 /* ---------- reveal ---------- */
 [data-reveal]{opacity:0;transform:translateY(38px);transition:opacity 1s var(--ease),transform 1s var(--ease);transition-delay:var(--d,0s)}
@@ -351,6 +365,42 @@ footer{background:var(--plum-deep);padding:70px 0 40px;border-top:1px solid var(
   html{scroll-behavior:auto}
 }
 </style>
+
+<script type="application/ld+json">
+{
+  "@context": "https://schema.org",
+  "@type": "Organization",
+  "name": "TryBerry",
+  "url": "https://tryberry.ru",
+  "logo": "https://tryberry.ru/logo.png",
+  "description": "Telegram-бот, который помнит историю цен Wildberries и отличает настоящую скидку от накрученной.",
+  "founder": { "@type": "Person", "name": "Косов Андрей Александрович" },
+  "contactPoint": {
+    "@type": "ContactPoint",
+    "contactType": "customer support",
+    "email": "contact@kosovandrey.ru",
+    "url": "https://t.me/kosov_andrey",
+    "availableLanguage": "Russian"
+  },
+  "sameAs": ["https://t.me/TryBerryBot", "https://vk.com/tryberrybot"]
+}
+</script>
+<script type="application/ld+json">
+{
+  "@context": "https://schema.org",
+  "@type": "FAQPage",
+  "mainEntity": [
+    { "@type": "Question", "name": "Какие маркетплейсы поддерживаются?", "acceptedAnswer": { "@type": "Answer", "text": "Сейчас полностью работает Wildberries. Ozon и Яндекс Маркет в проработке — добавим, когда будем уверены в стабильности и качестве данных." } },
+    { "@type": "Question", "name": "Нужно ли давать боту логин или доступ к аккаунту WB?", "acceptedAnswer": { "@type": "Answer", "text": "Нет. TryBerry работает только с публичной ценой по ссылке и не запрашивает ваши данные от Wildberries. Достаточно ссылки на товар или на страницу выдачи." } },
+    { "@type": "Question", "name": "Чем «поиск по ссылке» отличается от отслеживания товара?", "acceptedAnswer": { "@type": "Answer", "text": "Отслеживание товара следит за одной карточкой. Поиск по ссылке следит за целой страницей результатов — сотнями товаров сразу — и присылает те, что подешевели по вашей стратегии." } },
+    { "@type": "Question", "name": "Что за три стратегии срабатывания?", "acceptedAnswer": { "@type": "Answer", "text": "Порог цены — уведомить при достижении вашей суммы. Любое снижение — при первом падении относительно цены на момент подписки. Скидка от процента — только когда падение превысит заданный процент." } },
+    { "@type": "Question", "name": "Это правда бесплатно?", "acceptedAnswer": { "@type": "Answer", "text": "Да. Бесплатный план (5 товарных подписок) доступен навсегда и без карты. Поиск по ссылке можно бесплатно попробовать 3 дня по триалу — он включается один раз на аккаунт командой /trial. Платные тарифы оплачиваются в боте через Робокассу." } },
+    { "@type": "Question", "name": "Как часто бот проверяет цены?", "acceptedAnswer": { "@type": "Answer", "text": "Зависит от тарифа: на Free — раз в 60 минут, на Lite — раз в 30, на Триале и Pro — раз в 15, на тарифах для реселлеров — раз в минуту. Уведомление приходит в Telegram сразу после того, как условие сработало." } },
+    { "@type": "Question", "name": "Что значит «учёт баллов за отзыв»?", "acceptedAnswer": { "@type": "Answer", "text": "У части товаров WB начисляет баллы за отзыв. Мы вычитаем их из цены и показываем эффективную стоимость — то, во что покупка обойдётся на деле, а не «на витрине»." } },
+    { "@type": "Question", "name": "Как оплатить тариф и можно ли вернуть деньги?", "acceptedAnswer": { "@type": "Answer", "text": "Оплата проходит в боте через Робокассу — картой или по СБП. Подписка активируется автоматически сразу после платежа, чек приходит через «Мой налог». Если подключено автопродление — оплата списывается раз в 30 дней, перед списанием придёт напоминание; продление можно отменить в любой момент, а возврат за неиспользованный период оформляется по заявлению на contact@kosovandrey.ru. Подробности — в разделе «Оплата и возврат» и в публичной оферте." } }
+  ]
+}
+</script>
 </head>
 <body>
 
@@ -377,9 +427,9 @@ footer{background:var(--plum-deep);padding:70px 0 40px;border-top:1px solid var(
   <div class="hero-bg"><div class="glow g1"></div><div class="glow g2"></div></div>
   <div class="wrap">
     <div>
-      <span class="eyebrow" data-reveal>Telegram-бот · Wildberries</span>
-      <h1 data-reveal style="--d:.05s">Следит за ценой,<br>пока вы <span class="accent">заняты</span> жизнью.</h1>
-      <p class="lead" data-reveal style="--d:.15s">Пришлите ссылку на товар или целую выдачу Wildberries. TryBerry проверяет цены сам и пишет вам ровно в тот момент, когда становится выгодно.</p>
+      <span class="eyebrow" data-reveal>Честная цена · Wildberries</span>
+      <h1 data-reveal style="--d:.05s">Скидка настоящая<br>или <span class="accent">нарисованная?</span></h1>
+      <p class="lead" data-reveal style="--d:.15s">Перед «−40%» цену часто задирают. TryBerry помнит всю историю цены товара, отличает реальное снижение от накрутки — и пишет в Telegram, когда подешевело <b style="color:var(--rose);font-weight:600">по-честному</b>.</p>
       <div class="hero-actions" data-reveal style="--d:.25s">
         <a href="https://t.me/TryBerryBot" target="_blank" rel="noopener" class="btn-primary">
           <svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor"><path d="M21.9 4.3 18.7 19.4c-.2 1-.9 1.3-1.8.8l-4.9-3.6-2.4 2.3c-.3.3-.5.5-1 .5l.3-4.9 9-8.1c.4-.3-.1-.5-.6-.2L6.4 13.3l-4.8-1.5c-1-.3-1-1 .2-1.5L20.6 3c.9-.3 1.6.2 1.3 1.3z"/></svg>
@@ -398,19 +448,37 @@ footer{background:var(--plum-deep);padding:70px 0 40px;border-top:1px solid var(
             <div><div class="nm">TryBerry</div><div class="st">bot · онлайн</div></div>
           </div>
           <div class="bubble">
-            <div class="ttl">📉 Цена снизилась</div>
+            <div class="ttl good">✓ Это честная скидка</div>
             <div class="prod">Наушники беспроводные TWS, чёрные</div>
+            <div class="spark" aria-hidden="true">
+              <svg viewBox="0 0 240 50" preserveAspectRatio="none">
+                <defs>
+                  <linearGradient id="spark-fill" x1="0" y1="0" x2="0" y2="1">
+                    <stop offset="0" stop-color="#3ad29f" stop-opacity=".28"/>
+                    <stop offset="1" stop-color="#3ad29f" stop-opacity="0"/>
+                  </linearGradient>
+                </defs>
+                <path class="area" d="M0,16 L24,15 L48,20 L72,13 L96,19 L120,14 L144,24 L168,21 L192,33 L216,39 L232,44 L232,50 L0,50 Z"/>
+                <path class="ln" d="M0,16 L24,15 L48,20 L72,13 L96,19 L120,14 L144,24 L168,21 L192,33 L216,39 L232,44"/>
+                <circle class="nowring" cx="232" cy="44" r="6"/>
+                <circle class="now" cx="232" cy="44" r="3.4"/>
+              </svg>
+            </div>
             <div class="price-row">
               <span class="price-old">2 490 ₽</span>
               <span class="price-new">1 690 ₽</span>
-              <span class="price-badge">−32%</span>
+              <span class="price-badge good">минимум за всё время</span>
             </div>
-            <div class="meta">С учётом баллов за отзыв · ваш порог 1 800 ₽</div>
+            <div class="meta">Дешевле, чем было все 90 дней · с учётом баллов за отзыв</div>
           </div>
           <div class="bubble b2">
-            <div class="ttl">🔎 В вашей выдаче</div>
-            <div class="prod">«кроссовки мужские» — 3 товара подешевели</div>
-            <div class="meta">Слежу за всей страницей результатов</div>
+            <div class="ttl warn">⚠ А вот тут скидка накручена</div>
+            <div class="prod">Кроссовки мужские, белые — на витрине «−40%»</div>
+            <div class="price-row">
+              <span class="price-new" style="font-size:1.15rem">1 990 ₽</span>
+              <span class="price-badge warn">обычная цена</span>
+            </div>
+            <div class="meta">Цену подняли 5 дней назад — это не распродажа</div>
           </div>
         </div>
       </div>
