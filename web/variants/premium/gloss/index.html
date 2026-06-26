@@ -52,8 +52,8 @@ main,.nav,.foot{position:relative;z-index:2}
 @media(min-width:980px){.hero-grid{grid-template-columns:1.1fr .9fr}}
 .hero .eyebrow{display:inline-block;margin-bottom:22px;opacity:0;animation:fadeUp .8s var(--ease) .1s forwards}
 .h1{font-family:var(--dsp);font-weight:700;font-size:clamp(2.6rem,6.4vw,5.2rem);line-height:.98;letter-spacing:-.035em;opacity:0;animation:fadeUp .9s var(--ease) .2s forwards}
-.h1 .shine{background:linear-gradient(100deg,var(--berry-deep) 0%,var(--berry-bright) 30%,var(--rose) 45%,var(--berry-bright) 60%,var(--berry-deep) 100%);background-size:240% auto;-webkit-background-clip:text;background-clip:text;color:transparent;animation:shine 5s linear infinite}
-@keyframes shine{to{background-position:240% center}}
+.h1 .shine{background:linear-gradient(100deg,var(--berry-deep) 0%,var(--berry-bright) 30%,var(--rose) 45%,var(--berry-bright) 60%,var(--berry-deep) 100%);background-size:200% auto;-webkit-background-clip:text;background-clip:text;color:transparent;animation:shine 6s linear infinite}
+@keyframes shine{to{background-position:-200% center}}
 @keyframes fadeUp{from{opacity:0;transform:translateY(18px)}to{opacity:1;transform:none}}
 .lead{margin-top:26px;font-size:clamp(1.05rem,1.5vw,1.28rem);color:#e7d3dd;max-width:38ch;opacity:0;animation:fadeUp .8s var(--ease) .4s forwards}
 .lead b{color:var(--rose);font-weight:600}
