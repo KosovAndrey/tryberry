@@ -4,12 +4,11 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <meta name="robots" content="noindex, nofollow">
-<title>TryBerry — Gloss · честная скидка (GSAP)</title>
+<title>TryBerry — Gloss · честная скидка</title>
 <meta name="description" content="TryBerry помнит историю цен Wildberries и отличает настоящую скидку от накрученной.">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Unbounded:wght@400;500;600;700;800&family=Onest:wght@300;400;500;600;700&display=swap" rel="stylesheet">
-<script>if(!matchMedia('(prefers-reduced-motion: reduce)').matches)document.documentElement.classList.add('anim');</script>
 <style>
 :root{
   --ink:#170711;--plum:#3a0f2b;--plum-deep:#250a1c;--cream:#f9f3ef;
@@ -29,9 +28,6 @@ a{color:inherit;text-decoration:none}svg{display:block}
 ::selection{background:var(--berry);color:#fff}
 .wrap{max-width:var(--maxw);margin:0 auto;padding:0 clamp(20px,5vw,44px)}
 .eyebrow{font-family:var(--dsp);font-weight:500;font-size:.72rem;letter-spacing:.26em;text-transform:uppercase;color:var(--berry-bright)}
-
-html.anim [data-hero]{opacity:0}
-html.anim [data-rv]{opacity:0}
 
 .bg{position:fixed;inset:0;z-index:0;pointer-events:none;background:
   radial-gradient(50vw 50vw at 80% -5%,rgba(160,22,81,.5),transparent 60%),
@@ -54,25 +50,26 @@ main,.nav,.foot{position:relative;z-index:2}
 .hero{padding:clamp(48px,7vw,90px) 0 clamp(30px,4vw,46px)}
 .hero-grid{display:grid;grid-template-columns:1fr;gap:clamp(30px,4vw,48px);align-items:center}
 @media(min-width:980px){.hero-grid{grid-template-columns:1.1fr .9fr}}
-.hero .eyebrow{display:inline-block;margin-bottom:22px}
-.h1{font-family:var(--dsp);font-weight:700;font-size:clamp(2.6rem,6.4vw,5.2rem);line-height:.98;letter-spacing:-.035em}
+.hero .eyebrow{display:inline-block;margin-bottom:22px;opacity:0;animation:fadeUp .8s var(--ease) .1s forwards}
+.h1{font-family:var(--dsp);font-weight:700;font-size:clamp(2.6rem,6.4vw,5.2rem);line-height:.98;letter-spacing:-.035em;opacity:0;animation:fadeUp .9s var(--ease) .2s forwards}
 .h1 .shine{background:linear-gradient(100deg,var(--berry-deep) 0%,var(--berry-bright) 30%,var(--rose) 45%,var(--berry-bright) 60%,var(--berry-deep) 100%);background-size:240% auto;-webkit-background-clip:text;background-clip:text;color:transparent;animation:shine 5s linear infinite}
 @keyframes shine{to{background-position:240% center}}
-.lead{margin-top:26px;font-size:clamp(1.05rem,1.5vw,1.28rem);color:#e7d3dd;max-width:38ch}
+@keyframes fadeUp{from{opacity:0;transform:translateY(18px)}to{opacity:1;transform:none}}
+.lead{margin-top:26px;font-size:clamp(1.05rem,1.5vw,1.28rem);color:#e7d3dd;max-width:38ch;opacity:0;animation:fadeUp .8s var(--ease) .4s forwards}
 .lead b{color:var(--rose);font-weight:600}
-.cta{display:flex;flex-wrap:wrap;gap:15px;margin-top:36px}
+.cta{display:flex;flex-wrap:wrap;gap:15px;margin-top:36px;opacity:0;animation:fadeUp .8s var(--ease) .55s forwards}
 .btn{position:relative;font-weight:600;font-size:1rem;padding:15px 30px;border-radius:100px;display:inline-flex;align-items:center;gap:10px;transition:transform .25s var(--ease),box-shadow .3s;overflow:hidden}
 .btn-pri{background:linear-gradient(120deg,var(--berry-bright),var(--berry-deep));color:#fff;box-shadow:0 14px 40px rgba(232,51,108,.34);will-change:transform}
 .btn-pri::after{content:"";position:absolute;top:0;left:-120%;width:60%;height:100%;background:linear-gradient(100deg,transparent,rgba(255,255,255,.45),transparent);transform:skewX(-18deg);animation:sweep 3.6s ease infinite}
 @keyframes sweep{0%,60%{left:-120%}100%{left:160%}}
 .btn-pri:hover{box-shadow:0 22px 54px rgba(232,51,108,.5)}
 .btn-ghost{border:1px solid var(--line);color:var(--cream)}.btn-ghost:hover{border-color:var(--berry);background:rgba(232,51,108,.08)}
-.heronote{margin-top:22px;font-size:.86rem;color:var(--muted-2)}
+.heronote{margin-top:22px;font-size:.86rem;color:var(--muted-2);opacity:0;animation:fadeUp .8s var(--ease) .7s forwards}
 .heronote b{color:var(--rose)}
 
 /* 3D parallax phone */
-.stage{display:flex;justify-content:center;perspective:1100px}
-.phone{position:relative;width:min(320px,80vw);aspect-ratio:320/650;border-radius:42px;padding:13px;background:linear-gradient(160deg,#2a0c20,#160710);border:1px solid rgba(255,209,225,.14);box-shadow:0 50px 120px rgba(0,0,0,.6),inset 0 1px 0 rgba(255,255,255,.07);transform-style:preserve-3d;transition:transform .2s var(--ease);will-change:transform}
+.stage{display:flex;justify-content:center;perspective:1100px;opacity:0;animation:fadeUp 1s var(--ease) .4s forwards}
+.phone{position:relative;width:min(320px,80vw);aspect-ratio:320/650;border-radius:42px;padding:13px;background:linear-gradient(160deg,#2a0c20,#160710);border:1px solid rgba(255,209,225,.14);box-shadow:0 50px 120px rgba(0,0,0,.6),inset 0 1px 0 rgba(255,255,255,.07);transform-style:preserve-3d;will-change:transform}
 .screen{position:relative;height:100%;border-radius:30px;overflow:hidden;background:linear-gradient(180deg,#1d0815,#120510);padding:50px 16px 18px;transform-style:preserve-3d}
 .notch{position:absolute;top:14px;left:50%;transform:translateX(-50%);width:104px;height:24px;background:#0d0309;border-radius:0 0 16px 16px}
 .sheen{position:absolute;inset:0;border-radius:30px;background:linear-gradient(130deg,transparent 40%,rgba(255,255,255,.10) 48%,transparent 56%);pointer-events:none}
@@ -156,7 +153,13 @@ main,.nav,.foot{position:relative;z-index:2}
 .foot a.fl{display:block;color:var(--muted);font-size:.92rem;margin-bottom:9px}.foot a.fl:hover{color:var(--cream)}
 .legal{margin-top:34px;padding-top:20px;border-top:1px solid var(--line);font-size:.78rem;color:var(--muted-2);line-height:1.8}
 
-@media(prefers-reduced-motion:reduce){.track,.shine,.btn-pri::after{animation:none}}
+[data-rv]{opacity:0;transform:translateY(26px);transition:opacity .9s var(--ease),transform .9s var(--ease)}
+[data-rv].in{opacity:1;transform:none}
+@media(prefers-reduced-motion:reduce){
+  *{animation:none!important;transition-duration:.01s!important}
+  .eyebrow,.h1,.lead,.cta,.heronote,.stage{opacity:1!important;transform:none!important}
+  .phone{transform:none!important}[data-rv]{opacity:1;transform:none}
+}
 </style>
 </head>
 <body id="top">
@@ -178,17 +181,17 @@ main,.nav,.foot{position:relative;z-index:2}
 <section class="hero">
   <div class="wrap hero-grid">
     <div>
-      <span class="eyebrow" data-hero>Честная цена · Wildberries</span>
-      <h1 class="h1" data-hero>Скидка настоящая<br>или <span class="shine">нарисованная?</span></h1>
-      <p class="lead" data-hero>Перед «−40&nbsp;%» цену часто задирают. TryBerry помнит всю историю цены и пишет в Telegram, только когда подешевело <b>по-честному</b>.</p>
-      <div class="cta" data-hero>
+      <span class="eyebrow">Честная цена · Wildberries</span>
+      <h1 class="h1">Скидка настоящая<br>или <span class="shine">нарисованная?</span></h1>
+      <p class="lead">Перед «−40&nbsp;%» цену часто задирают. TryBerry помнит всю историю цены и пишет в Telegram, только когда подешевело <b>по-честному</b>.</p>
+      <div class="cta">
         <a class="btn btn-pri" href="https://t.me/TryBerryBot" target="_blank" rel="noopener">Проверить скидку</a>
         <a class="btn btn-ghost" href="#plans">Тарифы</a>
       </div>
-      <p class="heronote" data-hero><b>Free</b> навсегда · без карты · без логина Wildberries</p>
+      <p class="heronote"><b>Free</b> навсегда · без карты · без логина Wildberries</p>
     </div>
 
-    <div class="stage" id="stage" data-hero>
+    <div class="stage" id="stage">
       <div class="phone" id="phone">
         <div class="screen">
           <div class="notch"></div>
@@ -211,7 +214,8 @@ main,.nav,.foot{position:relative;z-index:2}
     </div>
   </div>
 
-  <div class="wrap"><div class="ticker" data-rv>
+  <!-- marquee -->
+  <div class="wrap"><div class="ticker">
     <span class="eyebrow">Что ловит TryBerry · примеры вердиктов</span>
     <div class="track" id="track">
       <div class="chiprow">
@@ -287,44 +291,36 @@ main,.nav,.foot{position:relative;z-index:2}
   </div>
 </footer>
 
-<script src="/vendor/gsap.min.js"></script>
-<script src="/vendor/ScrollTrigger.min.js"></script>
 <script src="/vendor/lenis.min.js"></script>
 <script>
-const RM=matchMedia('(prefers-reduced-motion: reduce)').matches,root=document.documentElement;
-addEventListener('scroll',()=>document.getElementById('nav').classList.toggle('stuck',scrollY>10),{passive:true});
+const RM=matchMedia('(prefers-reduced-motion: reduce)').matches;
+const nav=document.getElementById('nav');
+addEventListener('scroll',()=>nav.classList.toggle('stuck',scrollY>10),{passive:true});
 
-/* 3D наклон телефона за курсором */
+/* Lenis — плавный «apple» скролл (усиление; нативный скролл, если не загрузился) */
+if(typeof Lenis!=='undefined'&&!RM){
+  const lenis=new Lenis({lerp:.1});
+  (function raf(t){lenis.raf(t);requestAnimationFrame(raf)})();
+  document.querySelectorAll('a[href^="#"]').forEach(a=>a.addEventListener('click',e=>{const id=a.getAttribute('href');if(id.length>1){const t=document.querySelector(id);if(t){e.preventDefault();lenis.scrollTo(t,{offset:-72})}}}));
+}
+
+/* 3D наклон телефона за курсором — плавный (lerp по rAF) */
 const phone=document.getElementById('phone'),stage=document.getElementById('stage');
 if(phone&&!RM){
-  stage.addEventListener('pointermove',e=>{const r=stage.getBoundingClientRect();const x=(e.clientX-r.left)/r.width-.5,y=(e.clientY-r.top)/r.height-.5;phone.style.transform=`rotateY(${x*14}deg) rotateX(${-y*14}deg)`});
-  stage.addEventListener('pointerleave',()=>phone.style.transform='');
+  let tx=0,ty=0,cx=0,cy=0;
+  stage.addEventListener('pointermove',e=>{const r=stage.getBoundingClientRect();tx=((e.clientX-r.left)/r.width-.5)*16;ty=-((e.clientY-r.top)/r.height-.5)*16});
+  stage.addEventListener('pointerleave',()=>{tx=0;ty=0});
+  (function loop(){cx+=(tx-cx)*.08;cy+=(ty-cy)*.08;phone.style.transform=`rotateY(${cx.toFixed(2)}deg) rotateX(${cy.toFixed(2)}deg)`;requestAnimationFrame(loop)})();
 }
+
+/* reveal на IntersectionObserver — надёжно, без внешних зависимостей */
+if('IntersectionObserver' in window){
+  const io=new IntersectionObserver((es)=>es.forEach(e=>{if(e.isIntersecting){e.target.classList.add('in');io.unobserve(e.target)}}),{threshold:.14});
+  document.querySelectorAll('[data-rv]').forEach(el=>io.observe(el));
+}else{document.querySelectorAll('[data-rv]').forEach(el=>el.classList.add('in'))}
+
 /* faq */
 document.querySelectorAll('.qa').forEach(item=>{const q=item.querySelector('.q'),a=item.querySelector('.a');q.addEventListener('click',()=>{const o=item.classList.contains('open');document.querySelectorAll('.qa.open').forEach(x=>{x.classList.remove('open');x.querySelector('.a').style.maxHeight=null});if(!o){item.classList.add('open');a.style.maxHeight=a.scrollHeight+'px'}})});
-
-if(RM||typeof gsap==='undefined'){
-  root.classList.remove('anim');
-}else{
-  gsap.registerPlugin(ScrollTrigger);
-  let lenis=null;
-  if(typeof Lenis!=='undefined'){
-    lenis=new Lenis({lerp:.1});
-    lenis.on('scroll',ScrollTrigger.update);
-    gsap.ticker.add(t=>lenis.raf(t*1000));gsap.ticker.lagSmoothing(0);
-    document.querySelectorAll('a[href^="#"]').forEach(a=>a.addEventListener('click',e=>{const id=a.getAttribute('href');if(id.length>1){const t=document.querySelector(id);if(t){e.preventDefault();lenis.scrollTo(t,{offset:-72})}}}));
-  }
-  /* вход героя */
-  const tl=gsap.timeline({defaults:{ease:'power3.out'}});
-  tl.fromTo('.hero .eyebrow',{opacity:0,y:14},{opacity:1,y:0,duration:.7})
-    .fromTo('.h1',{opacity:0,y:18},{opacity:1,y:0,duration:.85},'-=.4')
-    .fromTo('.lead',{opacity:0,y:14},{opacity:1,y:0,duration:.7},'-=.5')
-    .fromTo('.cta',{opacity:0,y:14},{opacity:1,y:0,duration:.6},'-=.45')
-    .fromTo('.heronote',{opacity:0,y:10},{opacity:1,y:0,duration:.5},'-=.4')
-    .fromTo('.stage',{opacity:0,y:30,scale:.96},{opacity:1,y:0,scale:1,duration:1,ease:'power2.out'},'-=.8');
-  /* появления секций */
-  gsap.utils.toArray('[data-rv]').forEach(el=>gsap.fromTo(el,{opacity:0,y:28},{opacity:1,y:0,duration:.9,ease:'power3.out',scrollTrigger:{trigger:el,start:'top 88%'}}));
-}
 </script>
 </body>
 </html>

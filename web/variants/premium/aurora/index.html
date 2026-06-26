@@ -4,13 +4,11 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <meta name="robots" content="noindex, nofollow">
-<title>TryBerry — Aurora · честная скидка (GSAP)</title>
+<title>TryBerry — Aurora · честная скидка</title>
 <meta name="description" content="TryBerry помнит историю цен Wildberries и отличает настоящую скидку от накрученной.">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Unbounded:wght@400;500;600;700;800&family=Onest:wght@300;400;500;600;700&display=swap" rel="stylesheet">
-<script>/* спрятать анимируемое до инициализации GSAP (но не при reduced-motion) */
-if(!matchMedia('(prefers-reduced-motion: reduce)').matches)document.documentElement.classList.add('anim');</script>
 <style>
 :root{
   --ink:#160710;--plum:#3a0f2b;--plum-deep:#250a1c;--cream:#f9f3ef;
@@ -22,7 +20,6 @@ if(!matchMedia('(prefers-reduced-motion: reduce)').matches)document.documentElem
 }
 *{margin:0;padding:0;box-sizing:border-box}
 html{-webkit-text-size-adjust:100%;scroll-behavior:smooth}
-/* Lenis */
 html.lenis,html.lenis body{height:auto}
 .lenis.lenis-smooth{scroll-behavior:auto!important}
 .lenis.lenis-smooth [data-lenis-prevent]{overscroll-behavior:contain}
@@ -33,11 +30,12 @@ a{color:inherit;text-decoration:none}svg{display:block}
 .wrap{max-width:var(--maxw);margin:0 auto;padding:0 clamp(20px,5vw,44px)}
 .eyebrow{font-family:var(--dsp);font-weight:500;font-size:.72rem;letter-spacing:.26em;text-transform:uppercase;color:var(--berry-bright)}
 
-/* анимируемое скрыто до GSAP */
-html.anim [data-hero]{opacity:0}
-html.anim .h1 .line span{transform:translateY(110%)}
-html.anim .gcard{opacity:0}
-html.anim [data-rv]{opacity:0}
+/* entrance keyframes */
+@keyframes fadeUp{from{opacity:0;transform:translateY(18px)}to{opacity:1;transform:none}}
+@keyframes rise{to{transform:translateY(0)}}
+@keyframes draw{to{stroke-dashoffset:0}}
+@keyframes fade{to{opacity:1}}
+@keyframes shine{to{background-position:240% center}}
 
 /* aurora bg */
 .aurora{position:fixed;inset:0;z-index:0;overflow:hidden;pointer-events:none}
@@ -69,11 +67,11 @@ main,.nav,.foot{position:relative;z-index:2}
 .hero-grid{display:grid;grid-template-columns:1fr;gap:clamp(36px,4vw,56px);align-items:center}
 @media(min-width:980px){.hero-grid{grid-template-columns:1.08fr .92fr}}
 .hero .eyebrow{display:inline-block;margin-bottom:22px}
+[data-hero]{opacity:0;animation:fadeUp .8s var(--ease) var(--d,0s) forwards}
 .h1{font-family:var(--dsp);font-weight:700;font-size:clamp(2.6rem,6.4vw,5.2rem);line-height:.98;letter-spacing:-.035em}
 .h1 .line{display:block;overflow:hidden;padding-bottom:.04em}
-.h1 .line span{display:block}
+.h1 .line span{display:block;transform:translateY(110%);animation:rise .9s var(--ease) var(--d,0s) forwards}
 .h1 .accent{background:linear-gradient(100deg,var(--berry-deep),var(--berry-bright) 35%,var(--rose) 50%,var(--berry-bright) 65%,var(--berry-deep));background-size:240% auto;-webkit-background-clip:text;background-clip:text;color:transparent;animation:shine 5s linear infinite}
-@keyframes shine{to{background-position:240% center}}
 .lead{margin-top:26px;font-size:clamp(1.05rem,1.5vw,1.28rem);color:#e7d3dd;max-width:38ch}
 .lead b{color:var(--rose);font-weight:600}
 .cta{display:flex;flex-wrap:wrap;gap:15px;margin-top:36px}
@@ -86,13 +84,13 @@ main,.nav,.foot{position:relative;z-index:2}
 .heronote b{color:var(--rose)}
 
 /* hero glass chart */
-.gcard{position:relative;background:var(--glass);border:1px solid var(--line);border-radius:22px;padding:22px;backdrop-filter:blur(14px);box-shadow:0 40px 90px rgba(0,0,0,.5),inset 0 1px 0 rgba(255,255,255,.07)}
+.gcard{position:relative;background:var(--glass);border:1px solid var(--line);border-radius:22px;padding:22px;backdrop-filter:blur(14px);box-shadow:0 40px 90px rgba(0,0,0,.5),inset 0 1px 0 rgba(255,255,255,.07);opacity:0;animation:fadeUp 1s var(--ease) .4s forwards}
 .gcard .gh{display:flex;align-items:baseline;justify-content:space-between;gap:10px;margin-bottom:6px}
 .gh .gp{font-weight:600;font-size:.92rem}
 .gh .gt{font-size:.72rem;color:var(--muted-2);font-family:var(--dsp);letter-spacing:.06em;text-transform:uppercase}
 .gsvg{width:100%;height:auto}
-.hline{fill:none;stroke:url(#hg);stroke-width:2.6;stroke-linecap:round;stroke-linejoin:round}
-.harea{fill:url(#ha)}
+.hline{fill:none;stroke:url(#hg);stroke-width:2.6;stroke-linecap:round;stroke-linejoin:round;stroke-dasharray:1;stroke-dashoffset:1;animation:draw 1.6s var(--ease) .7s forwards}
+.harea{fill:url(#ha);opacity:0;animation:fade 1s ease 1.5s forwards}
 .hbase{stroke:var(--good);stroke-width:1.3;stroke-dasharray:5 4;opacity:.7}
 .hgrid{stroke:rgba(255,255,255,.06);stroke-width:1}
 .htxt{font-family:var(--body);font-size:11px;font-weight:500;fill:var(--muted)}
@@ -108,7 +106,7 @@ main,.nav,.foot{position:relative;z-index:2}
 .stat .num{font-family:var(--dsp);font-weight:700;font-size:clamp(2rem,4vw,3rem);letter-spacing:-.02em;background:linear-gradient(120deg,var(--berry-bright),var(--rose));-webkit-background-clip:text;background-clip:text;color:transparent}
 .stat .lab{margin-top:6px;font-size:.82rem;color:var(--muted)}
 
-/* SCROLL STORY — липкий график + проявление битов (без pin) */
+/* SCROLL STORY — липкий график + проявление битов */
 .story{padding:clamp(64px,9vw,120px) 0;border-top:1px solid var(--line)}
 .story .wrap{display:grid;grid-template-columns:1fr;gap:clamp(30px,4vw,56px);align-items:start}
 @media(min-width:920px){.story .wrap{grid-template-columns:1fr 1.05fr}}
@@ -119,7 +117,8 @@ main,.nav,.foot{position:relative;z-index:2}
 .scene{position:relative;background:var(--glass);border:1px solid var(--line);border-radius:22px;padding:24px;backdrop-filter:blur(12px);box-shadow:0 40px 90px rgba(0,0,0,.45)}
 @media(min-width:920px){.scene{position:sticky;top:90px}}
 .ssvg{width:100%;height:auto}
-.sline{fill:none;stroke:url(#sg);stroke-width:2.6;stroke-linecap:round;stroke-linejoin:round}
+.sline{fill:none;stroke:url(#sg);stroke-width:2.6;stroke-linecap:round;stroke-linejoin:round;stroke-dasharray:1;stroke-dashoffset:1;transition:stroke-dashoffset 1.7s var(--ease)}
+.scene.in .sline{stroke-dashoffset:0}
 .sgrid{stroke:rgba(255,255,255,.06);stroke-width:1}
 .sbase{stroke:var(--good);stroke-width:1.3;stroke-dasharray:5 4;opacity:.8}
 .stxt{font-family:var(--body);font-size:12px;font-weight:500;fill:var(--muted)}
@@ -181,7 +180,17 @@ main,.nav,.foot{position:relative;z-index:2}
 .foot a.fl{display:block;color:var(--muted);font-size:.92rem;margin-bottom:9px}.foot a.fl:hover{color:var(--cream)}
 .legal{margin-top:34px;padding-top:20px;border-top:1px solid var(--line);font-size:.78rem;color:var(--muted-2);line-height:1.8}
 
-@media(prefers-reduced-motion:reduce){.aurora b{animation:none}}
+/* reveal (IntersectionObserver) */
+[data-rv]{opacity:0;transform:translateY(26px);transition:opacity .8s var(--ease),transform .8s var(--ease)}
+[data-rv].in{opacity:1;transform:none}
+
+@media(prefers-reduced-motion:reduce){
+  .aurora b{animation:none}
+  [data-hero],.gcard,.h1 .line span{opacity:1!important;transform:none!important;animation:none!important}
+  [data-rv]{opacity:1;transform:none}
+  .hline,.sline{stroke-dasharray:none!important;stroke-dashoffset:0!important;animation:none!important}
+  .harea{opacity:1!important;animation:none!important}
+}
 </style>
 </head>
 <body id="top">
@@ -205,13 +214,13 @@ main,.nav,.foot{position:relative;z-index:2}
   <div class="wrap hero-grid">
     <div>
       <span class="eyebrow" data-hero>Честная цена · Wildberries</span>
-      <h1 class="h1"><span class="line"><span>Скидка настоящая</span></span><span class="line"><span>или <span class="accent">нарисованная?</span></span></span></h1>
-      <p class="lead" data-hero>Перед «−40&nbsp;%» цену часто задирают. TryBerry помнит всю историю цены и пишет в Telegram, только когда подешевело <b>по-честному</b>.</p>
-      <div class="cta" data-hero>
+      <h1 class="h1"><span class="line"><span style="--d:.05s">Скидка настоящая</span></span><span class="line"><span style="--d:.17s">или <span class="accent">нарисованная?</span></span></span></h1>
+      <p class="lead" data-hero style="--d:.5s">Перед «−40&nbsp;%» цену часто задирают. TryBerry помнит всю историю цены и пишет в Telegram, только когда подешевело <b>по-честному</b>.</p>
+      <div class="cta" data-hero style="--d:.65s">
         <a class="btn btn-pri" id="magnet" href="https://t.me/TryBerryBot" target="_blank" rel="noopener">Проверить скидку</a>
         <a class="btn btn-ghost" href="#plans">Тарифы</a>
       </div>
-      <p class="heronote" data-hero><b>Free</b> навсегда · без карты · без логина Wildberries</p>
+      <p class="heronote" data-hero style="--d:.8s"><b>Free</b> навсегда · без карты · без логина Wildberries</p>
     </div>
 
     <figure class="gcard">
@@ -225,7 +234,7 @@ main,.nav,.foot{position:relative;z-index:2}
         <line class="hbase" x1="14" y1="120" x2="408" y2="120"/>
         <text class="htxt g" x="16" y="113">обычная · 1 990 ₽</text>
         <path class="harea" d="M14,118 L54,122 L96,114 L140,126 L180,120 L222,148 L264,144 L306,128 L346,120 L380,100 L404,66 L424,120 L424,180 L14,180 Z"/>
-        <path class="hline" id="hline" pathLength="1" d="M14,118 L54,122 L96,114 L140,126 L180,120 L222,148 L264,144 L306,128 L346,120 L380,100 L404,66 L424,120"/>
+        <path class="hline" pathLength="1" d="M14,118 L54,122 L96,114 L140,126 L180,120 L222,148 L264,144 L306,128 L346,120 L380,100 L404,66 L424,120"/>
         <circle class="hdot-g" cx="222" cy="148" r="4"/><text class="htxt g" x="190" y="167">мин 1 750 ₽</text>
         <circle class="hdot-r" cx="424" cy="120" r="4.5"/><text class="htxt r" x="420" y="110" text-anchor="end">«−40%»=1 990 ₽</text>
       </svg>
@@ -251,25 +260,21 @@ main,.nav,.foot{position:relative;z-index:2}
     </div>
     <div class="scene">
       <svg class="ssvg" viewBox="0 0 520 280" role="img" aria-label="История цены за 90 дней с разоблачением накрутки">
-          <defs><linearGradient id="sg" x1="0" y1="0" x2="1" y2="0"><stop offset="0" stop-color="#ff5d8f"/><stop offset="1" stop-color="#e8336c"/></linearGradient></defs>
-          <line class="sgrid" x1="20" y1="60" x2="500" y2="60"/><line class="sgrid" x1="20" y1="130" x2="500" y2="130"/><line class="sgrid" x1="20" y1="200" x2="500" y2="200"/>
-          <line class="sbase" id="sbase" x1="20" y1="160" x2="476" y2="160"/>
-          <text class="stxt g" x="24" y="152">обычная цена · 1 990 ₽</text>
-          <path class="sline" id="sline" pathLength="1" d="M20,158 L70,162 L120,152 L176,166 L220,159 L268,192 L320,187 L372,168 L420,159 L456,138 L490,96 L512,160"/>
-          <g class="peak" id="peak">
-            <circle cx="490" cy="96" r="5" fill="#ff8a7d"/>
-            <text class="stxt r" x="490" y="84" text-anchor="middle">подняли за 5 дней</text>
-          </g>
-          <circle class="pkdot" id="pkmin" cx="268" cy="192" r="4.5" fill="#3ad29f"/>
-          <g class="stampg" id="stamp">
-            <circle cx="512" cy="160" r="7" fill="none" stroke="#ff6a5d" stroke-width="2"/>
-            <circle cx="512" cy="160" r="3.4" fill="#ff6a5d"/>
-            <rect x="356" y="206" width="150" height="34" rx="5" fill="none" stroke="#ff6a5d" stroke-width="2"/>
-            <text class="stxt r" x="431" y="228" text-anchor="middle" style="font-weight:700;letter-spacing:.04em">ЦЕНУ ЗАДРАЛИ</text>
-          </g>
-        </svg>
-      </div>
+        <defs><linearGradient id="sg" x1="0" y1="0" x2="1" y2="0"><stop offset="0" stop-color="#ff5d8f"/><stop offset="1" stop-color="#e8336c"/></linearGradient></defs>
+        <line class="sgrid" x1="20" y1="60" x2="500" y2="60"/><line class="sgrid" x1="20" y1="130" x2="500" y2="130"/><line class="sgrid" x1="20" y1="200" x2="500" y2="200"/>
+        <line class="sbase" x1="20" y1="160" x2="476" y2="160"/>
+        <text class="stxt g" x="24" y="152">обычная цена · 1 990 ₽</text>
+        <path class="sline" pathLength="1" d="M20,158 L70,162 L120,152 L176,166 L220,159 L268,192 L320,187 L372,168 L420,159 L456,138 L490,96 L512,160"/>
+        <circle cx="490" cy="96" r="5" fill="#ff8a7d"/>
+        <text class="stxt r" x="490" y="84" text-anchor="middle">подняли за 5 дней</text>
+        <circle cx="268" cy="192" r="4.5" fill="#3ad29f"/>
+        <circle cx="512" cy="160" r="7" fill="none" stroke="#ff6a5d" stroke-width="2"/>
+        <circle cx="512" cy="160" r="3.4" fill="#ff6a5d"/>
+        <rect x="356" y="206" width="150" height="34" rx="5" fill="none" stroke="#ff6a5d" stroke-width="2"/>
+        <text class="stxt r" x="431" y="228" text-anchor="middle" style="font-weight:700;letter-spacing:.04em">ЦЕНУ ЗАДРАЛИ</text>
+      </svg>
     </div>
+  </div>
 </section>
 
 <section class="section" id="strategies">
@@ -327,63 +332,39 @@ main,.nav,.foot{position:relative;z-index:2}
   </div>
 </footer>
 
-<!-- GSAP + ScrollTrigger + Lenis (self-hosted /vendor) -->
-<script src="/vendor/gsap.min.js"></script>
-<script src="/vendor/ScrollTrigger.min.js"></script>
 <script src="/vendor/lenis.min.js"></script>
 <script>
 const RM=matchMedia('(prefers-reduced-motion: reduce)').matches;
-const root=document.documentElement;
+const nav=document.getElementById('nav');
+addEventListener('scroll',()=>nav.classList.toggle('stuck',scrollY>10),{passive:true});
 
-/* nav fon при скролле (работает и с Lenis, и без) */
-addEventListener('scroll',()=>document.getElementById('nav').classList.toggle('stuck',scrollY>10),{passive:true});
+/* Lenis — плавный «apple» скролл (усиление; нативный скролл, если не загрузился) */
+if(typeof Lenis!=='undefined'&&!RM){
+  const lenis=new Lenis({lerp:.1});
+  (function raf(t){lenis.raf(t);requestAnimationFrame(raf)})();
+  document.querySelectorAll('a[href^="#"]').forEach(a=>a.addEventListener('click',e=>{const id=a.getAttribute('href');if(id.length>1){const t=document.querySelector(id);if(t){e.preventDefault();lenis.scrollTo(t,{offset:-72})}}}));
+}
 
-/* count-up (независимо от анимаций) */
+/* count-up */
 const fmt=n=>n.toLocaleString('ru-RU');
-const cio=new IntersectionObserver((es)=>es.forEach(e=>{if(!e.isIntersecting)return;cio.unobserve(e.target);const el=e.target,to=+el.dataset.count,pre=el.dataset.prefix||'',suf=el.dataset.suffix||'';if(RM){el.textContent=pre+fmt(to)+suf;return}let t0=null;const dur=1100,step=t=>{t0=t0||t;const p=Math.min(1,(t-t0)/dur);el.textContent=pre+fmt(Math.round(to*(1-Math.pow(1-p,3))))+suf;if(p<1)requestAnimationFrame(step)};requestAnimationFrame(step)})},{threshold:.5});
-document.querySelectorAll('.num[data-count]').forEach(el=>cio.observe(el));
+if('IntersectionObserver' in window){
+  const cio=new IntersectionObserver((es)=>es.forEach(e=>{if(!e.isIntersecting)return;cio.unobserve(e.target);const el=e.target,to=+el.dataset.count,pre=el.dataset.prefix||'',suf=el.dataset.suffix||'';if(RM){el.textContent=pre+fmt(to)+suf;return}let t0=null;const dur=1100,step=t=>{t0=t0||t;const p=Math.min(1,(t-t0)/dur);el.textContent=pre+fmt(Math.round(to*(1-Math.pow(1-p,3))))+suf;if(p<1)requestAnimationFrame(step)};requestAnimationFrame(step)})},{threshold:.5});
+  document.querySelectorAll('.num[data-count]').forEach(el=>cio.observe(el));
+  /* reveal + рисование графика-разоблачения */
+  const io=new IntersectionObserver((es)=>es.forEach(e=>{if(e.isIntersecting){e.target.classList.add('in');io.unobserve(e.target)}}),{threshold:.14});
+  document.querySelectorAll('[data-rv], .scene').forEach(el=>io.observe(el));
+}else{
+  document.querySelectorAll('.num[data-count]').forEach(el=>el.textContent=(el.dataset.prefix||'')+fmt(+el.dataset.count)+(el.dataset.suffix||''));
+  document.querySelectorAll('[data-rv], .scene').forEach(el=>el.classList.add('in'));
+}
 
-/* card glow + magnetic CTA (десктоп) */
+/* card glow + magnetic CTA */
 document.querySelectorAll('.card').forEach(c=>c.addEventListener('pointermove',e=>{const r=c.getBoundingClientRect();c.style.setProperty('--mx',(e.clientX-r.left)+'px');c.style.setProperty('--my',(e.clientY-r.top)+'px')}));
 const mag=document.getElementById('magnet');
-if(mag&&!RM){mag.addEventListener('pointermove',e=>{const r=mag.getBoundingClientRect();mag.style.transform=`translate(${(e.clientX-r.left-r.width/2)*.25}px,${(e.clientY-r.top-r.height/2)*.35}px)`});mag.addEventListener('pointerleave',()=>mag.style.transform='')}
+if(mag&&!RM){mag.addEventListener('pointermove',e=>{const r=mag.getBoundingClientRect();mag.style.transform=`translate(${(e.clientX-r.left-r.width/2)*.22}px,${(e.clientY-r.top-r.height/2)*.32}px)`});mag.addEventListener('pointerleave',()=>mag.style.transform='')}
 
 /* faq */
 document.querySelectorAll('.qa').forEach(item=>{const q=item.querySelector('.q'),a=item.querySelector('.a');q.addEventListener('click',()=>{const o=item.classList.contains('open');document.querySelectorAll('.qa.open').forEach(x=>{x.classList.remove('open');x.querySelector('.a').style.maxHeight=null});if(!o){item.classList.add('open');a.style.maxHeight=a.scrollHeight+'px'}})});
-
-/* GSAP / Lenis — только если загрузилось и не reduced-motion */
-if(RM||typeof gsap==='undefined'){
-  root.classList.remove('anim');               /* показать всё, если анимаций нет */
-}else{
-  gsap.registerPlugin(ScrollTrigger);
-
-  /* Lenis smooth-scroll (если подгрузился) */
-  let lenis=null;
-  if(typeof Lenis!=='undefined'){
-    lenis=new Lenis({lerp:.1,wheelMultiplier:1});
-    lenis.on('scroll',ScrollTrigger.update);
-    gsap.ticker.add(t=>lenis.raf(t*1000));
-    gsap.ticker.lagSmoothing(0);
-    /* плавный переход по якорям */
-    document.querySelectorAll('a[href^="#"]').forEach(a=>a.addEventListener('click',e=>{const id=a.getAttribute('href');if(id.length>1){const t=document.querySelector(id);if(t){e.preventDefault();lenis.scrollTo(t,{offset:-72})}}}));
-  }
-
-  /* вход героя */
-  const tl=gsap.timeline({defaults:{ease:'power3.out'}});
-  tl.to('.h1 .line span',{yPercent:0,duration:.9,stagger:.12})
-    .fromTo('[data-hero]',{opacity:0,y:14},{opacity:1,y:0,duration:.7,stagger:.09},'-=.5')
-    .fromTo('.gcard',{opacity:0,y:24},{opacity:1,y:0,duration:.9},'-=.7');
-
-  /* график героя — отрисовка линии */
-  gsap.fromTo('#hline',{strokeDasharray:1,strokeDashoffset:1},{strokeDashoffset:0,duration:1.6,ease:'power2.out',delay:.6});
-  gsap.fromTo('.harea',{opacity:0},{opacity:1,duration:1,delay:1.5});
-
-  /* появления секций */
-  gsap.utils.toArray('[data-rv]').forEach(el=>gsap.fromTo(el,{opacity:0,y:28},{opacity:1,y:0,duration:.9,ease:'power3.out',scrollTrigger:{trigger:el,start:'top 86%'}}));
-
-  /* график-разоблачение — линия рисуется при появлении сцены (без pin) */
-  gsap.fromTo('#sline',{strokeDasharray:1,strokeDashoffset:1},{strokeDashoffset:0,duration:1.7,ease:'power2.out',scrollTrigger:{trigger:'.scene',start:'top 80%'}});
-}
 </script>
 </body>
 </html>
