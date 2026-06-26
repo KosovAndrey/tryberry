@@ -16,9 +16,9 @@
 {{ if .ImageURL }}<meta property="og:image" content="{{ .ImageURL }}">{{ end }}
 <meta name="twitter:card" content="summary{{ if .ImageURL }}_large_image{{ end }}">
 
-<link rel="preconnect" href="https://fonts.googleapis.com">
-<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link href="https://fonts.googleapis.com/css2?family=Unbounded:wght@400;500;600;700;800&family=Onest:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+<link rel="preload" href="/fonts/onest-400-cyrillic.woff2" as="font" type="font/woff2" crossorigin>
+<link rel="preload" href="/fonts/unbounded-700-cyrillic.woff2" as="font" type="font/woff2" crossorigin>
+<link rel="stylesheet" href="/fonts/fonts.css">
 <link rel="stylesheet" href="/vendor/uPlot.min.css?v={{ .AssetVersion }}">
 <link rel="stylesheet" href="/assets/chart.css?v={{ .AssetVersion }}">
 
