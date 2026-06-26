@@ -370,9 +370,7 @@ footer{background:var(--plum-deep);padding:70px 0 40px;border-top:1px solid var(
 .mp-track{display:flex;width:max-content;animation:mpscroll 28s linear infinite}
 .mp-marquee:hover .mp-track{animation-play-state:paused}
 @keyframes mpscroll{to{transform:translateX(-50%)}}
-.mp-chip{display:inline-flex;align-items:center;gap:11px;white-space:nowrap;margin-right:18px;font-family:var(--font-display);font-weight:700;font-size:clamp(1.05rem,2vw,1.5rem);color:#fff;padding:14px 26px;border-radius:16px;border:1px solid rgba(255,255,255,.16);box-shadow:0 16px 40px rgba(0,0,0,.4),inset 0 1px 0 rgba(255,255,255,.14)}
-.mp-chip .dot{width:9px;height:9px;border-radius:50%;background:rgba(255,255,255,.5);flex:none}
-.mp-chip .dot.on{background:#3ad29f;box-shadow:0 0 10px #3ad29f}
+.mp-chip{display:inline-flex;align-items:center;white-space:nowrap;margin-right:18px;font-family:var(--font-display);font-weight:700;font-size:clamp(1.05rem,2vw,1.5rem);color:#fff;padding:14px 26px;border-radius:16px;border:1px solid rgba(255,255,255,.16);box-shadow:0 16px 40px rgba(0,0,0,.4),inset 0 1px 0 rgba(255,255,255,.14)}
 .mp-wb{background:linear-gradient(135deg,#cb11ab,#5b1d80)}
 .mp-ozon{background:linear-gradient(135deg,#0a7cff,#0040c0)}
 .mp-ym{background:linear-gradient(135deg,#ff4b2b,#c41e0a)}
@@ -536,14 +534,14 @@ footer{background:var(--plum-deep);padding:70px 0 40px;border-top:1px solid var(
     </div>
     <div class="mp-marquee" data-reveal style="--d:.15s">
       <div class="mp-track">
-        <span class="mp-chip mp-wb"><span class="dot on"></span>Wildberries</span>
-        <span class="mp-chip mp-ozon"><span class="dot on"></span>OZON</span>
-        <span class="mp-chip mp-ym"><span class="dot on"></span>Яндекс Маркет</span>
-        <span class="mp-chip mp-ali"><span class="dot on"></span>AliExpress</span>
-        <span class="mp-chip mp-wb" aria-hidden="true"><span class="dot on"></span>Wildberries</span>
-        <span class="mp-chip mp-ozon" aria-hidden="true"><span class="dot on"></span>OZON</span>
-        <span class="mp-chip mp-ym" aria-hidden="true"><span class="dot on"></span>Яндекс Маркет</span>
-        <span class="mp-chip mp-ali" aria-hidden="true"><span class="dot on"></span>AliExpress</span>
+        <span class="mp-chip mp-wb">Wildberries</span>
+        <span class="mp-chip mp-ozon">OZON</span>
+        <span class="mp-chip mp-ym">Яндекс Маркет</span>
+        <span class="mp-chip mp-ali">AliExpress</span>
+        <span class="mp-chip mp-wb" aria-hidden="true">Wildberries</span>
+        <span class="mp-chip mp-ozon" aria-hidden="true">OZON</span>
+        <span class="mp-chip mp-ym" aria-hidden="true">Яндекс Маркет</span>
+        <span class="mp-chip mp-ali" aria-hidden="true">AliExpress</span>
       </div>
     </div>
   </div>
