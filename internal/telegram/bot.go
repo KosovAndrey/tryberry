@@ -195,6 +195,12 @@ func (b *Bot) handleMessage(ctx context.Context, msg *tgbotapi.Message) {
 		return
 	}
 
+	// Гейт согласия на обработку ПД (152-ФЗ): до подтверждения не обрабатываем ввод.
+	if needsPDConsent(user) {
+		b.sendPDConsent(msg.Chat.ID, 0)
+		return
+	}
+
 	// 1a0. Ждём ли email для чека 54-ФЗ перед оплатой?
 	if fsm, ok := b.getEmailFSM(ctx, msg.From.ID); ok {
 		b.handleEmailInput(ctx, msg.Chat.ID, msg.From.ID, text, user, fsm)
@@ -298,6 +304,16 @@ func (b *Bot) handleCommand(ctx context.Context, msg *tgbotapi.Message) {
 		return
 	}
 
+	// Гейт согласия на обработку ПД (152-ФЗ): до подтверждения не обрабатываем
+	// команды. Deep-link (?start=ref_…|promo_…) запоминаем — применим после согласия.
+	if needsPDConsent(user) {
+		if msg.Command() == "start" {
+			b.stashPendingStart(ctx, msg.From.ID, strings.TrimSpace(msg.CommandArguments()))
+		}
+		b.sendPDConsent(msg.Chat.ID, 0)
+		return
+	}
+
 	switch msg.Command() {
 	case "start":
 		// Deep-link payload: t.me/bot?start=promo_XXX | ref_XXX.
@@ -387,6 +403,16 @@ func (b *Bot) handleCallback(ctx context.Context, cb *tgbotapi.CallbackQuery) {
 
 	chatID := cb.Message.Chat.ID
 	messageID := cb.Message.MessageID
+
+	// Согласие на обработку ПД (152-ФЗ): приём согласия и гейт остальных действий.
+	if cb.Data == "consent:accept" {
+		b.handlePDConsentAccept(ctx, cb)
+		return
+	}
+	if u, err := b.userRepo.GetByTelegramID(ctx, cb.From.ID); err == nil && needsPDConsent(u) {
+		b.sendPDConsent(chatID, messageID)
+		return
+	}
 
 	switch {
 	case cb.Data == "menu:main":
