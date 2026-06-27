@@ -10,6 +10,10 @@ type User struct {
 	Username   string
 	CreatedAt  time.Time
 
+	// Согласие на обработку ПД (152-ФЗ): когда подтверждено в боте.
+	// nil = ещё не дано → бот показывает экран согласия и не пускает дальше.
+	PDConsentAt *time.Time
+
 	// VK-идентичность (vk_id = peer_id для отправки в ЛС VK)
 	VKID          *int64
 	NotifyChannel string // auto | tg | vk | both

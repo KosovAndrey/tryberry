@@ -67,6 +67,14 @@ func (r *UserRepo) MarkDigestSent(ctx context.Context, userID int64, at time.Tim
 	return err
 }
 
+// MarkPDConsent фиксирует согласие на обработку ПД (152-ФЗ). Guard `IS NULL` —
+// чтобы повторное нажатие «Принимаю» не сдвигало исходную дату согласия.
+func (r *UserRepo) MarkPDConsent(ctx context.Context, userID int64, at time.Time) error {
+	_, err := r.db.Exec(ctx,
+		`UPDATE users SET pd_consent_at = $2 WHERE id = $1 AND pd_consent_at IS NULL`, userID, at)
+	return err
+}
+
 func (r *UserRepo) Upsert(ctx context.Context, telegramID int64, username string) (*domain.User, error) {
 	const q = `
 		INSERT INTO users (telegram_id, username)
@@ -74,13 +82,13 @@ func (r *UserRepo) Upsert(ctx context.Context, telegramID int64, username string
 		ON CONFLICT (telegram_id) DO UPDATE
 			SET username = EXCLUDED.username
 		RETURNING id, telegram_id, username, created_at, plan, plan_expires_at, trial_used, referred_by,
-		          vk_id, notify_channel`
+		          vk_id, notify_channel, pd_consent_at`
 
 	u := &domain.User{}
 	err := withSpan(ctx, "upsert_user", func(ctx context.Context) error {
 		return r.db.QueryRow(ctx, q, telegramID, username).
 			Scan(&u.ID, &u.TelegramID, &u.Username, &u.CreatedAt, &u.Plan, &u.PlanExpiresAt, &u.TrialUsed, &u.ReferredBy,
-				&u.VKID, &u.NotifyChannel)
+				&u.VKID, &u.NotifyChannel, &u.PDConsentAt)
 	})
 	if err != nil {
 		return nil, err
@@ -91,13 +99,13 @@ func (r *UserRepo) Upsert(ctx context.Context, telegramID int64, username string
 func (r *UserRepo) GetByTelegramID(ctx context.Context, telegramID int64) (*domain.User, error) {
 	const q = `
 		SELECT id, telegram_id, username, created_at, plan, plan_expires_at, trial_used, referred_by,
-		       vk_id, notify_channel
+		       vk_id, notify_channel, pd_consent_at
 		FROM users WHERE telegram_id = $1`
 
 	u := &domain.User{}
 	err := r.db.QueryRow(ctx, q, telegramID).
 		Scan(&u.ID, &u.TelegramID, &u.Username, &u.CreatedAt, &u.Plan, &u.PlanExpiresAt, &u.TrialUsed, &u.ReferredBy,
-			&u.VKID, &u.NotifyChannel)
+			&u.VKID, &u.NotifyChannel, &u.PDConsentAt)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, domain.ErrNotFound
 	}
