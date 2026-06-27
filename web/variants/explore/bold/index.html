@@ -1,0 +1,250 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<meta name="robots" content="noindex, nofollow">
+<title>TryBerry — сдери стикер. Под ним обычная цена</title>
+<meta name="description" content="TryBerry помнит историю цен на маркетплейсах и показывает, под каким «−40%» прячется обычная цена. Честный вердикт по каждой скидке в Telegram.">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Manrope:wght@500;600;700;800&family=JetBrains+Mono:wght@500;700;800&display=swap" rel="stylesheet">
+<style>
+:root{
+  --paper:#fffcf2;--ink:#121212;--lime:#c7f032;--red:#ff4438;--blue:#2b59ff;
+  --d:'Manrope',system-ui,sans-serif;--m:'JetBrains Mono',ui-monospace,monospace;
+  --bd:2.5px solid var(--ink);--sh:6px 6px 0 var(--ink);--maxw:1140px;
+}
+*{margin:0;padding:0;box-sizing:border-box}
+html{-webkit-text-size-adjust:100%}
+body{font-family:var(--d);background:var(--paper);color:var(--ink);font-weight:500;line-height:1.55;-webkit-font-smoothing:antialiased;overflow-x:hidden}
+a{color:inherit;text-decoration:none}
+svg{display:block}
+::selection{background:var(--lime)}
+.wrap{max-width:var(--maxw);margin:0 auto;padding:0 clamp(18px,5vw,38px)}
+.mono{font-family:var(--m)}
+.kick{display:inline-block;font-family:var(--m);font-weight:700;font-size:.72rem;letter-spacing:.06em;text-transform:uppercase;background:var(--ink);color:var(--paper);padding:5px 10px}
+
+/* NAV */
+.nav{position:sticky;top:0;z-index:40;background:var(--paper);border-bottom:var(--bd)}
+.nav-in{max-width:var(--maxw);margin:0 auto;padding:12px clamp(18px,5vw,38px);display:flex;align-items:center;justify-content:space-between;gap:16px}
+.brand{display:flex;align-items:center;gap:9px;font-weight:800;font-size:1.2rem;letter-spacing:-.02em}
+.brand .mk{width:30px;height:30px;border:var(--bd);background:var(--lime);display:grid;place-items:center;font-family:var(--m);font-weight:800;font-size:1rem}
+.nav-links{display:flex;align-items:center;gap:8px}
+.nav-links a.pl{display:none;font-family:var(--m);font-size:.82rem;font-weight:700;padding:8px 10px}
+@media(min-width:820px){.nav-links a.pl{display:inline-block}}
+.nbtn{font-family:var(--m);font-weight:800;font-size:.82rem;text-transform:uppercase;letter-spacing:.04em;padding:10px 16px;border:var(--bd);background:var(--lime);box-shadow:3px 3px 0 var(--ink);transition:transform .12s,box-shadow .12s}
+.nbtn:active{transform:translate(3px,3px);box-shadow:none}
+
+/* HERO */
+.hero{padding:clamp(40px,6vw,72px) 0 clamp(34px,5vw,56px)}
+.hero-grid{display:grid;grid-template-columns:1fr;gap:clamp(34px,4vw,48px);align-items:center}
+@media(min-width:940px){.hero-grid{grid-template-columns:1.05fr .95fr}}
+.h1{font-size:clamp(2.6rem,7vw,5.2rem);font-weight:800;line-height:.95;letter-spacing:-.04em;margin:18px 0 0}
+.h1 mark{background:var(--lime);padding:0 .08em}
+.h1 .strike{color:var(--red);position:relative;white-space:nowrap}
+.h1 .strike::after{content:"";position:absolute;left:-2%;right:-2%;top:54%;height:5px;background:var(--red);transform:rotate(-3deg)}
+.lead{margin-top:22px;font-size:clamp(1.05rem,1.5vw,1.25rem);font-weight:500;max-width:42ch}
+.cta{display:flex;flex-wrap:wrap;gap:14px;margin-top:30px}
+.btn{font-family:var(--m);font-weight:800;font-size:.92rem;text-transform:uppercase;letter-spacing:.03em;padding:15px 24px;border:var(--bd);display:inline-flex;align-items:center;gap:9px;box-shadow:var(--sh);transition:transform .12s,box-shadow .12s}
+.btn:active{transform:translate(6px,6px);box-shadow:none}
+.btn.lime{background:var(--lime)}
+.btn.wht{background:var(--paper)}
+.tags{margin-top:24px;display:flex;flex-wrap:wrap;gap:8px}
+.tags span{font-family:var(--m);font-size:.72rem;font-weight:700;border:var(--bd);padding:6px 10px;background:var(--paper)}
+
+/* signature: price tag with peelable sticker */
+.tagwrap{position:relative;display:flex;justify-content:center;padding:10px}
+.pricetag{position:relative;width:min(380px,86vw);background:var(--paper);border:var(--bd);box-shadow:10px 10px 0 var(--ink);padding:26px 24px 22px;transform:rotate(-1.5deg)}
+.pricetag .hole{position:absolute;top:16px;left:20px;width:20px;height:20px;border:var(--bd);border-radius:50%;background:var(--paper)}
+.pricetag .pname{font-family:var(--m);font-weight:700;font-size:.8rem;text-transform:uppercase;letter-spacing:.04em;margin:6px 0 18px;padding-left:34px}
+.pricetag .row{display:flex;align-items:baseline;gap:12px}
+.pricetag .was{font-family:var(--m);font-weight:700;font-size:1.1rem;color:#9a958a;text-decoration:line-through}
+.pricetag .now{font-weight:800;font-size:2.9rem;letter-spacing:-.03em;line-height:1}
+.pricetag .truth{margin-top:16px;border-top:var(--bd);padding-top:14px;font-family:var(--m);font-size:.8rem;font-weight:700}
+.pricetag .truth b{background:var(--lime);padding:1px 5px}
+.sticker{position:absolute;top:-26px;right:-22px;width:118px;height:118px;border-radius:50%;background:var(--red);color:#fff;border:var(--bd);box-shadow:4px 4px 0 var(--ink);display:grid;place-items:center;text-align:center;transform:rotate(11deg);transition:transform .35s cubic-bezier(.2,.8,.2,1)}
+.sticker b{font-weight:800;font-size:1.85rem;line-height:.9;letter-spacing:-.03em}
+.sticker small{font-family:var(--m);font-size:.6rem;font-weight:800;text-transform:uppercase;letter-spacing:.08em;display:block;margin-top:3px}
+.pricetag:hover .sticker{transform:rotate(11deg) translate(10px,-10px) scale(1.04)}
+.peelhint{position:absolute;left:50%;bottom:-30px;transform:translateX(-50%);font-family:var(--m);font-size:.72rem;font-weight:700;color:#7a766c;white-space:nowrap}
+
+/* SECTION */
+.sec{padding:clamp(52px,7vw,92px) 0;border-top:var(--bd)}
+.sec.lime{background:var(--lime)}
+.sec.ink{background:var(--ink);color:var(--paper)}
+.shead{margin-bottom:clamp(30px,4vw,48px)}
+.shead h2{font-size:clamp(1.9rem,4.4vw,3.2rem);font-weight:800;letter-spacing:-.03em;line-height:1;max-width:20ch}
+.shead p{margin-top:14px;font-size:1.05rem;max-width:46ch}
+
+/* strategy blocks */
+.blocks{display:grid;grid-template-columns:1fr;gap:18px}
+@media(min-width:720px){.blocks{grid-template-columns:repeat(3,1fr)}}
+.blk{border:var(--bd);background:var(--paper);box-shadow:var(--sh);padding:22px 20px 24px;color:var(--ink)}
+.blk .n{font-family:var(--m);font-weight:800;font-size:.78rem;background:var(--ink);color:var(--paper);display:inline-block;padding:4px 8px}
+.blk h3{font-weight:800;font-size:1.3rem;letter-spacing:-.02em;margin:14px 0 8px}
+.blk p{font-size:.95rem}
+.blk .val{margin-top:16px;font-family:var(--m);font-weight:800;font-size:1.15rem;border-top:var(--bd);padding-top:12px}
+
+/* how steps inline */
+.how{display:grid;grid-template-columns:1fr;gap:0;border:var(--bd);box-shadow:var(--sh);background:var(--paper);color:var(--ink)}
+@media(min-width:820px){.how{grid-template-columns:repeat(3,1fr)}}
+.hstep{padding:24px 22px;border-bottom:var(--bd)}
+@media(min-width:820px){.hstep{border-bottom:none;border-right:var(--bd)}.hstep:last-child{border-right:none}}
+.hstep .hn{font-family:var(--m);font-weight:800;font-size:2.2rem;color:var(--red)}
+.hstep h3{font-weight:800;font-size:1.2rem;margin:10px 0 6px;letter-spacing:-.01em}
+.hstep p{font-size:.94rem}
+
+/* plans */
+.plans{display:grid;grid-template-columns:1fr;gap:16px}
+@media(min-width:560px){.plans{grid-template-columns:1fr 1fr}}
+@media(min-width:920px){.plans{grid-template-columns:repeat(4,1fr)}}
+.pl{border:var(--bd);background:var(--paper);color:var(--ink);box-shadow:var(--sh);padding:22px 20px;display:flex;flex-direction:column}
+.pl.hot{background:var(--lime)}
+.pl h3{font-weight:800;font-size:1.2rem}
+.pl .pr{font-family:var(--m);font-weight:800;font-size:1.8rem;margin:10px 0 2px;letter-spacing:-.02em}
+.pl .pr small{font-size:.66rem;font-weight:700;color:#7a766c}
+.pl .pd{font-size:.84rem;min-height:36px;margin-bottom:8px}
+.pl ul{list-style:none;margin-top:auto;padding-top:14px;border-top:var(--bd);display:flex;flex-direction:column;gap:7px;font-size:.85rem;font-weight:600}
+.pl li::before{content:"▸ ";font-family:var(--m);font-weight:800}
+.pnote{margin-top:20px;font-family:var(--m);font-size:.84rem;font-weight:600}
+
+/* faq */
+.faq{display:grid;gap:14px;max-width:840px}
+.qa{border:var(--bd);background:var(--paper);color:var(--ink);box-shadow:var(--sh)}
+.q{width:100%;text-align:left;background:none;border:0;cursor:pointer;padding:18px 50px 18px 20px;font-family:var(--d);font-weight:800;font-size:1.05rem;position:relative;letter-spacing:-.01em}
+.q::after{content:"+";font-family:var(--m);font-weight:800;position:absolute;right:18px;top:16px;font-size:1.4rem}
+.qa.open .q::after{content:"\2013"}
+.a{max-height:0;overflow:hidden;transition:max-height .3s ease}
+.a-in{padding:0 20px 20px;font-size:.95rem}
+
+/* footer */
+.foot{border-top:var(--bd);padding:clamp(40px,5vw,64px) 0 36px}
+.fgrid{display:grid;grid-template-columns:1fr;gap:26px}
+@media(min-width:720px){.fgrid{grid-template-columns:1.5fr 1fr 1fr}}
+.foot p{font-size:.92rem;max-width:34ch;margin-top:12px}
+.foot h4{font-family:var(--m);font-weight:800;font-size:.74rem;text-transform:uppercase;letter-spacing:.06em;margin-bottom:12px}
+.foot a.fl{display:block;font-weight:600;font-size:.94rem;margin-bottom:8px}
+.foot a.fl:hover{background:var(--lime)}
+.legal{margin-top:34px;border-top:var(--bd);padding-top:18px;font-family:var(--m);font-size:.74rem;font-weight:600;line-height:1.8}
+
+[data-rv]{opacity:0;transform:translateY(16px);transition:opacity .5s ease,transform .5s ease}
+[data-rv].in{opacity:1;transform:none}
+@media(prefers-reduced-motion:reduce){*{transition-duration:.01s!important}[data-rv]{opacity:1;transform:none}.sticker{transition:none}}
+</style>
+</head>
+<body id="top">
+
+<header class="nav">
+  <div class="nav-in">
+    <a href="#top" class="brand"><span class="mk">B</span>TryBerry</a>
+    <nav class="nav-links">
+      <a class="pl" href="#how">Как работает</a>
+      <a class="pl" href="#plans">Тарифы</a>
+      <a class="nbtn" href="https://t.me/TryBerryBot" target="_blank" rel="noopener">Открыть бота</a>
+    </nav>
+  </div>
+</header>
+
+<section class="hero">
+  <div class="wrap hero-grid">
+    <div>
+      <span class="kick" data-rv>История цены · маркетплейсы</span>
+      <h1 class="h1" data-rv>Сдери стикер.<br>Под ним — <span class="strike">обычная цена.</span></h1>
+      <p class="lead" data-rv>«<mark>−40&nbsp;%</mark>» на витрине звучит вкусно. TryBerry помнит, сколько товар стоил весь месяц, и говорит прямо: это распродажа — или просто переписали ценник.</p>
+      <div class="cta" data-rv>
+        <a class="btn lime" href="https://t.me/TryBerryBot" target="_blank" rel="noopener">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor"><path d="M21.9 4.3 18.7 19.4c-.2 1-.9 1.3-1.8.8l-4.9-3.6-2.4 2.3c-.3.3-.5.5-1 .5l.3-4.9 9-8.1c.4-.3-.1-.5-.6-.2L6.4 13.3l-4.8-1.5c-1-.3-1-1 .2-1.5L20.6 3c.9-.3 1.6.2 1.3 1.3z"/></svg>
+          Проверить скидку
+        </a>
+        <a class="btn wht" href="#plans">Тарифы</a>
+      </div>
+      <div class="tags" data-rv>
+        <span>БЕЗ ЛОГИНА WB</span><span>FREE НАВСЕГДА</span><span>ЧЕК ПО НПД</span>
+      </div>
+    </div>
+
+    <div class="tagwrap" data-rv>
+      <div class="pricetag">
+        <span class="hole"></span>
+        <div class="pname">Наушники TWS · чёрные</div>
+        <div class="row">
+          <span class="was">2 790 ₽</span>
+          <span class="now">1 990 ₽</span>
+        </div>
+        <div class="truth">Правда: <b>1 990 ₽</b> — ровно столько весь месяц.<br>Минимум за 90 дней был <b>1 750 ₽</b>.</div>
+        <div class="sticker"><div><b>−40%</b><small>скидка?</small></div></div>
+      </div>
+      <span class="peelhint">↑ наведи на стикер</span>
+    </div>
+  </div>
+</section>
+
+<section class="sec lime" id="strategies">
+  <div class="wrap">
+    <div class="shead" data-rv>
+      <span class="kick">Стратегии</span>
+      <h2>Ты решаешь, что считать выгодным</h2>
+    </div>
+    <div class="blocks">
+      <div class="blk" data-rv><span class="n">01</span><h3>Порог цены</h3><p>Назови сумму. Молчим, пока дороже — пишем, когда цена дойдёт до планки.</p><div class="val">≤ 1 800 ₽</div></div>
+      <div class="blk" data-rv><span class="n">02</span><h3>Любое снижение</h3><p>Без цифр. Сигнал при первом падении относительно цены на момент подписки.</p><div class="val">−1 ₽ и ниже</div></div>
+      <div class="blk" data-rv><span class="n">03</span><h3>Скидка от %</h3><p>Только крупные распродажи. Мелкие колебания не трогаем.</p><div class="val">−30 %</div></div>
+    </div>
+  </div>
+</section>
+
+<section class="sec" id="how">
+  <div class="wrap">
+    <div class="shead" data-rv><span class="kick">Как работает</span><h2>Одна ссылка — и дальше тихо</h2><p>Без логина маркетплейса и доступа к аккаунту. Только публичная цена по ссылке.</p></div>
+    <div class="how">
+      <div class="hstep" data-rv><div class="hn">1</div><h3>Кидаешь ссылку</h3><p>На товар или на целую выдачу. Бот запоминает цену.</p></div>
+      <div class="hstep" data-rv><div class="hn">2</div><h3>Ведём историю</h3><p>Проверяем по расписанию тарифа — от 1 до 60 минут — и копим, с чем сравнивать.</p></div>
+      <div class="hstep" data-rv><div class="hn">3</div><h3>Пишем, когда честно</h3><p>Сигнал в Telegram только если реально подешевело по твоей стратегии.</p></div>
+    </div>
+  </div>
+</section>
+
+<section class="sec ink" id="plans">
+  <div class="wrap">
+    <div class="shead" data-rv><span class="kick" style="background:var(--lime);color:var(--ink)">Тарифы</span><h2>Начни бесплатно</h2><p style="color:#d8d8d0">Free — навсегда и без карты. «Поиск по ссылке» — 3 дня по триалу в один клик.</p></div>
+    <div class="plans">
+      <div class="pl" data-rv><h3>Free</h3><div class="pr">0 ₽<small> / навсегда</small></div><div class="pd">Старт и слежка за избранным.</div><ul><li>5 подписок</li><li>раз в 60 мин</li><li>3 стратегии + баллы</li></ul></div>
+      <div class="pl" data-rv><h3>Триал</h3><div class="pr">0 ₽<small> / 3 дня</small></div><div class="pd">Полный доступ без карты.</div><ul><li>100 подписок</li><li>10 поиск-подписок</li><li>раз в 15 мин</li></ul></div>
+      <div class="pl" data-rv><h3>Lite</h3><div class="pr">199 ₽<small> / мес</small></div><div class="pd">Для личных покупок.</div><ul><li>20 подписок</li><li>3 поиск-подписки</li><li>раз в 30 мин</li></ul></div>
+      <div class="pl hot" data-rv><h3>Pro 🔥</h3><div class="pr">499 ₽<small> / мес</small></div><div class="pd">Максимум подписок и скорости.</div><ul><li>100 подписок</li><li>10 поиск-подписок</li><li>раз в 15 мин</li></ul></div>
+    </div>
+    <p class="pnote" data-rv style="color:#d8d8d0">Реселлерам — проверка раз в минуту (от 990 ₽/мес). Оплата в боте через Робокассу, картой или СБП.</p>
+  </div>
+</section>
+
+<section class="sec lime" id="faq">
+  <div class="wrap">
+    <div class="shead" data-rv><span class="kick">Вопросы</span><h2>Коротко о главном</h2></div>
+    <div class="faq">
+      <div class="qa" data-rv><button class="q">Нужно давать логин от маркетплейса?</button><div class="a"><div class="a-in">Нет. Работаем только с публичной ценой по ссылке, аккаунт не трогаем.</div></div></div>
+      <div class="qa" data-rv><button class="q">Это правда бесплатно?</button><div class="a"><div class="a-in">Да. Free (5 подписок) — навсегда и без карты. «Поиск по ссылке» — 3 дня по триалу командой /trial.</div></div></div>
+      <div class="qa" data-rv><button class="q">Какие маркетплейсы?</button><div class="a"><div class="a-in">Wildberries, Ozon, Яндекс Маркет и AliExpress.</div></div></div>
+      <div class="qa" data-rv><button class="q">Что за «учёт баллов за отзыв»?</button><div class="a"><div class="a-in">Вычитаем баллы за отзыв и показываем эффективную цену — реальную, а не витринную.</div></div></div>
+    </div>
+  </div>
+</section>
+
+<footer class="foot">
+  <div class="wrap">
+    <div class="fgrid">
+      <div><a href="#top" class="brand"><span class="mk">B</span>TryBerry</a><p>Бот, который помнит историю цен на маркетплейсах и отличает настоящую скидку от накрученной.</p></div>
+      <div><h4>Продукт</h4><a class="fl" href="#how">Как работает</a><a class="fl" href="#strategies">Стратегии</a><a class="fl" href="#plans">Тарифы</a></div>
+      <div><h4>Связаться</h4><a class="fl" href="https://t.me/TryBerryBot" target="_blank" rel="noopener">@TryBerryBot</a><a class="fl" href="https://t.me/kosov_andrey" target="_blank" rel="noopener">@kosov_andrey</a><a class="fl" href="mailto:contact@kosovandrey.ru">contact@kosovandrey.ru</a></div>
+    </div>
+    <div class="legal">© 2026 TryBerry · Самозанятый Косов Андрей Александрович, ИНН 132608943050 · плательщик НПД. Не является частью или сервисом перечисленных маркетплейсов.</div>
+  </div>
+</footer>
+
+<script>
+const io=new IntersectionObserver((es)=>es.forEach(e=>{if(e.isIntersecting){e.target.classList.add('in');io.unobserve(e.target)}}),{threshold:.12});
+document.querySelectorAll('[data-rv]').forEach(el=>io.observe(el));
+document.querySelectorAll('.qa').forEach(item=>{const q=item.querySelector('.q'),a=item.querySelector('.a');q.addEventListener('click',()=>{const o=item.classList.contains('open');document.querySelectorAll('.qa.open').forEach(x=>{x.classList.remove('open');x.querySelector('.a').style.maxHeight=null});if(!o){item.classList.add('open');a.style.maxHeight=a.scrollHeight+'px'}})});
+</script>
+</body>
+</html>
