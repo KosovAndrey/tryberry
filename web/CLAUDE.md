@@ -6,7 +6,8 @@
 
 ## Что внутри
 - `index.html` — лендинг: hero, фичи, pinned-showcase стратегий, тарифы,
-  оплата/возврат, FAQ, контакты, модалки `Политика` и `Оферта` (deep-link `#privacy` / `#offer`).
+  оплата/возврат, FAQ, контакты, модалки `Политика`, `Согласие на обработку ПД` и `Оферта`
+  (deep-link `#privacy` / `#consent` / `#offer`; `openLegal` закрывает соседние модалки).
 - `spasibo/index.html` — страница «спасибо за покупку» (return-URL Робокассы).
 - `fonts/` — **self-hosted** WOFF2 (latin+cyrillic, 22 файла) + `fonts.css`. Используют
   все страницы сайта И `/p/` от `cmd/api` (общий `/fonts/fonts.css`).
