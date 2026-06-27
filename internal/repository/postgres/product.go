@@ -167,11 +167,25 @@ func (r *ProductRepo) ListPublicForSitemap(ctx context.Context, limit int) ([]Si
 // UpdateScrapedData обновляет имя/картинку/наличие товара и возвращает ПРЕДЫДУЩЕЕ
 // значение in_stock — notifier по переходу wasInStock(false)→inStock(true) шлёт
 // уведомление «снова в наличии» (триггер back_in_stock).
+//
+// Имя и картинку НЕ затираем заглушкой: если скрейп нашёл цену, но не вытащил
+// заголовок/фото (вёрстка маркетплейса плавает — web/mobile, частичный ответ),
+// scraper подставляет заглушку «Товар <маркетплейс>» / пустую картинку. Раньше
+// она безусловно перезаписывала уже сохранённое нормальное имя — товар навсегда
+// превращался в «Товар Ozon». Теперь нормальное имя сохраняем, заглушку пишем
+// только если хорошего имени ещё нет. Все заглушки имеют форму 'Товар <…>'.
 func (r *ProductRepo) UpdateScrapedData(ctx context.Context, id int64, name, imageURL string, inStock bool) (wasInStock bool, err error) {
 	const q = `
 		WITH prev AS (SELECT in_stock FROM products WHERE id = $1)
 		UPDATE products
-		SET name = $2, image_url = $3, in_stock = $4, updated_at = NOW()
+		SET name = CASE
+		             WHEN $2 LIKE 'Товар %' AND name <> '' AND name NOT LIKE 'Товар %'
+		               THEN name
+		             ELSE $2
+		           END,
+		    image_url = COALESCE(NULLIF($3, ''), image_url),
+		    in_stock  = $4,
+		    updated_at = NOW()
 		WHERE id = $1
 		RETURNING (SELECT in_stock FROM prev)`
 
