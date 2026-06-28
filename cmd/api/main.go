@@ -5,6 +5,7 @@ import (
 	"crypto/subtle"
 	"encoding/json"
 	"fmt"
+	"io"
 	"log/slog"
 	"math"
 	"net/http"
@@ -25,6 +26,7 @@ import (
 	"gitlab.com/KosovAndrey/tryberrybot/internal/db"
 	"gitlab.com/KosovAndrey/tryberrybot/internal/health"
 	"gitlab.com/KosovAndrey/tryberrybot/internal/kafka"
+	"gitlab.com/KosovAndrey/tryberrybot/internal/max"
 	"gitlab.com/KosovAndrey/tryberrybot/internal/metrics"
 	"gitlab.com/KosovAndrey/tryberrybot/internal/payment"
 	"gitlab.com/KosovAndrey/tryberrybot/internal/payment/robokassa"
@@ -239,6 +241,64 @@ func run(log *slog.Logger) error {
 			otelhttp.NewHandler(vkHandler, "vk_callback"),
 		))
 		log.Info("vk callback endpoint enabled")
+	}
+
+	// ── MAX webhook ──────────────────────────────────────────────────────────
+	// Монтируется при заданных MAX_BOT_TOKEN + MAX_CALLBACK_SECRET. Поток:
+	// MAX POST /max/callback → проверка заголовка X-Max-Bot-Api-Secret → Kafka
+	// max-updates (ключ = user_id) → max-консьюмер в bot-worker. На старте
+	// подписываем webhook (MAX_WEBHOOK_URL), идемпотентно.
+	maxToken := getEnv("MAX_BOT_TOKEN", "")
+	maxSecret := getEnv("MAX_CALLBACK_SECRET", "")
+	if maxToken != "" && maxSecret != "" {
+		maxProducer := kafka.NewProducer(kafkaBrokers, "max-updates")
+		defer maxProducer.Close()
+
+		if webhookURL := getEnv("MAX_WEBHOOK_URL", ""); webhookURL != "" {
+			if mc, err := max.NewClient(maxToken); err != nil {
+				log.Warn("max: init client for subscribe", "err", err)
+			} else {
+				subCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
+				if err := mc.EnsureWebhook(subCtx, webhookURL, maxSecret); err != nil {
+					log.Warn("max: subscribe webhook", "url", webhookURL, "err", err)
+				} else {
+					log.Info("max webhook subscribed", "url", webhookURL)
+				}
+				cancel()
+			}
+		}
+
+		maxHandler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if r.Method != http.MethodPost {
+				w.WriteHeader(http.StatusMethodNotAllowed)
+				return
+			}
+			if subtle.ConstantTimeCompare([]byte(r.Header.Get("X-Max-Bot-Api-Secret")), []byte(maxSecret)) != 1 {
+				log.Warn("max callback secret mismatch", "remote", r.RemoteAddr)
+				w.WriteHeader(http.StatusUnauthorized)
+				return
+			}
+			body, err := io.ReadAll(io.LimitReader(r.Body, 1<<20))
+			if err != nil {
+				w.WriteHeader(http.StatusBadRequest)
+				return
+			}
+			// Ключ партиционирования — автор апдейта (порядок диалога сохраняется).
+			key := ""
+			if uid := max.UserIDFromRaw(body); uid != 0 {
+				key = strconv.FormatInt(uid, 10)
+			}
+			if err := maxProducer.Send(r.Context(), key, json.RawMessage(body)); err != nil {
+				log.Error("publish max update", "err", err)
+				w.WriteHeader(http.StatusInternalServerError) // MAX повторит доставку
+				return
+			}
+			w.WriteHeader(http.StatusOK)
+		})
+		mux.Handle("/max/callback", metrics.HTTPMiddleware("max_callback")(
+			otelhttp.NewHandler(maxHandler, "max_callback"),
+		))
+		log.Info("max callback endpoint enabled")
 	}
 
 	// ── Вебхук ЮKassa ────────────────────────────────────────────────────────

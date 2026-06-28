@@ -22,6 +22,7 @@ import (
 	"gitlab.com/KosovAndrey/tryberrybot/internal/db"
 	"gitlab.com/KosovAndrey/tryberrybot/internal/domain"
 	"gitlab.com/KosovAndrey/tryberrybot/internal/kafka"
+	"gitlab.com/KosovAndrey/tryberrybot/internal/max"
 	"gitlab.com/KosovAndrey/tryberrybot/internal/repository/postgres"
 	redisrepo "gitlab.com/KosovAndrey/tryberrybot/internal/repository/redis"
 	"gitlab.com/KosovAndrey/tryberrybot/internal/searchsub"
@@ -111,6 +112,14 @@ func run(log *slog.Logger) error {
 	if vkToken := os.Getenv("VK_GROUP_TOKEN"); vkToken != "" {
 		sender.vk = vk.NewClient(vkToken)
 		log.Info("vk delivery enabled")
+	}
+	if maxToken := os.Getenv("MAX_BOT_TOKEN"); maxToken != "" {
+		if mc, err := max.NewClient(maxToken); err != nil {
+			log.Error("max delivery init failed", "err", err)
+		} else {
+			sender.mx = mc
+			log.Info("max delivery enabled")
+		}
 	}
 
 	// ── Kafka ────────────────────────────────────────────────────────────────
