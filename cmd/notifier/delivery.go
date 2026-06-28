@@ -50,7 +50,7 @@ func (d *deliverer) targets(ctx context.Context, userID, telegramID int64) (send
 		return u.TelegramID != 0, 0
 	}
 	hasVK := u.VKID != nil
-	tg, vkOn := domain.ResolveNotifyTargets(u.NotifyChannel, u.TelegramID != 0, hasVK)
+	tg, vkOn, _ := domain.ResolveNotifyTargets(u.NotifyChannel, u.TelegramID != 0, hasVK, u.MaxID != nil)
 	if vkOn && hasVK {
 		vkPeer = *u.VKID
 	}

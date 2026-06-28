@@ -45,8 +45,12 @@ func NotifyChannelTitle(ch string) string {
 		return "Telegram"
 	case NotifyVK:
 		return "VK"
+	case NotifyMax:
+		return "MAX"
 	case NotifyBoth:
 		return "Telegram + VK"
+	case NotifyAll:
+		return "везде"
 	default:
 		return "Telegram" // auto у привязанных трактуем как TG (зарегался в TG)
 	}
