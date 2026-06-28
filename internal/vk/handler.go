@@ -475,10 +475,12 @@ func (b *Bot) handleLink(ctx context.Context, vkID int64, vkUser *domain.User, c
 		return
 	}
 	dir, tgUserID, err := b.linkCodes.Redeem(ctx, code)
-	if err != nil || dir != domain.LinkDirTG2VK {
+	// Код, выданный в TG (tg2vk) или MAX (max2vk) для предъявления здесь. В обоих
+	// случаях привязываем нашу VK-идентичность к аккаунту-эмитенту (tgUserID).
+	if err != nil || (dir != domain.LinkDirTG2VK && dir != domain.LinkDirMax2VK) {
 		// Неверный/истёкший код и чужое направление неразличимы для юзера.
 		b.send(ctx, vkID, "Код не подошёл 😕 Проверь, что скопировал его целиком, "+
-			"или получи новый в Telegram-боте: Профиль → Привязать VK (код живёт 15 минут).",
+			"или получи новый в Telegram/MAX-боте: «Привязать VK» (код живёт 15 минут).",
 			menuKeyboard(false))
 		return
 	}

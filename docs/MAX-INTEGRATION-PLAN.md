@@ -90,6 +90,26 @@ merge.go, email.go, checkout_promo.go. Тексты/кнопки берём из
 - config + docker-compose: `MAX_BOT_TOKEN`, `MAX_CALLBACK_SECRET`,
   `MAX_WEBHOOK_URL`, `MAX_ADMIN_IDS`.
 
+## Статус реализации (на ветке feat/max-messenger)
+
+Сделано и компилируется/проходит тесты:
+- БД (миграция 024), домен (каналы/направления/ResolveNotifyTargets), репозиторий
+  (Get/Upsert/Link/UnlinkMax), зависимость + клиент-обёртка.
+- Пакет `internal/max` — полный порт VK: трекинг, balk-track, поиск-подписки,
+  тарифы/подписки/оплата, промо/рефералка, email, слияние, админка.
+- Ingestor (api `/max/callback` + подписка на webhook), консьюмер (bot-worker,
+  топик `max-updates`), доставка (notifier), оплата (paymentNotifier в MAX).
+- Привязка: MAX выдаёт max2tg/max2vk; TG/VK редимят их (LinkTG/LinkVK по эмитенту).
+  MAX редимит tg2max/vk2max (LinkMax). Цикл каналов уведомлений на 3 идентичности.
+- docker-compose (api/bot-worker/notifier) + .env.example.
+
+Отложено (фаст-фоллоу, не блокирует запуск):
+- Реверс-инициация привязки: кнопки «Привязать MAX» в TG (`profile:linkmax`,
+  issue tg2max) и VK (cmdLinkMax, issue vk2max). Сейчас связать можно из MAX
+  (выдать код → предъявить в TG/VK) — это работает; из TG/VK инициировать пока нельзя.
+- Картинка товара в пуше MAX: используем превью ссылки (SendMessagePhoto шлёт текст,
+  ссылка разворачивается клиентом). Полноценный фото-аттач (upload по URL) — позже.
+
 ## Открытые вопросы / проверить на проде
 
 - Точный формат deep-link URL MAX (`https://max.ru/<bot>?start=...`?) — уточнить
