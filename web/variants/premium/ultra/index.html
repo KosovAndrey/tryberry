@@ -115,7 +115,7 @@ nav.scrolled{
   font-family:var(--font-body);font-weight:600;font-size:1rem;padding:15px 30px;border-radius:100px;
   background:linear-gradient(120deg,var(--berry-bright),var(--berry-deep));color:#fff;
   display:inline-flex;align-items:center;gap:10px;transition:transform .3s var(--ease),box-shadow .3s;
-  box-shadow:0 14px 40px rgba(232,51,108,.32);
+  box-shadow:0 14px 40px rgba(232,51,108,.32);border:0;cursor:pointer;
 }
 .btn-primary:hover{transform:translateY(-3px);box-shadow:0 20px 50px rgba(232,51,108,.45)}
 .btn-ghost{
@@ -125,6 +125,29 @@ nav.scrolled{
 .btn-ghost:hover{border-color:var(--berry);background:rgba(232,51,108,.08)}
 .hero-note{margin-top:22px;font-size:.86rem;color:var(--muted);display:flex;align-items:center;gap:8px}
 .hero-note b{color:var(--rose);font-weight:600}
+
+/* ---------- messenger picker (поповер «Начать бесплатно») ---------- */
+.mpick-overlay{position:fixed;inset:0;z-index:1500;display:flex;align-items:center;justify-content:center;padding:24px;
+  background:rgba(10,3,7,.62);backdrop-filter:blur(8px);-webkit-backdrop-filter:blur(8px);
+  opacity:0;visibility:hidden;transition:opacity .35s var(--ease),visibility .35s}
+.mpick-overlay.open{opacity:1;visibility:visible}
+.mpick{width:min(380px,100%);background:linear-gradient(170deg,#2a0c20,#160710);border:1px solid rgba(255,93,143,.18);
+  border-radius:26px;padding:32px 26px 26px;box-shadow:0 40px 100px rgba(0,0,0,.6),inset 0 1px 0 rgba(255,255,255,.05);
+  transform:translateY(16px) scale(.97);transition:transform .4s var(--ease)}
+.mpick-overlay.open .mpick{transform:none}
+.mpick h3{font-family:var(--font-display);font-weight:600;font-size:1.3rem;letter-spacing:-.01em;text-align:center;margin-bottom:6px}
+.mpick .mpick-sub{font-size:.88rem;color:var(--muted);text-align:center;margin-bottom:22px}
+.mpick-opts{display:flex;flex-direction:column;gap:11px}
+.mpick-opt{display:flex;align-items:center;justify-content:space-between;gap:12px;
+  font-family:var(--font-display);font-weight:500;font-size:1.02rem;color:var(--cream);
+  padding:15px 20px;border-radius:15px;border:1px solid rgba(255,93,143,.16);background:rgba(255,255,255,.03);
+  transition:transform .25s var(--ease),border-color .25s,background .25s}
+.mpick-opt:hover{transform:translateY(-2px);border-color:var(--berry);background:rgba(232,51,108,.1)}
+.mpick-opt .arr{color:var(--berry-bright);font-size:1.15rem;transition:transform .25s}
+.mpick-opt:hover .arr{transform:translateX(4px)}
+.mpick-close{display:block;margin:20px auto 0;background:none;border:0;color:var(--muted);
+  font-family:var(--font-body);font-size:.86rem;cursor:pointer;transition:color .25s}
+.mpick-close:hover{color:var(--cream)}
 
 /* phone mock */
 .phone{
@@ -187,7 +210,7 @@ section{position:relative}
 /* big statement / apple style */
 .statement{padding:clamp(110px,18vw,220px) 0;text-align:center}
 .statement h2{font-family:var(--font-display);font-weight:600;letter-spacing:-.03em;line-height:1.05;font-size:clamp(2.2rem,6vw,5rem);max-width:16ch;margin:0 auto}
-.statement h2 em{font-style:normal;background:linear-gradient(100deg,var(--berry-deep),var(--berry-bright) 35%,var(--rose) 50%,var(--berry-bright) 65%,var(--berry-deep));background-size:200% auto;-webkit-background-clip:text;background-clip:text;color:transparent;animation:shine 6s linear infinite}
+.statement h2 em{font-style:normal;color:var(--berry)}
 .statement p{margin:32px auto 0;max-width:46ch;font-size:clamp(1.05rem,1.6vw,1.3rem);color:var(--muted-light)}
 
 /* ---------- feature grid ---------- */
@@ -224,9 +247,10 @@ section{position:relative}
 .pin-card .sub{font-size:.86rem;color:var(--muted);margin-top:6px}
 .pin-meter{height:8px;border-radius:8px;background:rgba(255,255,255,.07);margin-top:18px;overflow:hidden}
 .pin-meter span{display:block;height:100%;border-radius:8px;background:linear-gradient(90deg,var(--berry-bright),var(--berry-deep))}
-.pin-progress{position:absolute;left:0;bottom:48px;width:100%;display:flex;gap:8px;justify-content:center;z-index:3}
-.pin-progress i{width:34px;height:3px;border-radius:3px;background:rgba(255,255,255,.18);transition:background .4s}
-.pin-progress i.on{background:var(--berry-bright)}
+.pin-progress{display:flex;gap:8px;justify-content:center}
+.pin-progress button{width:38px;height:5px;padding:0;border:0;border-radius:4px;background:rgba(255,255,255,.18);transition:background .35s,transform .2s;cursor:pointer}
+.pin-progress button:hover{background:rgba(255,255,255,.45);transform:scaleY(1.6)}
+.pin-progress button.on{background:var(--berry-bright)}
 
 /* ---------- plans ---------- */
 .plan-grid{display:grid;grid-template-columns:repeat(4,1fr);gap:16px;align-items:stretch}
@@ -398,20 +422,20 @@ footer{background:var(--plum-deep);padding:70px 0 40px;border-top:1px solid var(
 .hero::after{content:"";position:absolute;left:0;right:0;bottom:0;height:170px;z-index:1;pointer-events:none;
   background:linear-gradient(180deg,transparent,var(--ink))}
 
-/* ---------- pin scroll-cue (подсказка «листайте») ---------- */
-.pin-cue{position:absolute;left:0;right:0;bottom:12px;z-index:4;display:flex;flex-direction:column;align-items:center;gap:3px;pointer-events:none;transition:opacity .4s var(--ease)}
-.pin-cue .cue-count{font-family:var(--font-display);font-weight:700;font-size:.74rem;letter-spacing:.16em;color:var(--berry-bright)}
+/* ---------- pin foot: подсказка «листайте» + кликабельный прогресс + счётчик ---------- */
+.pin-foot{position:absolute;left:0;right:0;bottom:22px;z-index:4;display:flex;flex-direction:column;align-items:center;gap:11px}
+.pin-cue{display:flex;flex-direction:column;align-items:center;gap:4px;pointer-events:none;transition:opacity .35s var(--ease),visibility .35s}
 .pin-cue .cue-text{font-size:.68rem;letter-spacing:.03em;color:var(--muted)}
 .pin-cue .cue-chev{width:18px;height:18px;stroke:var(--berry-bright);stroke-width:2.4;fill:none;animation:cuebob 1.5s var(--ease) infinite}
 @keyframes cuebob{0%,100%{transform:translateY(-2px);opacity:.5}50%{transform:translateY(4px);opacity:1}}
-.pin-cue.done .cue-chev,.pin-cue.done .cue-text{opacity:0}
-@media(max-width:920px){.pin-progress{bottom:54px}}
+.pin-cue.done{opacity:0;visibility:hidden}
+.pin-count{font-family:var(--font-display);font-weight:700;font-size:.72rem;letter-spacing:.16em;color:var(--berry-bright)}
 
 @media(prefers-reduced-motion:reduce){
   *{animation-duration:.001s!important;transition-duration:.1s!important}
   [data-reveal]{opacity:1;transform:none}
   .hero h1 .kline > span{transform:none;animation:none}
-  .accent,.statement h2 em{animation:none}
+  .accent{animation:none}
   .mp-track{animation:none;flex-wrap:wrap;justify-content:center}
   html{scroll-behavior:auto}
 }
@@ -478,14 +502,11 @@ footer{background:var(--plum-deep);padding:70px 0 40px;border-top:1px solid var(
   <div class="hero-bg"><div class="glow g1"></div><div class="glow g2"></div></div>
   <div class="wrap">
     <div>
-      <span class="eyebrow" data-reveal>Честная цена · Wildberries · Ozon · Маркет · AliExpress</span>
-      <h1><span class="kline"><span style="--d:.08s">Скидка настоящая</span></span><span class="kline"><span style="--d:.22s">или <span class="accent">нарисованная?</span></span></span></h1>
-      <p class="lead" data-reveal style="--d:.15s">Перед «−40%» цену часто задирают. TryBerry помнит всю историю цены товара, отличает реальное снижение от накрутки — и пишет в Telegram, когда подешевело <b style="color:var(--rose);font-weight:600">по-честному</b>.</p>
+      <span class="eyebrow" data-reveal>Telegram · VK · MAX · бот для отслеживания цен</span>
+      <h1><span class="kline"><span style="--d:.08s">Проверять цены</span></span><span class="kline"><span style="--d:.22s"><span class="accent">вручную</span></span></span><span class="kline"><span style="--d:.36s">больше не нужно.</span></span></h1>
+      <p class="lead" data-reveal style="--d:.15s">Добавьте товар или поисковый запрос, а TryBerry автоматически <b style="color:var(--rose);font-weight:600">проследит</b> за изменением цены, <b style="color:var(--rose);font-weight:600">сообщит</b>, когда цена достигнет нужной отметки, и <b style="color:var(--rose);font-weight:600">покажет</b> динамику на графике.</p>
       <div class="hero-actions" data-reveal style="--d:.25s">
-        <a href="https://t.me/TryBerryBot" target="_blank" rel="noopener" class="btn-primary">
-          <svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor"><path d="M21.9 4.3 18.7 19.4c-.2 1-.9 1.3-1.8.8l-4.9-3.6-2.4 2.3c-.3.3-.5.5-1 .5l.3-4.9 9-8.1c.4-.3-.1-.5-.6-.2L6.4 13.3l-4.8-1.5c-1-.3-1-1 .2-1.5L20.6 3c.9-.3 1.6.2 1.3 1.3z"/></svg>
-          Запустить бота
-        </a>
+        <button type="button" class="btn-primary" id="heroStart">Начать бесплатно</button>
         <a href="#plans" class="btn-ghost">Посмотреть тарифы</a>
       </div>
       <div class="hero-note" data-reveal style="--d:.35s"><b>Бесплатный план</b> навсегда · триал 3 дня · без карты</div>
@@ -551,7 +572,7 @@ footer{background:var(--plum-deep);padding:70px 0 40px;border-top:1px solid var(
   <div class="wrap">
     <div class="sec-head">
       <span class="eyebrow" data-reveal>Что умеет</span>
-      <h2 data-reveal style="--d:.05s">Достаточно <span class="accent">одной ссылки</span>.</h2>
+      <h2 data-reveal style="--d:.05s">Достаточно одной ссылки.</h2>
       <p data-reveal style="--d:.1s">TryBerry не требует логина маркетплейса и не трогает ваш аккаунт. Он просто наблюдает за публичной ценой — за товаром или за целой выдачей поиска на Wildberries, Ozon, Яндекс Маркете и AliExpress.</p>
     </div>
     <div class="fgrid">
@@ -619,13 +640,15 @@ footer{background:var(--plum-deep);padding:70px 0 40px;border-top:1px solid var(
           </div>
         </div>
       </div>
-      <div class="pin-progress" id="pinProgress">
-        <i class="on"></i><i></i><i></i>
-      </div>
-      <div class="pin-cue" id="pinCue">
-        <span class="cue-count"><span id="pinCount">1</span> / 3</span>
-        <span class="cue-text">листайте — ниже ещё стратегии</span>
-        <svg class="cue-chev" viewBox="0 0 24 24"><path d="m6 9 6 6 6-6" stroke-linecap="round" stroke-linejoin="round"/></svg>
+      <div class="pin-foot">
+        <div class="pin-cue" id="pinCue">
+          <span class="cue-text">листайте — ниже ещё стратегии</span>
+          <svg class="cue-chev" viewBox="0 0 24 24"><path d="m6 9 6 6 6-6" stroke-linecap="round" stroke-linejoin="round"/></svg>
+        </div>
+        <div class="pin-progress" id="pinProgress">
+          <button class="on" data-go="0" aria-label="Стратегия 1"></button><button data-go="1" aria-label="Стратегия 2"></button><button data-go="2" aria-label="Стратегия 3"></button>
+        </div>
+        <span class="pin-count"><b id="pinCount">1</b> / 3</span>
       </div>
     </div>
   </div>
@@ -634,7 +657,7 @@ footer{background:var(--plum-deep);padding:70px 0 40px;border-top:1px solid var(
 <!-- STATEMENT 2 -->
 <section class="band plum">
   <div class="wrap statement" style="padding-top:clamp(70px,12vw,150px)">
-    <h2 data-reveal>Проверяет цены <em>круглосуточно.</em></h2>
+    <h2 data-reveal>Проверяет цены <span class="accent">круглосуточно</span>.</h2>
     <p data-reveal style="--d:.1s">Частота зависит от тарифа: от раза в час на Free до раза в минуту на тарифах для реселлеров. Вы спите, едете, работаете — TryBerry не отвлекается.</p>
   </div>
 </section>
@@ -738,7 +761,7 @@ footer{background:var(--plum-deep);padding:70px 0 40px;border-top:1px solid var(
   <div class="wrap">
     <div class="sec-head">
       <span class="eyebrow" data-reveal>Оплата и возврат</span>
-      <h2 data-reveal style="--d:.05s">Прозрачно: как платить и <span class="accent">как вернуть</span>.</h2>
+      <h2 data-reveal style="--d:.05s">Прозрачно: как платить и как вернуть.</h2>
       <p data-reveal style="--d:.1s">Платные тарифы оформляются прямо в Telegram-боте. Приём платежей обеспечивает сервис Робокасса.</p>
     </div>
     <div class="payinfo-grid">
@@ -767,7 +790,7 @@ footer{background:var(--plum-deep);padding:70px 0 40px;border-top:1px solid var(
   <div class="wrap">
     <div class="sec-head" style="text-align:center;margin-left:auto;margin-right:auto">
       <span class="eyebrow" data-reveal>Частые вопросы</span>
-      <h2 data-reveal style="--d:.05s">Коротко о <span class="accent">главном</span>.</h2>
+      <h2 data-reveal style="--d:.05s">Коротко о главном.</h2>
     </div>
     <div class="faq" id="faq">
       <div class="faq-item" data-reveal>
@@ -811,7 +834,7 @@ footer{background:var(--plum-deep);padding:70px 0 40px;border-top:1px solid var(
   <div class="wrap">
     <div class="sec-head">
       <span class="eyebrow" data-reveal>Контакты</span>
-      <h2 data-reveal style="--d:.05s">Мы рядом в <span class="accent">Telegram</span>.</h2>
+      <h2 data-reveal style="--d:.05s">Мы рядом в Telegram.</h2>
       <p data-reveal style="--d:.1s">Любой вопрос, идея или баг — пишите. По оплате, тарифам и возвратам отвечаем в Telegram и на почте.</p>
     </div>
     <div class="contact-grid">
@@ -872,6 +895,20 @@ footer{background:var(--plum-deep);padding:70px 0 40px;border-top:1px solid var(
     </div>
   </div>
 </footer>
+
+<!-- MESSENGER PICKER -->
+<div class="mpick-overlay" id="mpick">
+  <div class="mpick" role="dialog" aria-modal="true" aria-label="Выберите мессенджер">
+    <h3>Начать бесплатно</h3>
+    <div class="mpick-sub">Откройте TryBerry в удобном мессенджере</div>
+    <div class="mpick-opts">
+      <a class="mpick-opt" href="https://t.me/TryBerryBot" target="_blank" rel="noopener">Telegram<span class="arr">→</span></a>
+      <a class="mpick-opt" href="https://vk.com/tryberrybot" target="_blank" rel="noopener">ВКонтакте<span class="arr">→</span></a>
+      <a class="mpick-opt" href="https://max.ru/TryBerryBot" target="_blank" rel="noopener">MAX<span class="arr">→</span></a>
+    </div>
+    <button class="mpick-close" id="mpickClose" type="button">Закрыть</button>
+  </div>
+</div>
 
 <!-- LEGAL: PRIVACY -->
 <div class="legal" id="legal-privacy">
@@ -1019,7 +1056,7 @@ document.querySelectorAll('.faq-item').forEach(item=>{
   if(!track)return;
   const steps=[...document.querySelectorAll('.pin-step')];
   const cards=[...document.querySelectorAll('.pin-card')];
-  const dots=[...document.querySelectorAll('#pinProgress i')];
+  const dots=[...document.querySelectorAll('#pinProgress button')];
   const cue=document.getElementById('pinCue'),count=document.getElementById('pinCount');
   let cur=-1;
   function setStep(i){
@@ -1036,6 +1073,13 @@ document.querySelectorAll('.faq-item').forEach(item=>{
     let p=(-r.top)/total;p=Math.max(0,Math.min(.999,p));
     setStep(Math.floor(p*steps.length));
   }
+  /* кликабельный прогресс: скроллим к сегменту нужной стратегии */
+  dots.forEach((d,i)=>d.addEventListener('click',()=>{
+    const total=track.offsetHeight-window.innerHeight;
+    const trackTop=track.getBoundingClientRect().top+window.scrollY;
+    const p=(i+0.5)/steps.length;
+    window.scrollTo({top:trackTop+p*total,behavior:'smooth'});
+  }));
   setStep(0);
   window.addEventListener('scroll',update,{passive:true});
   window.addEventListener('resize',update);
@@ -1059,7 +1103,16 @@ function closeLegal(){
 document.querySelectorAll('[data-legal]').forEach(a=>{
   a.addEventListener('click',e=>{e.preventDefault();openLegal(a.getAttribute('data-legal'));});
 });
-document.addEventListener('keydown',e=>{if(e.key==='Escape'){closeLegal();setMenu(false);}});
+document.addEventListener('keydown',e=>{if(e.key==='Escape'){closeLegal();setMenu(false);closeMpick();}});
+
+/* messenger picker (поповер «Начать бесплатно») */
+const mpick=document.getElementById('mpick'),heroStart=document.getElementById('heroStart');
+function openMpick(){if(!mpick)return;mpick.classList.add('open');document.body.classList.add('no-scroll');}
+function closeMpick(){if(!mpick)return;mpick.classList.remove('open');document.body.classList.remove('no-scroll');}
+if(heroStart)heroStart.addEventListener('click',openMpick);
+const mpickClose=document.getElementById('mpickClose');
+if(mpickClose)mpickClose.addEventListener('click',closeMpick);
+if(mpick)mpick.addEventListener('click',e=>{if(e.target===mpick)closeMpick();});
 /* deep-link: прямой URL на документы (tryberry.ru/#offer, /#privacy) — для модерации
    платёжного провайдера и кнопки «назад». Открываем модалку по hash при загрузке/смене. */
 function syncLegalFromHash(){
