@@ -10,6 +10,7 @@ import (
 	"gitlab.com/KosovAndrey/tryberrybot/internal/domain"
 	"gitlab.com/KosovAndrey/tryberrybot/internal/kafka"
 	"gitlab.com/KosovAndrey/tryberrybot/internal/payment"
+	"gitlab.com/KosovAndrey/tryberrybot/internal/max"
 	"gitlab.com/KosovAndrey/tryberrybot/internal/payment/robokassa"
 	"gitlab.com/KosovAndrey/tryberrybot/internal/payment/yookassa"
 	"gitlab.com/KosovAndrey/tryberrybot/internal/repository/postgres"
@@ -29,6 +30,7 @@ func setupPayments(
 	brokers []string,
 	tgBot *telegram.Bot,
 	vkBot *vk.Bot, // nil, если VK не включён
+	maxBot *max.Bot, // nil, если MAX не включён
 	paymentRepo *postgres.PaymentRepo,
 	promoRepo *postgres.PromoRepo,
 	referralRepo *postgres.ReferralRepo,
@@ -49,8 +51,12 @@ func setupPayments(
 		vkBot.SetPayments(svc)
 		vkBot.SetBilling(billingRepo)
 	}
+	if maxBot != nil {
+		maxBot.SetPayments(svc)
+		maxBot.SetBilling(billingRepo)
+	}
 
-	notifier := &paymentNotifier{tg: tgBot, vk: vkBot, log: log}
+	notifier := &paymentNotifier{tg: tgBot, vk: vkBot, mx: maxBot, log: log}
 	applier := payment.NewApplier(paymentRepo, promoRepo, referralRepo, userRepo, billingRepo, discounts, notifier, log)
 
 	// Шедулер автосписаний — только если провайдер умеет рекуррент (Робокасса).
@@ -127,7 +133,8 @@ func setupProvider(log *slog.Logger) payment.Provider {
 // платформы юзера (TG и/или VK) — оплату подтвердить важнее, чем экономить.
 type paymentNotifier struct {
 	tg  *telegram.Bot
-	vk  *vk.Bot // nil, если VK не включён
+	vk  *vk.Bot  // nil, если VK не включён
+	mx  *max.Bot // nil, если MAX не включён
 	log *slog.Logger
 }
 
@@ -143,6 +150,14 @@ func (n *paymentNotifier) PaymentSucceeded(ctx context.Context, buyer *domain.Us
 	}
 	if buyer.VKID != nil && n.vk != nil {
 		n.vk.Notify(ctx, *buyer.VKID, fmt.Sprintf(
+			"✅ Оплата прошла!\n\n"+
+				"Тариф %s активен до %s.\n"+
+				"📦 До %d товаров · 🔎 до %d поиск-подписок.\n\n"+
+				"Спасибо, что поддерживаешь бота 🍓",
+			p.Title, expiresAt.Format(payDateLayout), p.MaxProduct, p.MaxSearch))
+	}
+	if buyer.MaxID != nil && n.mx != nil {
+		n.mx.Notify(ctx, *buyer.MaxID, fmt.Sprintf(
 			"✅ Оплата прошла!\n\n"+
 				"Тариф %s активен до %s.\n"+
 				"📦 До %d товаров · 🔎 до %d поиск-подписок.\n\n"+
@@ -170,6 +185,11 @@ func (n *paymentNotifier) ReferralPaid(ctx context.Context, referrer *domain.Use
 			"🎉 %s оплатил тариф — тебе +%d %s тарифа за приглашение!\n%s",
 			friend, days, domain.DaysWord(days), tail))
 	}
+	if referrer.MaxID != nil && n.mx != nil {
+		n.mx.Notify(ctx, *referrer.MaxID, fmt.Sprintf(
+			"🎉 %s оплатил тариф — тебе +%d %s тарифа за приглашение!\n%s",
+			friend, days, domain.DaysWord(days), tail))
+	}
 }
 
 func (n *paymentNotifier) SubscriptionChargeUpcoming(ctx context.Context, buyer *domain.User, plan string, amountKopecks int64, chargeAt time.Time) {
@@ -189,6 +209,12 @@ func (n *paymentNotifier) SubscriptionChargeUpcoming(ctx context.Context, buyer 
 				"Если продлевать не нужно — отмени автопродление в разделе «Мой тариф».",
 			p.Title, sum, date))
 	}
+	if buyer.MaxID != nil && n.mx != nil {
+		n.mx.Notify(ctx, *buyer.MaxID, fmt.Sprintf(
+			"🔁 Скоро продлим подписку\n\nТариф %s: %s ₽ спишутся автоматически %s.\n\n"+
+				"Если продлевать не нужно — отмени автопродление в разделе «Мой тариф».",
+			p.Title, sum, date))
+	}
 }
 
 func (n *paymentNotifier) SubscriptionPaymentFailed(ctx context.Context, buyer *domain.User, plan string, willRetry bool) {
@@ -204,6 +230,11 @@ func (n *paymentNotifier) SubscriptionPaymentFailed(ctx context.Context, buyer *
 	}
 	if buyer.VKID != nil && n.vk != nil {
 		n.vk.Notify(ctx, *buyer.VKID, fmt.Sprintf(
+			"⚠️ Не удалось продлить подписку\n\nТариф %s: автосписание не прошло.\n%s",
+			p.Title, tail))
+	}
+	if buyer.MaxID != nil && n.mx != nil {
+		n.mx.Notify(ctx, *buyer.MaxID, fmt.Sprintf(
 			"⚠️ Не удалось продлить подписку\n\nТариф %s: автосписание не прошло.\n%s",
 			p.Title, tail))
 	}

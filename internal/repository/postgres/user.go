@@ -99,13 +99,13 @@ func (r *UserRepo) Upsert(ctx context.Context, telegramID int64, username string
 func (r *UserRepo) GetByTelegramID(ctx context.Context, telegramID int64) (*domain.User, error) {
 	const q = `
 		SELECT id, telegram_id, username, created_at, plan, plan_expires_at, trial_used, referred_by,
-		       vk_id, notify_channel, pd_consent_at
+		       vk_id, max_id, notify_channel, pd_consent_at
 		FROM users WHERE telegram_id = $1`
 
 	u := &domain.User{}
 	err := r.db.QueryRow(ctx, q, telegramID).
 		Scan(&u.ID, &u.TelegramID, &u.Username, &u.CreatedAt, &u.Plan, &u.PlanExpiresAt, &u.TrialUsed, &u.ReferredBy,
-			&u.VKID, &u.NotifyChannel, &u.PDConsentAt)
+			&u.VKID, &u.MaxID, &u.NotifyChannel, &u.PDConsentAt)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, domain.ErrNotFound
 	}
@@ -119,13 +119,13 @@ func (r *UserRepo) GetByTelegramID(ctx context.Context, telegramID int64) (*doma
 func (r *UserRepo) GetByID(ctx context.Context, id int64) (*domain.User, error) {
 	const q = `
 		SELECT id, COALESCE(telegram_id, 0), COALESCE(username, ''), created_at, plan, plan_expires_at,
-		       trial_used, referred_by, vk_id, notify_channel
+		       trial_used, referred_by, vk_id, max_id, notify_channel
 		FROM users WHERE id = $1`
 
 	u := &domain.User{}
 	err := r.db.QueryRow(ctx, q, id).
 		Scan(&u.ID, &u.TelegramID, &u.Username, &u.CreatedAt, &u.Plan, &u.PlanExpiresAt, &u.TrialUsed, &u.ReferredBy,
-			&u.VKID, &u.NotifyChannel)
+			&u.VKID, &u.MaxID, &u.NotifyChannel)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, domain.ErrNotFound
 	}
@@ -140,13 +140,13 @@ func (r *UserRepo) GetByID(ctx context.Context, id int64) (*domain.User, error) 
 func (r *UserRepo) GetByVKID(ctx context.Context, vkID int64) (*domain.User, error) {
 	const q = `
 		SELECT id, COALESCE(telegram_id, 0), COALESCE(username, ''), created_at, plan, plan_expires_at,
-		       trial_used, referred_by, vk_id, notify_channel
+		       trial_used, referred_by, vk_id, max_id, notify_channel
 		FROM users WHERE vk_id = $1`
 
 	u := &domain.User{}
 	err := r.db.QueryRow(ctx, q, vkID).
 		Scan(&u.ID, &u.TelegramID, &u.Username, &u.CreatedAt, &u.Plan, &u.PlanExpiresAt, &u.TrialUsed, &u.ReferredBy,
-			&u.VKID, &u.NotifyChannel)
+			&u.VKID, &u.MaxID, &u.NotifyChannel)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, domain.ErrNotFound
 	}
@@ -163,12 +163,12 @@ func (r *UserRepo) UpsertVK(ctx context.Context, vkID int64) (*domain.User, erro
 		VALUES ($1, 'auto')
 		ON CONFLICT (vk_id) DO UPDATE SET vk_id = EXCLUDED.vk_id
 		RETURNING id, COALESCE(telegram_id, 0), COALESCE(username, ''), created_at, plan, plan_expires_at,
-		          trial_used, referred_by, vk_id, notify_channel`
+		          trial_used, referred_by, vk_id, max_id, notify_channel`
 
 	u := &domain.User{}
 	err := r.db.QueryRow(ctx, q, vkID).
 		Scan(&u.ID, &u.TelegramID, &u.Username, &u.CreatedAt, &u.Plan, &u.PlanExpiresAt, &u.TrialUsed, &u.ReferredBy,
-			&u.VKID, &u.NotifyChannel)
+			&u.VKID, &u.MaxID, &u.NotifyChannel)
 	if err != nil {
 		return nil, err
 	}
@@ -230,6 +230,96 @@ func (r *UserRepo) LinkVK(ctx context.Context, userID, vkID int64) error {
 func (r *UserRepo) UnlinkVK(ctx context.Context, userID int64) error {
 	// CHECK chk_user_has_identity не даст отвязать VK у VK-only юзера.
 	_, err := r.db.Exec(ctx, `UPDATE users SET vk_id = NULL WHERE id = $1 AND telegram_id IS NOT NULL`, userID)
+	return err
+}
+
+// GetByMaxID — юзер по MAX-идентичности. telegram_id может быть NULL → COALESCE в 0.
+func (r *UserRepo) GetByMaxID(ctx context.Context, maxID int64) (*domain.User, error) {
+	const q = `
+		SELECT id, COALESCE(telegram_id, 0), COALESCE(username, ''), created_at, plan, plan_expires_at,
+		       trial_used, referred_by, vk_id, max_id, notify_channel
+		FROM users WHERE max_id = $1`
+
+	u := &domain.User{}
+	err := r.db.QueryRow(ctx, q, maxID).
+		Scan(&u.ID, &u.TelegramID, &u.Username, &u.CreatedAt, &u.Plan, &u.PlanExpiresAt, &u.TrialUsed, &u.ReferredBy,
+			&u.VKID, &u.MaxID, &u.NotifyChannel)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return nil, domain.ErrNotFound
+	}
+	if err != nil {
+		return nil, err
+	}
+	return u, nil
+}
+
+// UpsertMax — регистрация/получение юзера по MAX-идентичности (вход из MAX-бота).
+func (r *UserRepo) UpsertMax(ctx context.Context, maxID int64) (*domain.User, error) {
+	const q = `
+		INSERT INTO users (max_id, notify_channel)
+		VALUES ($1, 'auto')
+		ON CONFLICT (max_id) DO UPDATE SET max_id = EXCLUDED.max_id
+		RETURNING id, COALESCE(telegram_id, 0), COALESCE(username, ''), created_at, plan, plan_expires_at,
+		          trial_used, referred_by, vk_id, max_id, notify_channel`
+
+	u := &domain.User{}
+	err := r.db.QueryRow(ctx, q, maxID).
+		Scan(&u.ID, &u.TelegramID, &u.Username, &u.CreatedAt, &u.Plan, &u.PlanExpiresAt, &u.TrialUsed, &u.ReferredBy,
+			&u.VKID, &u.MaxID, &u.NotifyChannel)
+	if err != nil {
+		return nil, err
+	}
+	return u, nil
+}
+
+// LinkMax привязывает max_id к юзеру userID (зеркало LinkVK). Пустой MAX-аккаунт
+// (free, без триала и подписок) поглощаем, непустой → domain.ErrMaxAccountBusy.
+func (r *UserRepo) LinkMax(ctx context.Context, userID, maxID int64) error {
+	tx, err := r.db.Begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback(ctx) //nolint:errcheck // rollback после commit — no-op
+
+	var holderID int64
+	var holderTrialUsed bool
+	var holderEmpty bool
+	err = tx.QueryRow(ctx, `
+		SELECT u.id, u.trial_used,
+		       u.plan = 'free' AND NOT EXISTS (SELECT 1 FROM subscriptions s WHERE s.user_id = u.id)
+		                       AND NOT EXISTS (SELECT 1 FROM search_subscriptions ss WHERE ss.user_id = u.id)
+		FROM users u WHERE u.max_id = $1
+		FOR UPDATE`, maxID).Scan(&holderID, &holderTrialUsed, &holderEmpty)
+	switch {
+	case errors.Is(err, pgx.ErrNoRows):
+		// max_id свободен — просто привязываем.
+	case err != nil:
+		return err
+	case holderID == userID:
+		return nil // уже привязан к этому же юзеру
+	case !holderEmpty || holderTrialUsed:
+		return domain.ErrMaxAccountBusy
+	default:
+		if _, err := tx.Exec(ctx, `DELETE FROM users WHERE id = $1`, holderID); err != nil {
+			var pgErr *pgconn.PgError
+			if errors.As(err, &pgErr) && pgErr.Code == "23503" { // foreign_key_violation
+				return domain.ErrMaxAccountBusy
+			}
+			return err
+		}
+	}
+
+	if _, err := tx.Exec(ctx, `UPDATE users SET max_id = $2 WHERE id = $1`, userID, maxID); err != nil {
+		return err
+	}
+	return tx.Commit(ctx)
+}
+
+// UnlinkMax — отвязать MAX (для смены привязки). CHECK chk_user_has_identity не
+// даст отвязать MAX у MAX-only юзера.
+func (r *UserRepo) UnlinkMax(ctx context.Context, userID int64) error {
+	_, err := r.db.Exec(ctx,
+		`UPDATE users SET max_id = NULL WHERE id = $1 AND (telegram_id IS NOT NULL OR vk_id IS NOT NULL)`, userID)
 	return err
 }
 

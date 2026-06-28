@@ -15,8 +15,10 @@ type User struct {
 	PDConsentAt *time.Time
 
 	// VK-идентичность (vk_id = peer_id для отправки в ЛС VK)
-	VKID          *int64
-	NotifyChannel string // auto | tg | vk | both
+	VKID *int64
+	// MAX-идентичность (max_id = user_id для отправки в ЛС MAX)
+	MaxID         *int64
+	NotifyChannel string // auto | tg | vk | max | both | all
 
 	// Тариф/лимиты
 	Plan          string     // free | trial | basic | pro | unlimited

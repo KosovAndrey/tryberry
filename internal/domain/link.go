@@ -11,7 +11,9 @@ const (
 	NotifyAuto = "auto" // куда зарегистрировался (по наличию идентичности)
 	NotifyTG   = "tg"
 	NotifyVK   = "vk"
-	NotifyBoth = "both"
+	NotifyMax  = "max"
+	NotifyBoth = "both" // легаси: tg+vk (до появления MAX)
+	NotifyAll  = "all"  // все привязанные идентичности
 )
 
 // Привязка аккаунтов между платформами: одноразовый код доказывает владение
@@ -30,8 +32,12 @@ const (
 
 // Направления привязки: где код выдан → где предъявлен.
 const (
-	LinkDirTG2VK = "tg2vk" // код выдан в TG, предъявляется в VK
-	LinkDirVK2TG = "vk2tg" // код выдан в VK, предъявляется в TG
+	LinkDirTG2VK  = "tg2vk"  // код выдан в TG, предъявляется в VK
+	LinkDirVK2TG  = "vk2tg"  // код выдан в VK, предъявляется в TG
+	LinkDirTG2Max = "tg2max" // код выдан в TG, предъявляется в MAX
+	LinkDirMax2TG = "max2tg" // код выдан в MAX, предъявляется в TG
+	LinkDirVK2Max = "vk2max" // код выдан в VK, предъявляется в MAX
+	LinkDirMax2VK = "max2vk" // код выдан в MAX, предъявляется в VK
 )
 
 var (
@@ -42,6 +48,9 @@ var (
 	// ErrTGAccountBusy — то же для Telegram-аккаунта (направление vk2tg).
 	ErrTGAccountBusy = errors.New("tg account busy")
 
+	// ErrMaxAccountBusy — MAX-аккаунт уже привязан к другому непустому аккаунту.
+	ErrMaxAccountBusy = errors.New("max account busy")
+
 	// ErrLinkCodeRateLimited — код уже выдавался только что, подожди минуту.
 	ErrLinkCodeRateLimited = errors.New("link code rate limited")
 )
@@ -51,23 +60,30 @@ const linkCodeAlphabet = "ABCDEFGHJKMNPQRSTUVWXYZ23456789"
 // ResolveNotifyTargets — в какие каналы доставлять уведомление при настройке
 // channel и доступных идентичностях. Недоступный выбранный канал откатывается
 // на доступный (лучше доставить «не туда», чем потерять уведомление).
-func ResolveNotifyTargets(channel string, hasTG, hasVK bool) (tg, vk bool) {
+func ResolveNotifyTargets(channel string, hasTG, hasVK, hasMax bool) (tg, vk, mx bool) {
 	switch channel {
 	case NotifyTG:
 		tg = hasTG
 	case NotifyVK:
 		vk = hasVK
-	case NotifyBoth:
+	case NotifyMax:
+		mx = hasMax
+	case NotifyBoth: // легаси: только tg+vk
 		tg, vk = hasTG, hasVK
-	default: // auto: куда зарегистрировался
+	case NotifyAll:
+		tg, vk, mx = hasTG, hasVK, hasMax
+	default: // auto: куда зарегистрировался (приоритет tg → vk → max)
 		tg = hasTG
 		vk = !hasTG && hasVK
+		mx = !hasTG && !hasVK && hasMax
 	}
-	// Фолбэк: выбранный канал недоступен → шлём в доступный.
-	if !tg && !vk {
-		tg, vk = hasTG, !hasTG && hasVK
+	// Фолбэк: выбранный канал недоступен → шлём в первый доступный.
+	if !tg && !vk && !mx {
+		tg = hasTG
+		vk = !hasTG && hasVK
+		mx = !hasTG && !hasVK && hasMax
 	}
-	return tg, vk
+	return tg, vk, mx
 }
 
 // NewLinkCode — криптослучайный код привязки.

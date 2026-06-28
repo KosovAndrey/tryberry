@@ -36,6 +36,7 @@ type Bot struct {
 
 	linkCodes *redisrepo.LinkCodeStore // коды привязки VK (nil, если redis недоступен)
 	vkBotURL  string                   // ссылка на VK-бота для кнопки привязки ("" — не показывать)
+	maxBotURL string                   // ссылка на MAX-бота для кнопки привязки ("" — не показывать)
 
 	// Оплата. payments == nil → платёжный сервис не настроен (env пуст),
 	// витрина показывает заглушку. discounts хранит «ожидающую скидку» (nil без redis).
@@ -103,6 +104,7 @@ func NewBot(
 	rdb *redis.Client,
 	adminIDs map[int64]bool,
 	vkBotURL string,
+	maxBotURL string,
 	chartBaseURL string,
 ) (*Bot, error) {
 	// Тот же таймаут-клиент, что у Receiver: ответы bot-worker и (в монолитном
@@ -137,6 +139,7 @@ func NewBot(
 		linkCodes:       linkCodes,
 		discounts:       discounts,
 		vkBotURL:        vkBotURL,
+		maxBotURL:       maxBotURL,
 		chartBaseURL:    chartBaseURL,
 	}, nil
 }
@@ -514,6 +517,14 @@ func (b *Bot) handleCallback(ctx context.Context, cb *tgbotapi.CallbackQuery) {
 			return
 		}
 		b.profileLinkVK(ctx, chatID, messageID, user, cb.Data == "profile:relinkvk")
+
+	case cb.Data == "profile:linkmax", cb.Data == "profile:relinkmax":
+		user, err := b.userRepo.GetByTelegramID(ctx, cb.From.ID)
+		if err != nil {
+			b.answerCallback(cb.ID, "Ошибка")
+			return
+		}
+		b.profileLinkMax(ctx, chatID, messageID, user, cb.Data == "profile:relinkmax")
 
 	case cb.Data == "profile:notify":
 		user, err := b.userRepo.GetByTelegramID(ctx, cb.From.ID)

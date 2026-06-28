@@ -187,7 +187,7 @@ section{position:relative}
 /* big statement / apple style */
 .statement{padding:clamp(110px,18vw,220px) 0;text-align:center}
 .statement h2{font-family:var(--font-display);font-weight:600;letter-spacing:-.03em;line-height:1.05;font-size:clamp(2.2rem,6vw,5rem);max-width:16ch;margin:0 auto}
-.statement h2 em{font-style:normal;color:var(--berry)}
+.statement h2 em{font-style:normal;background:linear-gradient(100deg,var(--berry-deep),var(--berry-bright) 35%,var(--rose) 50%,var(--berry-bright) 65%,var(--berry-deep));background-size:200% auto;-webkit-background-clip:text;background-clip:text;color:transparent;animation:shine 6s linear infinite}
 .statement p{margin:32px auto 0;max-width:46ch;font-size:clamp(1.05rem,1.6vw,1.3rem);color:var(--muted-light)}
 
 /* ---------- feature grid ---------- */
@@ -259,7 +259,8 @@ section{position:relative}
 .reseller-head{display:flex;align-items:flex-start;gap:18px;flex-wrap:wrap;justify-content:space-between;margin-bottom:30px}
 .reseller-head .rt{font-family:var(--font-display);font-weight:600;font-size:clamp(1.5rem,2.6vw,2.1rem);letter-spacing:-.02em;line-height:1.1}
 .reseller-head .rd{color:#c8a9b8;font-size:.98rem;margin-top:8px;max-width:52ch}
-.reseller-badge{font-family:var(--font-display);font-weight:600;font-size:.72rem;letter-spacing:.1em;text-transform:uppercase;color:#fff;background:linear-gradient(120deg,var(--berry-bright),var(--berry-deep));padding:9px 16px;border-radius:100px;white-space:nowrap;align-self:center}
+.reseller-badge{font-family:var(--font-display);font-weight:600;font-size:.72rem;letter-spacing:.1em;text-transform:uppercase;color:#fff;background:linear-gradient(120deg,var(--berry-bright),var(--berry-deep));padding:9px 16px;border-radius:100px;white-space:nowrap;align-self:center;display:inline-flex;align-items:center;gap:7px}
+.bolt-ic{height:1.5em;width:1.5em;object-fit:contain;mix-blend-mode:screen;flex:none}
 .reseller-grid{display:grid;grid-template-columns:repeat(2,1fr);gap:16px}
 .rplan{background:#2d0d22;border:1px solid rgba(255,93,143,.16);border-radius:20px;padding:26px 24px;display:flex;flex-direction:column}
 .rplan h4{font-family:var(--font-display);font-weight:600;font-size:1.15rem;margin-bottom:4px}
@@ -375,11 +376,42 @@ footer{background:var(--plum-deep);padding:70px 0 40px;border-top:1px solid var(
 .mp-ozon{background:linear-gradient(135deg,#0a7cff,#0040c0)}
 .mp-ym{background:linear-gradient(135deg,#ff4b2b,#c41e0a)}
 .mp-ali{background:linear-gradient(135deg,#ff5a3c,#e62e04)}
+
+/* ---------- MARKETPLACES (тонкая полоса под hero) ---------- */
+.mp-strip{background:var(--ink);position:relative;z-index:3;padding:10px 0 30px}
+.mp-strip .mp-strip-in{display:flex;align-items:center;gap:24px}
+.mp-strip .mp-strip-label{font-family:var(--font-display);font-weight:500;font-size:.7rem;letter-spacing:.24em;text-transform:uppercase;color:var(--muted);white-space:nowrap;flex:none}
+.mp-strip .mp-marquee{margin-top:0;flex:1;min-width:0}
+.mp-strip .mp-chip{font-size:clamp(.86rem,1.4vw,1.05rem);padding:9px 18px;margin-right:14px;border-radius:13px}
+@media(max-width:680px){
+  .mp-strip .mp-strip-in{flex-direction:column;align-items:flex-start;gap:12px}
+  .mp-strip .mp-strip-label{align-self:center}
+}
+
+/* ---------- ambient dot-grid на тёмных секциях + сглаживание стыка hero ---------- */
+.band.plum{position:relative;isolation:isolate}
+.band.plum::before{content:"";position:absolute;inset:0;z-index:-1;pointer-events:none;
+  background-image:radial-gradient(rgba(255,93,143,.07) 1px,transparent 1.4px);background-size:30px 30px;
+  -webkit-mask-image:radial-gradient(125% 80% at 50% 40%,#000 50%,transparent);mask-image:radial-gradient(125% 80% at 50% 40%,#000 50%,transparent)}
+.hero-bg::after{content:"";position:absolute;inset:0;pointer-events:none;opacity:.6;
+  background-image:radial-gradient(rgba(255,93,143,.06) 1px,transparent 1.4px);background-size:30px 30px}
+.hero::after{content:"";position:absolute;left:0;right:0;bottom:0;height:170px;z-index:1;pointer-events:none;
+  background:linear-gradient(180deg,transparent,var(--ink))}
+
+/* ---------- pin scroll-cue (подсказка «листайте») ---------- */
+.pin-cue{position:absolute;left:0;right:0;bottom:12px;z-index:4;display:flex;flex-direction:column;align-items:center;gap:3px;pointer-events:none;transition:opacity .4s var(--ease)}
+.pin-cue .cue-count{font-family:var(--font-display);font-weight:700;font-size:.74rem;letter-spacing:.16em;color:var(--berry-bright)}
+.pin-cue .cue-text{font-size:.68rem;letter-spacing:.03em;color:var(--muted)}
+.pin-cue .cue-chev{width:18px;height:18px;stroke:var(--berry-bright);stroke-width:2.4;fill:none;animation:cuebob 1.5s var(--ease) infinite}
+@keyframes cuebob{0%,100%{transform:translateY(-2px);opacity:.5}50%{transform:translateY(4px);opacity:1}}
+.pin-cue.done .cue-chev,.pin-cue.done .cue-text{opacity:0}
+@media(max-width:920px){.pin-progress{bottom:54px}}
+
 @media(prefers-reduced-motion:reduce){
   *{animation-duration:.001s!important;transition-duration:.1s!important}
   [data-reveal]{opacity:1;transform:none}
   .hero h1 .kline > span{transform:none;animation:none}
-  .accent{animation:none}
+  .accent,.statement h2 em{animation:none}
   .mp-track{animation:none;flex-wrap:wrap;justify-content:center}
   html{scroll-behavior:auto}
 }
@@ -487,6 +519,25 @@ footer{background:var(--plum-deep);padding:70px 0 40px;border-top:1px solid var(
   </div>
 </header>
 
+<!-- MARKETPLACES STRIP (под hero) -->
+<section class="mp-strip" aria-label="Поддерживаемые маркетплейсы">
+  <div class="wrap mp-strip-in">
+    <span class="mp-strip-label">Работает с</span>
+    <div class="mp-marquee">
+      <div class="mp-track">
+        <span class="mp-chip mp-wb">Wildberries</span>
+        <span class="mp-chip mp-ozon">OZON</span>
+        <span class="mp-chip mp-ym">Яндекс Маркет</span>
+        <span class="mp-chip mp-ali">AliExpress</span>
+        <span class="mp-chip mp-wb" aria-hidden="true">Wildberries</span>
+        <span class="mp-chip mp-ozon" aria-hidden="true">OZON</span>
+        <span class="mp-chip mp-ym" aria-hidden="true">Яндекс Маркет</span>
+        <span class="mp-chip mp-ali" aria-hidden="true">AliExpress</span>
+      </div>
+    </div>
+  </div>
+</section>
+
 <!-- STATEMENT -->
 <section class="band plum">
   <div class="wrap statement">
@@ -500,7 +551,7 @@ footer{background:var(--plum-deep);padding:70px 0 40px;border-top:1px solid var(
   <div class="wrap">
     <div class="sec-head">
       <span class="eyebrow" data-reveal>Что умеет</span>
-      <h2 data-reveal style="--d:.05s">Достаточно одной ссылки.</h2>
+      <h2 data-reveal style="--d:.05s">Достаточно <span class="accent">одной ссылки</span>.</h2>
       <p data-reveal style="--d:.1s">TryBerry не требует логина маркетплейса и не трогает ваш аккаунт. Он просто наблюдает за публичной ценой — за товаром или за целой выдачей поиска на Wildberries, Ozon, Яндекс Маркете и AliExpress.</p>
     </div>
     <div class="fgrid">
@@ -524,24 +575,57 @@ footer{background:var(--plum-deep);padding:70px 0 40px;border-top:1px solid var(
 </section>
 
 <!-- PINNED TRIGGER SHOWCASE -->
-<!-- MARKETPLACES (вращающийся стенд) -->
-<section class="band plum" id="markets">
-  <div class="wrap">
-    <div class="sec-head" style="text-align:center;max-width:680px;margin-left:auto;margin-right:auto">
-      <span class="eyebrow" data-reveal>Маркетплейсы</span>
-      <h2 data-reveal style="--d:.05s">Следим за ценами там,<br>где вы <span class="accent">покупаете</span>.</h2>
-      <p data-reveal style="--d:.1s;margin-left:auto;margin-right:auto">Wildberries, Ozon, Яндекс&nbsp;Маркет и AliExpress — следим за ценами на всех четырёх маркетплейсах.</p>
-    </div>
-    <div class="mp-marquee" data-reveal style="--d:.15s">
-      <div class="mp-track">
-        <span class="mp-chip mp-wb">Wildberries</span>
-        <span class="mp-chip mp-ozon">OZON</span>
-        <span class="mp-chip mp-ym">Яндекс Маркет</span>
-        <span class="mp-chip mp-ali">AliExpress</span>
-        <span class="mp-chip mp-wb" aria-hidden="true">Wildberries</span>
-        <span class="mp-chip mp-ozon" aria-hidden="true">OZON</span>
-        <span class="mp-chip mp-ym" aria-hidden="true">Яндекс Маркет</span>
-        <span class="mp-chip mp-ali" aria-hidden="true">AliExpress</span>
+<section class="band plum pin-section" id="triggers" style="padding-top:0;padding-bottom:0">
+  <div class="pin-track" id="pinTrack">
+    <div class="pin-stage">
+      <div class="wrap">
+        <div class="pin-steps" id="pinSteps">
+          <div class="pin-step active" data-step="0">
+            <span class="num">СТРАТЕГИЯ 01</span>
+            <h3>Порог цены</h3>
+            <p>Назовите сумму, за которую готовы купить. Бот промолчит, пока цена выше, и напишет ровно тогда, когда товар упадёт до вашей планки.</p>
+          </div>
+          <div class="pin-step" data-step="1">
+            <span class="num">СТРАТЕГИЯ 02</span>
+            <h3>Любое снижение</h3>
+            <p>Не хотите гадать с цифрой? Включите режим «любое падение» — придёт уведомление при первом же снижении относительно цены на момент подписки.</p>
+          </div>
+          <div class="pin-step" data-step="2">
+            <span class="num">СТРАТЕГИЯ 03</span>
+            <h3>Скидка от процента</h3>
+            <p>Интересны только серьёзные распродажи? Задайте процент — например, от −30% — и шум от мелких колебаний вас не побеспокоит.</p>
+          </div>
+        </div>
+        <div>
+          <div class="pin-visual">
+            <div class="pin-card" data-card="0">
+              <div class="tag">Порог цены</div>
+              <div class="big">≤ 1 800 ₽</div>
+              <div class="sub">Уведомить, когда цена достигнет планки</div>
+              <div class="pin-meter"><span style="width:72%"></span></div>
+            </div>
+            <div class="pin-card" data-card="1">
+              <div class="tag">Любое снижение</div>
+              <div class="big">−1 ₽ и ниже</div>
+              <div class="sub">Срабатывает при первом падении</div>
+              <div class="pin-meter"><span style="width:38%"></span></div>
+            </div>
+            <div class="pin-card" data-card="2">
+              <div class="tag">Скидка от процента</div>
+              <div class="big">−30%</div>
+              <div class="sub">Только заметные распродажи</div>
+              <div class="pin-meter"><span style="width:88%"></span></div>
+            </div>
+          </div>
+        </div>
+      </div>
+      <div class="pin-progress" id="pinProgress">
+        <i class="on"></i><i></i><i></i>
+      </div>
+      <div class="pin-cue" id="pinCue">
+        <span class="cue-count"><span id="pinCount">1</span> / 3</span>
+        <span class="cue-text">листайте — ниже ещё стратегии</span>
+        <svg class="cue-chev" viewBox="0 0 24 24"><path d="m6 9 6 6 6-6" stroke-linecap="round" stroke-linejoin="round"/></svg>
       </div>
     </div>
   </div>
@@ -560,7 +644,7 @@ footer{background:var(--plum-deep);padding:70px 0 40px;border-top:1px solid var(
   <div class="wrap">
     <div class="sec-head">
       <span class="eyebrow" data-reveal>Тарифы</span>
-      <h2 data-reveal style="--d:.05s">Начните бесплатно. Растите, когда нужно.</h2>
+      <h2 data-reveal style="--d:.05s">Начните <span class="accent">бесплатно</span>. Растите, когда нужно.</h2>
       <p data-reveal style="--d:.1s">Бесплатный план — навсегда и без карты. Хотите попробовать «Поиск по ссылке» — включается 3-дневный триал в один клик.</p>
     </div>
     <div class="plan-grid">
@@ -619,7 +703,7 @@ footer{background:var(--plum-deep);padding:70px 0 40px;border-top:1px solid var(
           <div class="rt">Для реселлеров</div>
           <div class="rd">Тарифы для тех, кто закупает товары на перепродажу: цена обновляется раз в минуту, чтобы вы первыми видели лучшие предложения.</div>
         </div>
-        <span class="reseller-badge">⚡ Проверка раз в 1 минуту</span>
+        <span class="reseller-badge"><img src="/lightning_bolt.png" class="bolt-ic" alt="" aria-hidden="true">Проверка раз в 1 минуту</span>
       </div>
       <div class="reseller-grid">
         <div class="rplan">
@@ -654,7 +738,7 @@ footer{background:var(--plum-deep);padding:70px 0 40px;border-top:1px solid var(
   <div class="wrap">
     <div class="sec-head">
       <span class="eyebrow" data-reveal>Оплата и возврат</span>
-      <h2 data-reveal style="--d:.05s">Прозрачно: как платить и как вернуть.</h2>
+      <h2 data-reveal style="--d:.05s">Прозрачно: как платить и <span class="accent">как вернуть</span>.</h2>
       <p data-reveal style="--d:.1s">Платные тарифы оформляются прямо в Telegram-боте. Приём платежей обеспечивает сервис Робокасса.</p>
     </div>
     <div class="payinfo-grid">
@@ -683,7 +767,7 @@ footer{background:var(--plum-deep);padding:70px 0 40px;border-top:1px solid var(
   <div class="wrap">
     <div class="sec-head" style="text-align:center;margin-left:auto;margin-right:auto">
       <span class="eyebrow" data-reveal>Частые вопросы</span>
-      <h2 data-reveal style="--d:.05s">Коротко о главном.</h2>
+      <h2 data-reveal style="--d:.05s">Коротко о <span class="accent">главном</span>.</h2>
     </div>
     <div class="faq" id="faq">
       <div class="faq-item" data-reveal>
@@ -727,7 +811,7 @@ footer{background:var(--plum-deep);padding:70px 0 40px;border-top:1px solid var(
   <div class="wrap">
     <div class="sec-head">
       <span class="eyebrow" data-reveal>Контакты</span>
-      <h2 data-reveal style="--d:.05s">Мы рядом в Telegram.</h2>
+      <h2 data-reveal style="--d:.05s">Мы рядом в <span class="accent">Telegram</span>.</h2>
       <p data-reveal style="--d:.1s">Любой вопрос, идея или баг — пишите. По оплате, тарифам и возвратам отвечаем в Telegram и на почте.</p>
     </div>
     <div class="contact-grid">
@@ -928,6 +1012,35 @@ document.querySelectorAll('.faq-item').forEach(item=>{
     if(!open){item.classList.add('open');a.style.maxHeight=a.scrollHeight+'px';}
   });
 });
+
+/* pinned strategies showcase + scroll-cue */
+(function(){
+  const track=document.getElementById('pinTrack');
+  if(!track)return;
+  const steps=[...document.querySelectorAll('.pin-step')];
+  const cards=[...document.querySelectorAll('.pin-card')];
+  const dots=[...document.querySelectorAll('#pinProgress i')];
+  const cue=document.getElementById('pinCue'),count=document.getElementById('pinCount');
+  let cur=-1;
+  function setStep(i){
+    if(i===cur)return;cur=i;
+    steps.forEach((s,k)=>s.classList.toggle('active',k===i));
+    cards.forEach((c,k)=>c.classList.toggle('show',k===i));
+    dots.forEach((d,k)=>d.classList.toggle('on',k===i));
+    if(count)count.textContent=i+1;
+    if(cue)cue.classList.toggle('done',i>=steps.length-1);
+  }
+  function update(){
+    const r=track.getBoundingClientRect();
+    const total=track.offsetHeight-window.innerHeight;
+    let p=(-r.top)/total;p=Math.max(0,Math.min(.999,p));
+    setStep(Math.floor(p*steps.length));
+  }
+  setStep(0);
+  window.addEventListener('scroll',update,{passive:true});
+  window.addEventListener('resize',update);
+  update();
+})();
 
 /* legal overlays */
 function openLegal(id){

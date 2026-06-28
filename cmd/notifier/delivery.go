@@ -9,6 +9,7 @@ import (
 	"strings"
 
 	"gitlab.com/KosovAndrey/tryberrybot/internal/domain"
+	"gitlab.com/KosovAndrey/tryberrybot/internal/max"
 	"gitlab.com/KosovAndrey/tryberrybot/internal/metrics"
 	"gitlab.com/KosovAndrey/tryberrybot/internal/repository/postgres"
 	"gitlab.com/KosovAndrey/tryberrybot/internal/telegram"
@@ -24,16 +25,18 @@ type deliverer struct {
 	log          *slog.Logger
 	tg           *telegram.Notifier
 	vk           *vk.Client
+	mx           *max.Client
 	users        *postgres.UserRepo
-	chartBaseURL string // PUBLIC_BASE_URL для ссылки «📈 График цены» в VK-пуше; "" — без неё
+	chartBaseURL string // PUBLIC_BASE_URL для ссылки «📈 График цены» в VK/MAX-пуше; "" — без неё
 }
 
 // targets — куда слать. userID — основной ключ (users.id), telegramID — фолбэк
-// для старых kafka-событий без user_id. Возвращает (слать в TG, peer VK или 0).
-func (d *deliverer) targets(ctx context.Context, userID, telegramID int64) (sendTG bool, vkPeer int64) {
-	if d.vk == nil && telegramID != 0 {
-		// VK выключен, TG-чат известен — без лишнего запроса к БД (как раньше).
-		return true, 0
+// для старых kafka-событий без user_id. Возвращает (слать в TG, peer VK или 0,
+// user MAX или 0).
+func (d *deliverer) targets(ctx context.Context, userID, telegramID int64) (sendTG bool, vkPeer, maxUser int64) {
+	if d.vk == nil && d.mx == nil && telegramID != 0 {
+		// Доп. каналы выключены, TG-чат известен — без лишнего запроса к БД.
+		return true, 0, 0
 	}
 	var u *domain.User
 	var err error
@@ -44,33 +47,36 @@ func (d *deliverer) targets(ctx context.Context, userID, telegramID int64) (send
 	}
 	if err != nil {
 		// Не нашли/ошибка — ведём себя как раньше (в TG), уведомление важнее роутинга.
-		return telegramID != 0, 0
+		return telegramID != 0, 0, 0
 	}
-	if d.vk == nil {
-		return u.TelegramID != 0, 0
+	if d.vk == nil && d.mx == nil {
+		return u.TelegramID != 0, 0, 0
 	}
 	hasVK := u.VKID != nil
-	tg, vkOn := domain.ResolveNotifyTargets(u.NotifyChannel, u.TelegramID != 0, hasVK)
-	if vkOn && hasVK {
+	hasMax := u.MaxID != nil
+	tg, vkOn, mxOn := domain.ResolveNotifyTargets(u.NotifyChannel, u.TelegramID != 0, hasVK, hasMax)
+	if vkOn && hasVK && d.vk != nil {
 		vkPeer = *u.VKID
 	}
-	return tg, vkPeer
+	if mxOn && hasMax && d.mx != nil {
+		maxUser = *u.MaxID
+	}
+	return tg, vkPeer, maxUser
 }
 
-// deliver — общий хвост: TG и/или VK, успех при любой доставке. vkImageURL — фото
-// для VK-сообщения (пусто → без картинки).
+// deliver — общий хвост: TG и/или VK и/или MAX, успех при любой доставке.
+// imageURL — фото для VK (пусто → без картинки; MAX рендерит превью ссылки).
 func (d *deliverer) deliver(ctx context.Context, userID, telegramID int64, sendTG func(context.Context) error, vkText, vkImageURL string) error {
-	tg, vkPeer := d.targets(ctx, userID, telegramID)
+	tg, vkPeer, maxUser := d.targets(ctx, userID, telegramID)
 
-	if !tg && vkPeer == 0 {
-		// Некуда доставлять (например, VK-only юзер при выключенном VK).
-		// Возвращаем nil: retry не поможет, кафку зацикливать нельзя.
+	if !tg && vkPeer == 0 && maxUser == 0 {
+		// Некуда доставлять. Возвращаем nil: retry не поможет, кафку зацикливать нельзя.
 		d.log.Warn("deliver: no channel available", "user_id", userID, "telegram_id", telegramID)
 		metrics.NotificationsDelivered.WithLabelValues("none", "skipped").Inc()
 		return nil
 	}
 
-	var tgErr, vkErr error
+	var tgErr, vkErr, mxErr error
 	delivered := false
 
 	if tg {
@@ -90,20 +96,30 @@ func (d *deliverer) deliver(ctx context.Context, userID, telegramID int64, sendT
 		}
 		metrics.NotificationsDelivered.WithLabelValues("vk", statusLabel(vkErr)).Inc()
 	}
+	if maxUser != 0 {
+		mxErr = d.mx.SendMessage(ctx, maxUser, vkText)
+		if mxErr == nil {
+			delivered = true
+		}
+		metrics.NotificationsDelivered.WithLabelValues("max", statusLabel(mxErr)).Inc()
+	}
 
 	if delivered {
 		if tgErr != nil {
-			d.log.Error("deliver: tg failed (vk ok)", "user_id", userID, "err", tgErr)
+			d.log.Error("deliver: tg failed (other ok)", "user_id", userID, "err", tgErr)
 		}
 		if vkErr != nil {
-			d.log.Error("deliver: vk failed (tg ok)", "user_id", userID, "err", vkErr)
+			d.log.Error("deliver: vk failed (other ok)", "user_id", userID, "err", vkErr)
+		}
+		if mxErr != nil {
+			d.log.Error("deliver: max failed (other ok)", "user_id", userID, "err", mxErr)
 		}
 		return nil
 	}
 	// Не доставлено. Перманентную ошибку TG (битая картинка, бан, чат не найден)
 	// НЕ ретраим — иначе одно сообщение зацикливает kafka-консьюмер и копит лаг.
 	// Транзиентные (429/сеть, любые VK) — отдаём наверх для ретрая.
-	if errors.Is(tgErr, telegram.ErrTelegramPermanent) && vkErr == nil {
+	if errors.Is(tgErr, telegram.ErrTelegramPermanent) && vkErr == nil && mxErr == nil {
 		d.log.Error("deliver: tg permanent, skipping (no kafka retry)", "user_id", userID, "err", tgErr)
 		metrics.NotificationsDelivered.WithLabelValues("tg", "skipped").Inc()
 		return nil
@@ -111,7 +127,10 @@ func (d *deliverer) deliver(ctx context.Context, userID, telegramID int64, sendT
 	if tgErr != nil {
 		return tgErr
 	}
-	return vkErr
+	if vkErr != nil {
+		return vkErr
+	}
+	return mxErr
 }
 
 func statusLabel(err error) string {

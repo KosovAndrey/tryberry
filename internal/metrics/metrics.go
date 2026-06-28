@@ -91,6 +91,17 @@ var (
 		[]string{"command"},
 	)
 
+	// MaxMessages — входящие личные сообщения MAX-бота по распознанному
+	// типу (зеркало VKMessages).
+	MaxMessages = promauto.NewCounterVec(
+		prometheus.CounterOpts{
+			Namespace: namespace,
+			Name:      "max_messages_total",
+			Help:      "Incoming MAX messages by resolved command/flow",
+		},
+		[]string{"command"},
+	)
+
 	// PromoRedeems — успешные погашения промокодов (единая точка —
 	// PromoRepo.RedeemGrant, канал TG/VK тут не различим).
 	PromoRedeems = promauto.NewCounter(

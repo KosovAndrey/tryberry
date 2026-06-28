@@ -43,8 +43,10 @@ type messageNew struct {
 const (
 	cmdProfile     = "profile"
 	cmdLink        = "link"
-	cmdUnlinkTG    = "unlinktg" // отвязать Telegram (k=confirm — подтверждено)
-	cmdNotify      = "notify"   // цикл канала уведомлений tg→vk→both
+	cmdUnlinkTG    = "unlinktg"  // отвязать Telegram (k=confirm — подтверждено)
+	cmdLinkMax     = "linkmax"   // привязать MAX (выдать код vk2max)
+	cmdUnlinkMax   = "unlinkmax" // отвязать MAX (k=confirm — подтверждено)
+	cmdNotify      = "notify"    // цикл канала уведомлений по привязанным идентичностям
 	cmdEmail       = "email"    // сменить email для чека 54-ФЗ
 	cmdHelp        = "help"
 	cmdAdd         = "add"
@@ -112,6 +114,7 @@ type Bot struct {
 	linkCodes       *redisrepo.LinkCodeStore
 	rdb             *redis.Client // FSM ввода порога (может быть nil)
 	botURL          string        // ссылка на VK-бота для приглашений ("" — не показывать)
+	maxBotURL       string        // ссылка на MAX-бота для кнопки привязки ("" — не показывать)
 	chartBaseURL    string        // PUBLIC_BASE_URL для ссылки «📈 График цены» → /p/<public_id>; "" — не показывать
 	adminIDs        map[int64]bool // VK_ADMIN_IDS — операторы для админ-команд (grant/revoke/promo…)
 
@@ -147,6 +150,7 @@ func NewBot(
 	linkCodes *redisrepo.LinkCodeStore,
 	rdb *redis.Client,
 	botURL string,
+	maxBotURL string,
 	chartBaseURL string,
 	adminIDs map[int64]bool,
 ) *Bot {
@@ -169,6 +173,7 @@ func NewBot(
 		linkCodes:       linkCodes,
 		rdb:             rdb,
 		botURL:          botURL,
+		maxBotURL:       maxBotURL,
 		chartBaseURL:    chartBaseURL,
 		adminIDs:        adminIDs,
 		discounts:       discounts,
@@ -406,6 +411,10 @@ func (b *Bot) handleMessage(ctx context.Context, vkID int64, text, payload strin
 		b.issueLinkCode(ctx, vkID, user)
 	case cmdUnlinkTG:
 		b.handleUnlinkTG(ctx, vkID, user, p.Kind == "confirm")
+	case cmdLinkMax:
+		b.issueLinkCodeMax(ctx, vkID, user)
+	case cmdUnlinkMax:
+		b.handleUnlinkMax(ctx, vkID, user, p.Kind == "confirm")
 	case cmdHelp:
 		b.send(ctx, vkID, b.helpText(user), kb)
 	case cmdAdd:
@@ -475,10 +484,12 @@ func (b *Bot) handleLink(ctx context.Context, vkID int64, vkUser *domain.User, c
 		return
 	}
 	dir, tgUserID, err := b.linkCodes.Redeem(ctx, code)
-	if err != nil || dir != domain.LinkDirTG2VK {
+	// Код, выданный в TG (tg2vk) или MAX (max2vk) для предъявления здесь. В обоих
+	// случаях привязываем нашу VK-идентичность к аккаунту-эмитенту (tgUserID).
+	if err != nil || (dir != domain.LinkDirTG2VK && dir != domain.LinkDirMax2VK) {
 		// Неверный/истёкший код и чужое направление неразличимы для юзера.
 		b.send(ctx, vkID, "Код не подошёл 😕 Проверь, что скопировал его целиком, "+
-			"или получи новый в Telegram-боте: Профиль → Привязать VK (код живёт 15 минут).",
+			"или получи новый в Telegram/MAX-боте: «Привязать VK» (код живёт 15 минут).",
 			menuKeyboard(false))
 		return
 	}
@@ -511,9 +522,13 @@ func (b *Bot) sendProfile(ctx context.Context, vkID int64, u *domain.User) {
 	prod, _ := b.subRepo.CountActiveByUserID(ctx, u.ID)
 	srch, _ := b.searchSubRepo.CountActiveByUserID(ctx, u.ID)
 
-	tg := "❌ не привязан (кнопка внизу)"
+	tg := "❌ не привязан"
 	if u.TelegramID != 0 {
 		tg = "✅ привязан"
+	}
+	mx := "❌ не привязан"
+	if u.MaxID != nil {
+		mx = "✅ привязан"
 	}
 	planLine := "Тариф: " + plan.Title
 	if u.PlanExpiresAt != nil && !u.PlanExpired(now) {
@@ -522,7 +537,7 @@ func (b *Bot) sendProfile(ctx context.Context, vkID int64, u *domain.User) {
 
 	var sb strings.Builder
 	sb.WriteString("👤 Профиль\n\n")
-	fmt.Fprintf(&sb, "VK: ✅ привязан\nTelegram: %s\n%s\n", tg, planLine)
+	fmt.Fprintf(&sb, "VK: ✅ привязан\nTelegram: %s\nMAX: %s\n%s\n", tg, mx, planLine)
 	fmt.Fprintf(&sb, "📦 Товаров: %d из %d · 🔎 Поисков: %d из %d\n", prod, plan.MaxProduct, srch, plan.MaxSearch)
 
 	// Email для чека 54-ФЗ — только когда оплата подключена.
@@ -539,55 +554,78 @@ func (b *Bot) sendProfile(ctx context.Context, vkID int64, u *domain.User) {
 	subLine, hasSub := b.subscriptionLine(ctx, u.ID)
 	sb.WriteString(subLine)
 
-	var kb *Keyboard
-	if u.TelegramID != 0 {
-		// TG привязан → inline-клавиатура управления (как было) + email.
+	// Унифицированный inline-профиль (зеркало MAX-бота): управление привязками
+	// TG и MAX, уведомления, email, подписка. Навигация — кнопкой «◀️ Меню».
+	var rows [][]Button
+	// Цикл канала уведомлений доступен при ≥2 идентичностях.
+	if vkIdentityCount(u) >= 2 {
 		fmt.Fprintf(&sb, "🔔 Уведомления: %s\n", domain.NotifyChannelTitle(u.NotifyChannel))
-		rows := [][]Button{
-			{TextButton("🔔 Уведомления: "+domain.NotifyChannelTitle(u.NotifyChannel),
-				buttonPayload(cmdNotify), ColorPrimary)},
-			{TextButton("🔗 Отвязать Telegram", buttonPayload(cmdUnlinkTG), ColorSecondary)},
-		}
-		if b.payments != nil {
-			rows = append(rows, []Button{TextButton(emailLabel, buttonPayload(cmdEmail), ColorSecondary)})
-		}
-		if hasSub {
-			rows = append(rows, []Button{TextButton("🚫 Отменить автопродление", buttonPayload(cmdSubCancel), ColorSecondary)})
-		}
-		kb = &Keyboard{Inline: true, Buttons: rows}
-	} else if hasSub {
-		// VK-only с активной подпиской → inline с кнопкой отмены (приоритет над меню).
-		if b.payments != nil {
-			sb.WriteString("\nСменить email — отправь сообщение: email")
-		}
-		kb = &Keyboard{Inline: true, Buttons: [][]Button{
-			{TextButton("🚫 Отменить автопродление", buttonPayload(cmdSubCancel), ColorSecondary)},
-			{TextButton("◀️ Меню", buttonPayload(""), ColorSecondary)},
-		}}
-	} else {
-		// VK-only → постоянное меню (как было). Сменить email можно отдельным
-		// сообщением «email» (или при оплате).
-		if b.payments != nil {
-			sb.WriteString("\nСменить email — отправь сообщение: email")
-		}
-		kb = menuKeyboard(false)
+		rows = append(rows, []Button{TextButton("🔔 Уведомления: "+domain.NotifyChannelTitle(u.NotifyChannel),
+			buttonPayload(cmdNotify), ColorPrimary)})
 	}
-	b.send(ctx, vkID, sb.String(), kb)
+	if u.TelegramID != 0 {
+		rows = append(rows, []Button{TextButton("🔗 Отвязать Telegram", buttonPayload(cmdUnlinkTG), ColorSecondary)})
+	} else {
+		rows = append(rows, []Button{TextButton("🔗 Привязать Telegram", buttonPayload(cmdLink), ColorSecondary)})
+	}
+	if u.MaxID != nil {
+		rows = append(rows, []Button{TextButton("🔗 Отвязать MAX", buttonPayload(cmdUnlinkMax), ColorSecondary)})
+	} else {
+		rows = append(rows, []Button{TextButton("🔗 Привязать MAX", buttonPayload(cmdLinkMax), ColorSecondary)})
+	}
+	if b.payments != nil {
+		rows = append(rows, []Button{TextButton(emailLabel, buttonPayload(cmdEmail), ColorSecondary)})
+	}
+	if hasSub {
+		rows = append(rows, []Button{TextButton("🚫 Отменить автопродление", buttonPayload(cmdSubCancel), ColorSecondary)})
+	}
+	rows = append(rows, []Button{TextButton("◀️ Меню", buttonPayload(""), ColorSecondary)})
+	b.send(ctx, vkID, sb.String(), &Keyboard{Inline: true, Buttons: rows})
 }
 
-// toggleNotify — циклически переключить канал уведомлений: tg → vk → both → tg.
+// vkNotifyCycle — порядок переключения канала уведомлений: vk → tg → max → all,
+// где присутствуют только привязанные идентичности (VK всегда базовый в этом боте).
+func vkNotifyCycle(u *domain.User) []string {
+	cycle := []string{domain.NotifyVK}
+	if u.TelegramID != 0 {
+		cycle = append(cycle, domain.NotifyTG)
+	}
+	if u.MaxID != nil {
+		cycle = append(cycle, domain.NotifyMax)
+	}
+	return append(cycle, domain.NotifyAll)
+}
+
+// vkIdentityCount — сколько идентичностей привязано (VK всегда есть в этом боте).
+func vkIdentityCount(u *domain.User) int {
+	n := 1
+	if u.TelegramID != 0 {
+		n++
+	}
+	if u.MaxID != nil {
+		n++
+	}
+	return n
+}
+
+// toggleNotify — циклически переключить канал уведомлений по доступным
+// идентичностям (при ≥2 привязках): vk → tg → max → all → vk, где присутствуют
+// только привязанные каналы. Легаси-both трактуем как начало цикла.
 func (b *Bot) toggleNotify(ctx context.Context, vkID int64, u *domain.User) {
-	if u.TelegramID == 0 {
+	if vkIdentityCount(u) < 2 {
 		b.sendProfile(ctx, vkID, u)
 		return
 	}
-	next := domain.NotifyVK
-	switch u.NotifyChannel {
-	case domain.NotifyVK:
-		next = domain.NotifyBoth
-	case domain.NotifyBoth:
-		next = domain.NotifyTG
+	cycle := vkNotifyCycle(u)
+
+	cur := 0
+	for i, c := range cycle {
+		if c == u.NotifyChannel {
+			cur = i
+			break
+		}
 	}
+	next := cycle[(cur+1)%len(cycle)]
 	if err := b.userRepo.SetNotifyChannel(ctx, u.ID, next); err != nil {
 		b.log.Error("vk: set notify channel", "err", err)
 		b.send(ctx, vkID, "Произошла ошибка, попробуй позже.", nil)
@@ -632,6 +670,46 @@ func (b *Bot) issueLinkCode(ctx context.Context, vkID int64, u *domain.User) {
 		code, ttlMin), menuKeyboard(false))
 }
 
+// issueLinkCodeMax — выдать код привязки MAX (направление vk2max: код выдан здесь,
+// предъявляется в MAX-боте, который гасит его через LinkMax).
+func (b *Bot) issueLinkCodeMax(ctx context.Context, vkID int64, u *domain.User) {
+	if u.MaxID != nil {
+		b.send(ctx, vkID, "Твой аккаунт уже связан с MAX ✅\n\n"+
+			"Сменить привязку: сначала «Отвязать MAX» в Профиле, потом привязать заново.",
+			nil)
+		return
+	}
+	if b.linkCodes == nil {
+		b.send(ctx, vkID, "Привязка временно недоступна, попробуй позже.", nil)
+		return
+	}
+	code, err := b.linkCodes.Issue(ctx, u.ID, domain.LinkDirVK2Max)
+	if err != nil {
+		if errors.Is(err, domain.ErrLinkCodeRateLimited) {
+			b.send(ctx, vkID, "⏳ Код уже выдан — подожди минуту и попробуй снова, если не успел его использовать.", nil)
+			return
+		}
+		b.log.Error("vk: issue link code max", "err", err)
+		b.send(ctx, vkID, "Произошла ошибка, попробуй позже.", nil)
+		return
+	}
+	ttlMin := int(domain.LinkCodeTTL.Minutes())
+	text := fmt.Sprintf(
+		"🔗 Привязка MAX\n\n"+
+			"1. Открой нашего бота в MAX\n"+
+			"2. Отправь ему сообщение:\n\nпривязать %s\n\n"+
+			"Код действует %d минут и работает один раз. Никому его не пересылай — "+
+			"это ключ к твоему аккаунту.",
+		code, ttlMin)
+	var kb *Keyboard
+	if b.maxBotURL != "" {
+		kb = &Keyboard{Inline: true, Buttons: [][]Button{
+			{LinkButton("Открыть бота в MAX", b.maxBotURL)},
+		}}
+	}
+	b.send(ctx, vkID, text, kb)
+}
+
 // handleUnlinkTG — отвязка Telegram из VK (с подтверждением). VK-идентичность
 // отсюда отвязать нельзя — только Telegram (зеркально TG-боту).
 func (b *Bot) handleUnlinkTG(ctx context.Context, vkID int64, u *domain.User, confirmed bool) {
@@ -657,6 +735,33 @@ func (b *Bot) handleUnlinkTG(ctx context.Context, vkID int64, u *domain.User, co
 	u.TelegramID = 0
 	b.send(ctx, vkID, "✅ Telegram отвязан. Уведомления теперь приходят сюда, в VK.\n\n"+
 		"Привязать снова — кнопка «Привязать Telegram» внизу.", menuKeyboard(false))
+}
+
+// handleUnlinkMax — отвязка MAX из VK (с подтверждением). Зеркало handleUnlinkTG:
+// VK-идентичность отсюда не трогаем, отвязываем только MAX.
+func (b *Bot) handleUnlinkMax(ctx context.Context, vkID int64, u *domain.User, confirmed bool) {
+	if u.MaxID == nil {
+		b.sendProfile(ctx, vkID, u)
+		return
+	}
+	if !confirmed {
+		kb := &Keyboard{Inline: true, Buttons: [][]Button{
+			{TextButton("⚠️ Да, отвязать", fmt.Sprintf(`{"cmd":%q,"k":"confirm"}`, cmdUnlinkMax), ColorSecondary)},
+			{TextButton("◀️ Отмена", buttonPayload(cmdProfile), ColorPrimary)},
+		}}
+		b.send(ctx, vkID, "Отвязать MAX от этого аккаунта?\n\n"+
+			"Подписки и тариф останутся здесь, в VK. MAX-аккаунт начнёт с чистого листа "+
+			"при следующем заходе в MAX-бота.", kb)
+		return
+	}
+	if err := b.userRepo.UnlinkMax(ctx, u.ID); err != nil {
+		b.log.Error("vk: unlink max", "err", err)
+		b.send(ctx, vkID, "Произошла ошибка, попробуй позже.", nil)
+		return
+	}
+	u.MaxID = nil
+	b.send(ctx, vkID, "✅ MAX отвязан.", nil)
+	b.sendProfile(ctx, vkID, u)
 }
 
 func (b *Bot) helpText(u *domain.User) string {

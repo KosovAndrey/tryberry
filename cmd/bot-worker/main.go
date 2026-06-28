@@ -14,10 +14,13 @@ import (
 	tgbotapi "github.com/go-telegram-bot-api/telegram-bot-api/v5"
 	"github.com/joho/godotenv"
 
+	"encoding/json"
+
 	"gitlab.com/KosovAndrey/tryberrybot/internal/config"
 	"gitlab.com/KosovAndrey/tryberrybot/internal/db"
 	"gitlab.com/KosovAndrey/tryberrybot/internal/health"
 	"gitlab.com/KosovAndrey/tryberrybot/internal/kafka"
+	"gitlab.com/KosovAndrey/tryberrybot/internal/max"
 	"gitlab.com/KosovAndrey/tryberrybot/internal/repository/postgres"
 	redisrepo "gitlab.com/KosovAndrey/tryberrybot/internal/repository/redis"
 	"gitlab.com/KosovAndrey/tryberrybot/internal/scraper"
@@ -159,6 +162,7 @@ func run(log *slog.Logger) error {
 			botToken, log, userRepo, subRepo, prodRepo, priceHistoryRepo, registry,
 			searchQueryRepo, searchSubRepo, promoRepo, referralRepo, redisClient, parseAdminIDs(getEnv("ADMIN_IDS", "")),
 			getEnv("VK_BOT_URL", ""),
+			getEnv("MAX_BOT_URL", ""),
 			getEnv("PUBLIC_BASE_URL", "https://tryberry.ru"),
 		)
 	})
@@ -178,6 +182,7 @@ func run(log *slog.Logger) error {
 		vkBot = vk.NewBot(vk.NewClient(vkToken), log, userRepo, subRepo, prodRepo, priceHistoryRepo,
 			searchQueryRepo, searchSubRepo, promoRepo, referralRepo, registry, linkCodes, redisClient,
 			getEnv("VK_BOT_URL", ""),
+			getEnv("MAX_BOT_URL", ""),
 			getEnv("PUBLIC_BASE_URL", "https://tryberry.ru"),
 			parseAdminIDs(getEnv("VK_ADMIN_IDS", "")))
 		vkConsumer := kafka.NewConsumer(kafkaBrokers, "vk-updates", "vk-workers")
@@ -199,9 +204,51 @@ func run(log *slog.Logger) error {
 		}()
 	}
 
+	// ── MAX-консьюмер ────────────────────────────────────────────────────────
+	// Включается при заданном MAX_BOT_TOKEN. max.ru доступен напрямую (как VK).
+	// Поток: api /max/callback → Kafka max-updates (raw JSON) → здесь → HandleUpdate.
+	var maxBot *max.Bot
+	if maxToken := getEnv("MAX_BOT_TOKEN", ""); maxToken != "" {
+		maxClient, err := max.NewClient(maxToken)
+		if err != nil {
+			log.Error("max: init client", "err", err)
+		} else {
+			var linkCodes *redisrepo.LinkCodeStore
+			if redisClient != nil {
+				linkCodes = redisrepo.NewLinkCodeStore(redisClient)
+			}
+			maxBot = max.NewBot(maxClient, log, userRepo, subRepo, prodRepo, priceHistoryRepo,
+				searchQueryRepo, searchSubRepo, promoRepo, referralRepo, registry, linkCodes, redisClient,
+				getEnv("MAX_BOT_URL", ""),
+				getEnv("PUBLIC_BASE_URL", "https://tryberry.ru"),
+				parseAdminIDs(getEnv("MAX_ADMIN_IDS", "")))
+			maxConsumer := kafka.NewConsumer(kafkaBrokers, "max-updates", "max-workers")
+			defer maxConsumer.Close()
+			go func() {
+				log.Info("max-updates consumer started")
+				err := maxConsumer.Run(ctx, func(ctx context.Context, msg kafka.Message) error {
+					raw, err := kafka.Decode[json.RawMessage](msg)
+					if err != nil {
+						log.Error("decode max update", "err", err)
+						return nil // poison pill
+					}
+					upd, err := max.DecodeUpdate(raw)
+					if err != nil {
+						return nil // неподдерживаемый/битый апдейт — пропускаем
+					}
+					maxBot.HandleUpdate(ctx, upd)
+					return nil
+				})
+				if err != nil {
+					log.Error("max-updates consumer stopped", "err", err)
+				}
+			}()
+		}
+	}
+
 	// Оплата ЮKassa: подключает платёжный сервис к витринам и запускает
 	// консьюмер применения (no-op без конфигурации — витрина покажет заглушку).
-	if payConsumer := setupPayments(ctx, log, kafkaBrokers, bot, vkBot,
+	if payConsumer := setupPayments(ctx, log, kafkaBrokers, bot, vkBot, maxBot,
 		paymentRepo, promoRepo, referralRepo, userRepo, billingRepo, discounts); payConsumer != nil {
 		defer payConsumer.Close()
 	}
