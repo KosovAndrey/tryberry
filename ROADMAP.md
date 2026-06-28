@@ -7,6 +7,24 @@
 
 ---
 
+## Журнал (2026-06-28) — MAX-мессенджер: третий канал (паритет VK=TG)
+
+Добавлен MAX (max.ru) наравне с Telegram и VK — ветка `feat/max-messenger`.
+Решения: сразу полный паритет, webhook→Kafka (как VK/TG). Транспорт — официальный
+Go-клиент `max-bot-api-client-go` (обёртка `internal/max/client.go` повторяет API
+клавиатур VK, поэтому фичи — почти 1:1 порт `internal/vk`). Поток: api
+`/max/callback` (секрет `X-Max-Bot-Api-Secret` + подписка webhook на старте) →
+Kafka `max-updates` → bot-worker → `max.Bot.HandleUpdate`; notifier шлёт в MAX по
+`users.notify_channel`. БД: `users.max_id`, notify_channel +`max`/`all`;
+`ResolveNotifyTargets` теперь на 3 идентичности. Привязка: MAX↔TG и MAX↔VK через
+коды (max2tg/max2vk + редим tg2max/vk2max). Перенесены трекинг, balk-track,
+поиск-подписки, тарифы/подписки/оплата, промо/рефералка, email, слияние, админка.
+Сборка/vet/тесты зелёные (вкл. `internal/max` тесты декодера).
+
+**Отложено / дальше:** деплой+боевая проверка (создать бота у MasterBot, env,
+миграция 024), кнопки «Привязать MAX» в TG/VK (реверс-инициация), фото-аттач в
+пуше (пока превью ссылки). Полный разбор — `docs/MAX-INTEGRATION-PLAN.md`.
+
 ## Журнал (2026-06-25, вечер) — WB-бэкфилл истории цен
 
 - **WB отдаёт свою историю цен**, и наш скрейпер уже качал её, выбрасывая всё кроме
