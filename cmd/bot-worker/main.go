@@ -162,6 +162,7 @@ func run(log *slog.Logger) error {
 			botToken, log, userRepo, subRepo, prodRepo, priceHistoryRepo, registry,
 			searchQueryRepo, searchSubRepo, promoRepo, referralRepo, redisClient, parseAdminIDs(getEnv("ADMIN_IDS", "")),
 			getEnv("VK_BOT_URL", ""),
+			getEnv("MAX_BOT_URL", ""),
 			getEnv("PUBLIC_BASE_URL", "https://tryberry.ru"),
 		)
 	})
@@ -181,6 +182,7 @@ func run(log *slog.Logger) error {
 		vkBot = vk.NewBot(vk.NewClient(vkToken), log, userRepo, subRepo, prodRepo, priceHistoryRepo,
 			searchQueryRepo, searchSubRepo, promoRepo, referralRepo, registry, linkCodes, redisClient,
 			getEnv("VK_BOT_URL", ""),
+			getEnv("MAX_BOT_URL", ""),
 			getEnv("PUBLIC_BASE_URL", "https://tryberry.ru"),
 			parseAdminIDs(getEnv("VK_ADMIN_IDS", "")))
 		vkConsumer := kafka.NewConsumer(kafkaBrokers, "vk-updates", "vk-workers")

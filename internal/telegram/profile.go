@@ -37,9 +37,17 @@ func (b *Bot) handleProfile(ctx context.Context, chatID int64, messageID int, us
 
 	if user.VKID != nil {
 		fmt.Fprintf(&sb, "VK: ✅ привязан (id%d)\n", *user.VKID)
-		fmt.Fprintf(&sb, "Уведомления: <b>%s</b>\n", domain.NotifyChannelTitle(user.NotifyChannel))
 	} else {
 		sb.WriteString("VK: ❌ не привязан\n")
+	}
+	if user.MaxID != nil {
+		sb.WriteString("MAX: ✅ привязан\n")
+	} else {
+		sb.WriteString("MAX: ❌ не привязан\n")
+	}
+	// Цикл канала уведомлений доступен при ≥2 идентичностях.
+	if tgIdentityCount(user) >= 2 {
+		fmt.Fprintf(&sb, "Уведомления: <b>%s</b>\n", domain.NotifyChannelTitle(user.NotifyChannel))
 	}
 
 	// Email для чека 54-ФЗ — только когда оплата подключена.
@@ -54,14 +62,27 @@ func (b *Bot) handleProfile(ctx context.Context, chatID int64, messageID int, us
 	}
 
 	var rows [][]tgbotapi.InlineKeyboardButton
+	if tgIdentityCount(user) >= 2 {
+		rows = append(rows, tgbotapi.NewInlineKeyboardRow(
+			tgbotapi.NewInlineKeyboardButtonData("🔔 Уведомления: "+domain.NotifyChannelTitle(user.NotifyChannel), "profile:notify"),
+		))
+	}
 	if user.VKID == nil {
 		rows = append(rows, tgbotapi.NewInlineKeyboardRow(
 			tgbotapi.NewInlineKeyboardButtonData("🔗 Привязать VK", "profile:linkvk"),
 		))
 	} else {
 		rows = append(rows, tgbotapi.NewInlineKeyboardRow(
-			tgbotapi.NewInlineKeyboardButtonData("🔔 Уведомления", "profile:notify"),
 			tgbotapi.NewInlineKeyboardButtonData("🔗 Сменить VK", "profile:relinkvk"),
+		))
+	}
+	if user.MaxID == nil {
+		rows = append(rows, tgbotapi.NewInlineKeyboardRow(
+			tgbotapi.NewInlineKeyboardButtonData("🔗 Привязать MAX", "profile:linkmax"),
+		))
+	} else {
+		rows = append(rows, tgbotapi.NewInlineKeyboardRow(
+			tgbotapi.NewInlineKeyboardButtonData("🔗 Сменить MAX", "profile:relinkmax"),
 		))
 	}
 	if b.payments != nil {
@@ -132,6 +153,83 @@ func (b *Bot) profileLinkVK(ctx context.Context, chatID int64, messageID int, us
 	b.showView(chatID, messageID, text, tgbotapi.NewInlineKeyboardMarkup(rows...))
 }
 
+// profileLinkMax — выдать код привязки MAX (направление tg2max): код выдан здесь,
+// предъявляется в MAX-боте, который гасит его через LinkMax.
+func (b *Bot) profileLinkMax(ctx context.Context, chatID int64, messageID int, user *domain.User, relink bool) {
+	if b.linkCodes == nil {
+		b.showView(chatID, messageID, "Привязка временно недоступна, попробуй позже.", backToMenuKeyboard())
+		return
+	}
+
+	code, err := b.linkCodes.Issue(ctx, user.ID, domain.LinkDirTG2Max)
+	if err != nil {
+		if errors.Is(err, domain.ErrLinkCodeRateLimited) {
+			b.showView(chatID, messageID,
+				"⏳ Код уже выдан — подожди минуту и попробуй снова, если не успел его использовать.",
+				backToMenuKeyboard())
+			return
+		}
+		b.log.Error("issue link code max", "err", err)
+		b.showView(chatID, messageID, "Произошла ошибка, попробуй позже.", backToMenuKeyboard())
+		return
+	}
+
+	// При смене привязки старый MAX отвязываем сразу (как у VK): новый код докажет
+	// владение новым аккаунтом, старый юзер при следующем сообщении создаст пустой профиль.
+	if relink {
+		if err := b.userRepo.UnlinkMax(ctx, user.ID); err != nil {
+			b.log.Error("unlink max", "err", err)
+		}
+	}
+
+	ttlMin := int(domain.LinkCodeTTL.Minutes())
+	text := fmt.Sprintf(
+		"🔗 <b>Привязка MAX</b>\n\n"+
+			"1. Открой нашего бота в MAX\n"+
+			"2. Отправь ему сообщение:\n\n"+
+			"<code>привязать %s</code>\n\n"+
+			"Код действует <b>%d минут</b> и работает один раз. "+
+			"Никому его не пересылай — это ключ к твоему аккаунту.",
+		code, ttlMin)
+
+	var rows [][]tgbotapi.InlineKeyboardButton
+	if b.maxBotURL != "" {
+		rows = append(rows, tgbotapi.NewInlineKeyboardRow(
+			tgbotapi.NewInlineKeyboardButtonURL("Открыть бота в MAX", b.maxBotURL),
+		))
+	}
+	rows = append(rows, tgbotapi.NewInlineKeyboardRow(
+		tgbotapi.NewInlineKeyboardButtonData("👤 В профиль", "menu:profile"),
+		tgbotapi.NewInlineKeyboardButtonData("◀️ В меню", "menu:main"),
+	))
+	b.showView(chatID, messageID, text, tgbotapi.NewInlineKeyboardMarkup(rows...))
+}
+
+// tgNotifyCycle — порядок переключения канала уведомлений: tg → vk → max → all,
+// где присутствуют только привязанные идентичности (TG всегда базовый в этом боте).
+func tgNotifyCycle(u *domain.User) []string {
+	cycle := []string{domain.NotifyTG}
+	if u.VKID != nil {
+		cycle = append(cycle, domain.NotifyVK)
+	}
+	if u.MaxID != nil {
+		cycle = append(cycle, domain.NotifyMax)
+	}
+	return append(cycle, domain.NotifyAll)
+}
+
+// tgIdentityCount — сколько идентичностей привязано (TG всегда есть в этом боте).
+func tgIdentityCount(u *domain.User) int {
+	n := 1
+	if u.VKID != nil {
+		n++
+	}
+	if u.MaxID != nil {
+		n++
+	}
+	return n
+}
+
 // cutLinkPrefix — «привязать XXXX» / «link XXXX» (регистронезависимо) → код.
 func cutLinkPrefix(text string) (string, bool) {
 	lower := strings.ToLower(text)
@@ -177,21 +275,25 @@ func (b *Bot) handleLinkCode(ctx context.Context, chatID int64, user *domain.Use
 		"Подписки и тариф теперь общие с VK. Куда слать уведомления — настраивается в Профиле (/profile).")
 }
 
-// profileToggleNotify — циклически переключить канал уведомлений (доступно,
-// когда привязаны обе платформы): tg → vk → both → tg.
+// profileToggleNotify — циклически переключить канал уведомлений по доступным
+// идентичностям (доступно при ≥2 привязках): tg → vk → max → all → tg, где
+// присутствуют только привязанные каналы. Легаси-both трактуем как начало цикла.
 func (b *Bot) profileToggleNotify(ctx context.Context, chatID int64, messageID int, user *domain.User) {
-	if user.VKID == nil {
+	if tgIdentityCount(user) < 2 {
 		b.handleProfile(ctx, chatID, messageID, user)
 		return
 	}
 
-	next := domain.NotifyVK
-	switch user.NotifyChannel {
-	case domain.NotifyVK:
-		next = domain.NotifyBoth
-	case domain.NotifyBoth:
-		next = domain.NotifyTG
+	cycle := tgNotifyCycle(user)
+
+	cur := 0
+	for i, c := range cycle {
+		if c == user.NotifyChannel {
+			cur = i
+			break
+		}
 	}
+	next := cycle[(cur+1)%len(cycle)]
 
 	if err := b.userRepo.SetNotifyChannel(ctx, user.ID, next); err != nil {
 		b.log.Error("set notify channel", "err", err)

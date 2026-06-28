@@ -101,12 +101,13 @@ merge.go, email.go, checkout_promo.go. Тексты/кнопки берём из
   топик `max-updates`), доставка (notifier), оплата (paymentNotifier в MAX).
 - Привязка: MAX выдаёт max2tg/max2vk; TG/VK редимят их (LinkTG/LinkVK по эмитенту).
   MAX редимит tg2max/vk2max (LinkMax). Цикл каналов уведомлений на 3 идентичности.
+- Реверс-инициация привязки: кнопки «Привязать MAX» в TG (`profile:linkmax`/
+  `profile:relinkmax`, issue tg2max) и VK (`cmdLinkMax`, issue vk2max; «Отвязать MAX» —
+  `cmdUnlinkMax`). TG/VK профиль обобщён на 3 идентичности: статус MAX, выбор канала
+  уведомлений циклом по привязанным (tg/vk/max/all). MAX_BOT_URL прокинут в оба бота.
 - docker-compose (api/bot-worker/notifier) + .env.example.
 
 Отложено (фаст-фоллоу, не блокирует запуск):
-- Реверс-инициация привязки: кнопки «Привязать MAX» в TG (`profile:linkmax`,
-  issue tg2max) и VK (cmdLinkMax, issue vk2max). Сейчас связать можно из MAX
-  (выдать код → предъявить в TG/VK) — это работает; из TG/VK инициировать пока нельзя.
 - Картинка товара в пуше MAX: используем превью ссылки (SendMessagePhoto шлёт текст,
   ссылка разворачивается клиентом). Полноценный фото-аттач (upload по URL) — позже.
 
