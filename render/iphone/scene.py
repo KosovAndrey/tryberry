@@ -27,7 +27,28 @@ CONFIG = {
     "res_y":   1920,
     "samples": 96,          # превью; для финала поднимем
     "use_gpu": True,
+    "rainbow": True,        # DEBUG: каждый материал в свой цвет (для опознания деталей)
 }
+
+# Палитра различимых цветов для debug-радуги (имя, RGB 0-255):
+PALETTE = [
+    ("RED",        (230,  25,  75)), ("GREEN",      ( 60, 180,  75)),
+    ("YELLOW",     (255, 225,  25)), ("BLUE",       (  0, 130, 200)),
+    ("ORANGE",     (245, 130,  48)), ("PURPLE",     (145,  30, 180)),
+    ("CYAN",       ( 70, 240, 240)), ("MAGENTA",    (240,  50, 230)),
+    ("LIME",       (210, 245,  60)), ("PINK",       (250, 150, 200)),
+    ("TEAL",       (  0, 160, 160)), ("LAVENDER",   (200, 180, 255)),
+    ("BROWN",      (170, 110,  40)), ("MINT",       (150, 255, 195)),
+    ("OLIVE",      (160, 160,  20)), ("APRICOT",    (255, 180, 120)),
+    ("NAVY",       ( 50,  80, 200)), ("GREY",       (160, 160, 160)),
+    ("WHITE",      (255, 255, 255)), ("CRIMSON",    (200,   0,  60)),
+    ("SPRING",     (  0, 230, 120)), ("SKYBLUE",    (120, 200, 255)),
+    ("HOTPINK",    (255,  90, 160)), ("CHARTREUSE", (140, 230,  10)),
+    ("GOLD",       (240, 190,  20)), ("TURQUOISE",  ( 40, 220, 200)),
+    ("SALMON",     (250, 130, 110)), ("INDIGO",     ( 90,  40, 200)),
+    ("EMERALD",    ( 20, 200, 100)), ("CORAL",      (255, 120,  80)),
+    ("VIOLET",     (190,  90, 255)), ("AMBER",      (255, 200,  60)),
+]
 WORLD_BG = (0.02, 0.012, 0.02, 1.0)   # тёмный berry-фон под цвет сайта
 
 # Наш плам для корпуса (sRGB 0..1). Подбираем по скриншоту.
@@ -278,6 +299,53 @@ def recolor_to_plum():
         print(f"[recolor] не записал materials.txt: {e}")
 
 
+def rainbow_materials():
+    """DEBUG: каждый материал → свой светящийся цвет из PALETTE. Легенда (цвет →
+    материал → меши) в out/rainbow_map.txt. Порядок — по имени материала (стабильно)."""
+    usage = {}
+    for o in bpy.data.objects:
+        if o.type != "MESH":
+            continue
+        for s in o.material_slots:
+            if s.material:
+                usage.setdefault(s.material.name, []).append(
+                    (o.name, tuple(round(d, 3) for d in o.dimensions)))
+
+    mats = sorted(bpy.data.materials, key=lambda m: m.name)
+    lines = ["--- RAINBOW MAP (ЦВЕТ -> материал -> меши) ---"]
+    for i, mat in enumerate(mats):
+        p = get_principled(mat)
+        if not p:
+            continue
+        cname, rgb = PALETTE[i % len(PALETTE)]
+        col = srgb_to_linear([c / 255 for c in rgb]) + [1.0]
+        bc = p.inputs.get("Base Color")
+        if bc:
+            unlink_base_color(mat, bc)
+            bc.default_value = (0.0, 0.0, 0.0, 1.0)
+        em = p.inputs.get("Emission Color") or p.inputs.get("Emission")
+        if em:
+            for link in list(mat.node_tree.links):
+                if link.to_socket == em:
+                    mat.node_tree.links.remove(link)
+            em.default_value = col
+        if "Emission Strength" in p.inputs:
+            p.inputs["Emission Strength"].default_value = 1.0
+        lines.append(f"{cname:<11} -> {mat.name}")
+        for mname, dims in usage.get(mat.name, [])[:6]:
+            lines.append(f"      {mname} {dims}")
+
+    report = "\n".join(lines)
+    print(report)
+    try:
+        path = os.path.join(OUT_DIR, "rainbow_map.txt")
+        with open(path, "w", encoding="utf-8") as f:
+            f.write(report)
+        print(f"[rainbow] легенда: {path}")
+    except Exception as e:
+        print(f"[rainbow] не записал rainbow_map.txt: {e}")
+
+
 def print_inventory(meshes):
     print("=" * 70)
     print("=== KIT INVENTORY ===")
@@ -381,7 +449,8 @@ def setup_render():
     sc.render.resolution_x = CONFIG["res_x"]
     sc.render.resolution_y = CONFIG["res_y"]
     sc.render.image_settings.file_format = "PNG"
-    sc.view_settings.view_transform = "AgX"
+    # в радуге — Standard, чтобы цвета были чистые и различимые; иначе AgX
+    sc.view_settings.view_transform = "Standard" if CONFIG.get("rainbow") else "AgX"
     if CONFIG["use_gpu"]:
         try_enable_gpu()
 
@@ -399,7 +468,10 @@ def main():
         print("[scene] !!! модель импортировалась без мешей — проверь файл.")
         return
     print_inventory(meshes)
-    recolor_to_plum()
+    if CONFIG.get("rainbow"):
+        rainbow_materials()
+    else:
+        recolor_to_plum()
 
     center, size = world_bounds(meshes)
     print(f"[scene] центр={tuple(round(c,3) for c in center)} размер={round(size,3)}")
