@@ -68,3 +68,10 @@ tmp/
 /scheduler
 /search-worker
 /reseller-worker
+
+# Blender render outputs / heavy 3D assets (только финальное видео в web/ коммитим)
+render/iphone/out/
+render/**/*.blend
+render/**/*.blend1
+render/**/*.glb
+render/**/*.fbx
