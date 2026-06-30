@@ -8,7 +8,8 @@ scene.py — импорт реальной модели айфона из assets
   4. ставит тёмный фон + солнечный 3-точечный свет + камеру под модель;
   5. рендерит в render/iphone/out/.
 
-От тебя: Pull → Run Script → F12 → пришли скриншот.
+От тебя: Pull → Run Script → дождись двух рендеров → пришли out/still_front.png
+и out/still_back.png. (Run сам рендерит оба вида, F12 не нужен.)
 ВКЛЮЧИ КОНСОЛЬ: Window → Toggle System Console (там инвентарь и логи).
 
 Перекрас в наш цвет и логотип добавлю следующим шагом, по твоему скриншоту.
@@ -102,10 +103,58 @@ def get_principled(mat):
     return None
 
 
-def is_coppery(rgb):
-    """Оранжево-медный базовый цвет: R доминирует, синего мало."""
+def is_warm(rgb):
+    """Тёплый цвет (жёлтый/оранжевый/медный): синий — самый малый канал."""
     r, g, b = rgb[0], rgb[1], rgb[2]
-    return r > 0.18 and r > g > b and (r - b) > 0.08
+    return r > 0.2 and b <= g and b <= r and (r - b) > 0.12
+
+
+def base_image(p):
+    """Идём от входа Base Color вглубь к первой Image Texture."""
+    bc = p.inputs.get("Base Color")
+    if not bc or not bc.is_linked:
+        return None
+    seen, stack = set(), [l.from_node for l in bc.links]
+    while stack:
+        n = stack.pop()
+        if n in seen:
+            continue
+        seen.add(n)
+        if n.type == "TEX_IMAGE" and n.image:
+            return n.image
+        for inp in n.inputs:
+            for l in inp.links:
+                stack.append(l.from_node)
+    return None
+
+
+def avg_image_color(img):
+    """Средний цвет текстуры (разреженная выборка через numpy)."""
+    try:
+        import numpy as np
+        n = len(img.pixels)
+        if not n or n % 4:
+            return None
+        a = np.empty(n, dtype=np.float32)
+        img.pixels.foreach_get(a)
+        a = a.reshape(-1, 4)
+        step = max(1, a.shape[0] // 4000)
+        s = a[::step, :3].mean(axis=0)
+        return (float(s[0]), float(s[1]), float(s[2]))
+    except Exception as e:
+        print(f"  [avg] {getattr(img,'name','?')}: {e}")
+        return None
+
+
+def effective_base(p):
+    """Эффективный базовый цвет: плоский, либо средний по текстуре."""
+    bc = p.inputs.get("Base Color")
+    if not bc:
+        return None
+    if not bc.is_linked:
+        return tuple(bc.default_value[:3])
+    img = base_image(p)
+    return avg_image_color(img) if img else None
 
 
 def unlink_base_color(mat, bc):
@@ -128,17 +177,17 @@ def recolor_to_plum():
             print(f"  {mat.name}: нет Principled BSDF")
             continue
         bc = p.inputs.get("Base Color")
-        col = tuple(round(c, 3) for c in bc.default_value[:3]) if bc else None
         textured = bool(bc and bc.is_linked)
+        eff = effective_base(p)                  # плоский ИЛИ средний по текстуре
+        effr = tuple(round(c, 3) for c in eff) if eff else None
         metal = round(p.inputs["Metallic"].default_value, 2) if "Metallic" in p.inputs else "-"
-        rough = round(p.inputs["Roughness"].default_value, 2) if "Roughness" in p.inputs else "-"
-        print(f"  {mat.name}: base={col} tex={textured} metal={metal} rough={rough}")
+        print(f"  {mat.name}: eff={effr} tex={textured} metal={metal} warm={bool(eff and is_warm(eff))}")
 
         if mat.name in SCREEN_MATS:
             continue
         force = mat.name in FORCE_BODY_MATS
-        flat_orange = bool(bc and not textured and is_coppery(bc.default_value))
-        if not (force or flat_orange):
+        warm = bool(eff and is_warm(eff))        # жёлтый/оранжевый/медный — корпус/кнопки
+        if not (force or warm):
             continue
 
         unlink_base_color(mat, bc)             # снять текстуру цвета (если была)
@@ -181,23 +230,26 @@ def world_bounds(meshes):
     return center, size
 
 
-def setup_camera(center, size):
+def create_camera():
     cam_data = bpy.data.cameras.new("HeroCam")
     cam_data.lens = 85
     cam = bpy.data.objects.new("HeroCam", cam_data)
     bpy.context.collection.objects.link(cam)
-    # 3/4 ракурс; какая сторона «лицо/спина» — разберём по скриншоту
-    offset = Vector((0.9, -1.0, 0.35)).normalized() * size * 3.2
-    cam.location = center + offset
-
     tgt = bpy.data.objects.new("CamTarget", None)
-    tgt.location = center
     bpy.context.collection.objects.link(tgt)
     c = cam.constraints.new("TRACK_TO")
     c.target = tgt
     c.track_axis = "TRACK_NEGATIVE_Z"
     c.up_axis = "UP_Y"
     bpy.context.scene.camera = cam
+    return cam, tgt
+
+
+def place_camera(cam, tgt, center, size, view):
+    # front — как на первом рендере; back — противоположная сторона (видно крышку)
+    d = Vector((0.9, -1.0, 0.35)) if view == "front" else Vector((-0.9, 1.0, 0.35))
+    cam.location = center + d.normalized() * size * 3.2
+    tgt.location = center
 
 
 def add_sun(name, rot, energy):
@@ -255,9 +307,6 @@ def setup_render():
     sc.view_settings.view_transform = "AgX"
     if CONFIG["use_gpu"]:
         try_enable_gpu()
-    out = os.path.join(OUT_DIR, "still.png")
-    sc.render.filepath = out
-    return out
 
 
 # ──────────────────────────── MAIN ────────────────────────────
@@ -279,13 +328,18 @@ def main():
     print(f"[scene] центр={tuple(round(c,3) for c in center)} размер={round(size,3)}")
     setup_world()
     setup_lights()
-    setup_camera(center, size)
-    out = setup_render()
+    setup_render()
+    cam, tgt = create_camera()
 
-    if bpy.app.background:
+    # рендерим сразу оба вида — front и back — за один Run
+    sc = bpy.context.scene
+    for view in ("front", "back"):
+        place_camera(cam, tgt, center, size, view)
+        out = os.path.join(OUT_DIR, f"still_{view}.png")
+        sc.render.filepath = out
+        print(f"[scene] рендерю {view}…")
         bpy.ops.render.render(write_still=True)
-        print(f"[scene] рендер сохранён: {out}")
-    else:
-        print(f"[scene] сцена собрана. Жми F12 — рендер уйдёт в {out}")
+        print(f"[scene]   готово: {out}")
+    print("[scene] оба вида готовы: out/still_front.png и out/still_back.png")
 
 main()
