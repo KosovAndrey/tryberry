@@ -184,39 +184,59 @@ def unlink_base_color(mat, bc):
 
 
 def recolor_to_plum():
-    """Корпусные материалы → плоский плам (текстуру цвета отцепляем).
-    Печатает диагностику — по ней добиваем оставшиеся оранжевые детали."""
+    """Корпусные/тёплые материалы → плоский плам. Отчёт по каждому материалу
+    (цвет, тёплый ли, перекрашен ли, какие меши используют) пишем в out/materials.txt."""
     plum = srgb_to_linear(PLUM_SRGB) + [1.0]
-    print("--- MATERIAL DIAGNOSTICS (имя | base | textured | metal | rough) ---")
+
+    usage = {}                                   # материал -> [(меш, габариты)]
+    for o in bpy.data.objects:
+        if o.type != "MESH":
+            continue
+        for s in o.material_slots:
+            if s.material:
+                usage.setdefault(s.material.name, []).append(
+                    (o.name, tuple(round(d, 3) for d in o.dimensions)))
+
+    lines = ["--- MATERIAL DIAGNOSTICS ---"]
     changed = []
     for mat in bpy.data.materials:
         p = get_principled(mat)
         if not p:
-            print(f"  {mat.name}: нет Principled BSDF")
+            lines.append(f"{mat.name}: нет Principled BSDF")
             continue
         bc = p.inputs.get("Base Color")
         textured = bool(bc and bc.is_linked)
         eff = effective_base(p, mat)             # плоский ИЛИ средний по текстуре
         effr = tuple(round(c, 3) for c in eff) if eff else None
         metal = round(p.inputs["Metallic"].default_value, 2) if "Metallic" in p.inputs else "-"
-        print(f"  {mat.name}: eff={effr} tex={textured} metal={metal} warm={bool(eff and is_warm(eff))}")
+        warm = bool(eff and is_warm(eff))
+        do = (mat.name in FORCE_BODY_MATS or warm) and mat.name not in SCREEN_MATS
 
-        if mat.name in SCREEN_MATS:
-            continue
-        force = mat.name in FORCE_BODY_MATS
-        warm = bool(eff and is_warm(eff))        # жёлтый/оранжевый/медный — корпус/кнопки
-        if not (force or warm):
-            continue
+        if do:
+            unlink_base_color(mat, bc)
+            bc.default_value = plum
+            if "Metallic" in p.inputs and p.inputs["Metallic"].default_value < 0.5:
+                p.inputs["Metallic"].default_value = 0.85
+            if "Roughness" in p.inputs:
+                r = p.inputs["Roughness"].default_value or 0.3
+                p.inputs["Roughness"].default_value = min(0.45, max(0.15, r))
+            changed.append(mat.name)
 
-        unlink_base_color(mat, bc)             # снять текстуру цвета (если была)
-        bc.default_value = plum                # плоский плам
-        if "Metallic" in p.inputs and p.inputs["Metallic"].default_value < 0.5:
-            p.inputs["Metallic"].default_value = 0.85   # анодированный металл
-        if "Roughness" in p.inputs:
-            r = p.inputs["Roughness"].default_value or 0.3
-            p.inputs["Roughness"].default_value = min(0.45, max(0.15, r))
-        changed.append(mat.name)
-    print(f"[recolor] перекрашены в плам: {changed}")
+        lines.append(f"{mat.name}: eff={effr} tex={textured} metal={metal} "
+                     f"warm={warm} recolored={'YES' if do else 'no'}")
+        for mname, dims in usage.get(mat.name, [])[:6]:
+            lines.append(f"    used: {mname} {dims}")
+
+    lines.append(f"[recolor] перекрашены: {changed}")
+    report = "\n".join(lines)
+    print(report)
+    try:
+        path = os.path.join(OUT_DIR, "materials.txt")
+        with open(path, "w", encoding="utf-8") as f:
+            f.write(report)
+        print(f"[recolor] отчёт по материалам: {path}")
+    except Exception as e:
+        print(f"[recolor] не записал materials.txt: {e}")
 
 
 def print_inventory(meshes):
