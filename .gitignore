@@ -71,7 +71,8 @@ tmp/
 
 # Blender render outputs / heavy 3D assets (только финальное видео в web/ коммитим)
 render/iphone/out/
-render/**/*.blend
-render/**/*.blend1
-render/**/*.glb
-render/**/*.fbx
+render/iphone/assets/
+*.blend
+*.blend1
+*.glb
+*.fbx
