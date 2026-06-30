@@ -41,11 +41,11 @@ FORCE_BODY_MATS = {
     "YQFhPSFSryEqJMp",   # кнопки + планка
     "iAKEWdNafBldSCV",   # боковая кнопка
     "PJgHvfOhNXkxvzq",   # боковая кнопка
-    "yPEFElLJTRhfWfw",   # яблоко (потом заменим на наш логотип)
-    "awYxKfiOpRgQIxD",   # яблоко/инкрустация
     "ieDmCkHnOnSIOcm",   # action-кнопка (обводка)
     "hiWLrxfkqoGxruc",   # action-кнопка (обводка)
 }
+# Чёрные: dynamic island (спереди) + яблоко (сзади, заменим на наш логотип):
+BLACK_MATS = {"yPEFElLJTRhfWfw", "awYxKfiOpRgQIxD"}
 # Только передний дисплей не трогаем (заменим UI отдельным шагом):
 SCREEN_MATS = {"BsXHDwLKqtDOfrW"}
 
@@ -225,16 +225,31 @@ def recolor_to_plum():
         effr = tuple(round(c, 3) for c in eff) if eff else None
         metal = round(p.inputs["Metallic"].default_value, 2) if "Metallic" in p.inputs else "-"
         warm = bool(eff and is_warm(eff))
-        do = (mat.name in FORCE_BODY_MATS or warm) and mat.name not in SCREEN_MATS
+        is_black = mat.name in BLACK_MATS
+        if mat.name in SCREEN_MATS:
+            target = None
+        elif is_black:
+            target = [0.0, 0.0, 0.0, 1.0]
+        elif mat.name in FORCE_BODY_MATS or warm:
+            target = plum
+        else:
+            target = None
+        do = target is not None
 
         if do:
             unlink_base_color(mat, bc)
-            bc.default_value = plum
-            if "Metallic" in p.inputs and p.inputs["Metallic"].default_value < 0.5:
-                p.inputs["Metallic"].default_value = 0.85
+            bc.default_value = target
+            if "Metallic" in p.inputs:
+                if is_black:
+                    p.inputs["Metallic"].default_value = 0.0
+                elif p.inputs["Metallic"].default_value < 0.5:
+                    p.inputs["Metallic"].default_value = 0.85
             if "Roughness" in p.inputs:
-                r = p.inputs["Roughness"].default_value or 0.3
-                p.inputs["Roughness"].default_value = min(0.45, max(0.15, r))
+                if is_black:
+                    p.inputs["Roughness"].default_value = 0.15     # глянцевое чёрное стекло
+                else:
+                    r = p.inputs["Roughness"].default_value or 0.3
+                    p.inputs["Roughness"].default_value = min(0.45, max(0.15, r))
             # гасим оранжевое свечение, если цвет шёл из emission
             em = p.inputs.get("Emission Color") or p.inputs.get("Emission")
             if em:
