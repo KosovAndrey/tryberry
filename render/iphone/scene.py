@@ -32,10 +32,10 @@ WORLD_BG = (0.02, 0.012, 0.02, 1.0)   # тёмный berry-фон под цве�
 
 # Наш плам для корпуса (sRGB 0..1). Подбираем по скриншоту.
 PLUM_SRGB = (0.37, 0.086, 0.25)       # ~#5e1640 — глубокий berry/plum
-# Материалы корпуса — красим принудительно (рамка/задняя панель, по инвентарю):
-FORCE_BODY_MATS = {"SLmJkLdkhbbuEfG", "sJxAokqqlZYuwzy"}
-# Экран не трогаем (стекло + заставка) — займёмся им отдельным шагом:
-SCREEN_MATS = {"BsXHDwLKqtDOfrW", "SMUhrjUPCjJkPUK"}
+# Материалы корпуса — красим принудительно (рамка + задняя панель, по инвентарю):
+FORCE_BODY_MATS = {"SLmJkLdkhbbuEfG", "sJxAokqqlZYuwzy", "SMUhrjUPCjJkPUK"}
+# Только передний дисплей не трогаем (заменим UI отдельным шагом):
+SCREEN_MATS = {"BsXHDwLKqtDOfrW"}
 
 # Если автопоиск не находит модель — впиши путь вручную:
 MODEL_PATH = r""   # напр. r"C:\...\render\iphone\assets\...\scene.gltf"
