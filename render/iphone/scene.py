@@ -106,35 +106,43 @@ def get_principled(mat):
 def is_warm(rgb):
     """Тёплый цвет (жёлтый/оранжевый/медный): синий — самый малый канал."""
     r, g, b = rgb[0], rgb[1], rgb[2]
-    return r > 0.2 and b <= g and b <= r and (r - b) > 0.12
+    return r > 0.12 and b <= g and b <= r and (r - b) > 0.06
 
 
-def base_image(p):
-    """Идём от входа Base Color вглубь к первой Image Texture."""
+def base_image(p, mat):
+    """Image Texture со входа Base Color; если не нашли — любая в материале."""
     bc = p.inputs.get("Base Color")
-    if not bc or not bc.is_linked:
-        return None
-    seen, stack = set(), [l.from_node for l in bc.links]
-    while stack:
-        n = stack.pop()
-        if n in seen:
-            continue
-        seen.add(n)
+    if bc and bc.is_linked:
+        seen, stack = set(), [l.from_node for l in bc.links]
+        while stack:
+            n = stack.pop()
+            if n in seen:
+                continue
+            seen.add(n)
+            if n.type == "TEX_IMAGE" and n.image:
+                return n.image
+            for inp in n.inputs:
+                for l in inp.links:
+                    stack.append(l.from_node)
+    for n in mat.node_tree.nodes:               # фолбэк: любая картинка в материале
         if n.type == "TEX_IMAGE" and n.image:
             return n.image
-        for inp in n.inputs:
-            for l in inp.links:
-                stack.append(l.from_node)
     return None
 
 
 def avg_image_color(img):
-    """Средний цвет текстуры (разреженная выборка через numpy)."""
+    """Средний цвет текстуры. numpy → если упадёт, чистый Python-фолбэк."""
+    name = getattr(img, "name", "?")
+    try:
+        n = len(img.pixels)
+    except Exception as e:
+        print(f"  [avg] {name}: pixels недоступны ({e})")
+        return None
+    if not n or n % 4:
+        print(f"  [avg] {name}: пустые/битые pixels (len={n})")
+        return None
     try:
         import numpy as np
-        n = len(img.pixels)
-        if not n or n % 4:
-            return None
         a = np.empty(n, dtype=np.float32)
         img.pixels.foreach_get(a)
         a = a.reshape(-1, 4)
@@ -142,18 +150,28 @@ def avg_image_color(img):
         s = a[::step, :3].mean(axis=0)
         return (float(s[0]), float(s[1]), float(s[2]))
     except Exception as e:
-        print(f"  [avg] {getattr(img,'name','?')}: {e}")
+        print(f"  [avg] {name}: numpy не сработал ({e}), пробую Python")
+    try:
+        px = img.pixels[:]                       # копия (может быть медленно)
+        npx = len(px) // 4
+        step = max(1, npx // 2000)
+        rs = gs = bs = c = 0.0
+        for i in range(0, npx, step):
+            rs += px[i*4]; gs += px[i*4+1]; bs += px[i*4+2]; c += 1
+        return (rs/c, gs/c, bs/c) if c else None
+    except Exception as e:
+        print(f"  [avg] {name}: Python-фолбэк тоже упал ({e})")
         return None
 
 
-def effective_base(p):
+def effective_base(p, mat):
     """Эффективный базовый цвет: плоский, либо средний по текстуре."""
     bc = p.inputs.get("Base Color")
     if not bc:
         return None
     if not bc.is_linked:
         return tuple(bc.default_value[:3])
-    img = base_image(p)
+    img = base_image(p, mat)
     return avg_image_color(img) if img else None
 
 
@@ -178,7 +196,7 @@ def recolor_to_plum():
             continue
         bc = p.inputs.get("Base Color")
         textured = bool(bc and bc.is_linked)
-        eff = effective_base(p)                  # плоский ИЛИ средний по текстуре
+        eff = effective_base(p, mat)             # плоский ИЛИ средний по текстуре
         effr = tuple(round(c, 3) for c in eff) if eff else None
         metal = round(p.inputs["Metallic"].default_value, 2) if "Metallic" in p.inputs else "-"
         print(f"  {mat.name}: eff={effr} tex={textured} metal={metal} warm={bool(eff and is_warm(eff))}")
