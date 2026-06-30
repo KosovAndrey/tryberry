@@ -1,68 +1,76 @@
 """
-inspect_kit.py — снимает «инвентарь» скачанного кита айфона, чтобы Claude знал,
-как называются объекты/материалы внутри, и написал подгрузку в основную сцену.
+inspect_kit.py — снимает «инвентарь» кита айфона (имена объектов/материалов/
+коллекций), чтобы Claude написал подгрузку реальной модели в основную сцену.
 
-Что делает:
-  1. Ищет первый .blend в render/iphone/assets/.
-  2. Открывает его.
-  3. Пишет список объектов (тип, габариты, материалы), всех материалов и коллекций
-     в render/iphone/out/kit_inventory.txt и в консоль.
+Запуск в Blender: Scripting → Open inspect_kit.py → Run Script.
+ВКЛЮЧИ КОНСОЛЬ: Window → Toggle System Console — там будет весь вывод,
+даже если файл потеряется.
 
-ВАЖНО: скрипт ОТКРЫВАЕТ файл кита (заменяет текущую сцену) — это нормально,
-он только для осмотра. Запускать на чистом Blender, ничего своего не потеряешь.
-
-Запуск:
-  GUI:      Scripting → Open inspect_kit.py → Run Script
-  Headless: blender --background --python render/iphone/inspect_kit.py
-Потом пришли мне содержимое out/kit_inventory.txt (или запушь его).
+Если автопоиск не находит кит — впиши путь вручную в KIT_PATH ниже.
 """
 
 import os
 import glob
 import bpy
 
-# пути считаем ДО open_mainfile (после открытия data-блоки заменятся)
-try:
-    HERE = os.path.dirname(os.path.realpath(__file__))
-except NameError:
-    HERE = os.path.dirname(bpy.data.filepath) or os.getcwd()
-
-ROOT     = os.path.normpath(os.path.join(HERE, "..", ".."))
-ASSETS   = os.path.join(ROOT, "render", "iphone", "assets")
-OUT_DIR  = os.path.join(ROOT, "render", "iphone", "out")
-# инвентарь пишем в отслеживаемый гитом файл — чтобы можно было просто запушить
-INV_PATH = os.path.join(ROOT, "render", "iphone", "kit_inventory.txt")
-os.makedirs(ASSETS, exist_ok=True)
-os.makedirs(OUT_DIR, exist_ok=True)
+# ─────────────────────────────────────────────────────────────
+# ВАРИАНТ «наверняка»: впиши сюда полный путь к модели и не парься.
+# Пример: r"C:\Users\Andrey\tryberrybot\render\iphone\assets\cleaned.blend"
+KIT_PATH = r""
+# ─────────────────────────────────────────────────────────────
 
 
-# если в ките несколько .blend — можно жёстко указать имя нужного тут:
-KIT_FILE = ""   # напр. "cleaned.blend"; пусто = автовыбор
+def script_dir():
+    """Папка этого скрипта. В Text Editor __file__ нет — берём из text-блока."""
+    try:
+        for t in bpy.data.texts:
+            if t.filepath and t.filepath.lower().endswith("inspect_kit.py"):
+                return os.path.dirname(bpy.path.abspath(t.filepath))
+    except Exception:
+        pass
+    try:
+        return os.path.dirname(os.path.realpath(__file__))   # headless-режим
+    except NameError:
+        return None
 
 
-def pick_kit(blends):
-    """Выбираем модель: вручную (KIT_FILE) → отсев thumbnailer → самый крупный файл."""
-    if KIT_FILE:
-        for b in blends:
-            if os.path.basename(b).lower() == KIT_FILE.lower():
-                return b
+def resolve_kit(sdir):
+    """Находим .blend модели: ручной KIT_PATH → автопоиск в assets/."""
+    if KIT_PATH and os.path.exists(KIT_PATH):
+        return KIT_PATH
+    if KIT_PATH:
+        print(f"[inspect] !!! KIT_PATH задан, но файла нет: {KIT_PATH}")
+    if not sdir:
+        return None
+    assets = os.path.join(sdir, "assets")
+    blends = sorted(glob.glob(os.path.join(assets, "**", "*.blend"), recursive=True))
+    print(f"[inspect] ищу .blend в: {assets}")
+    for b in blends:
+        print(f"    {os.path.getsize(b)//1024:>8} KB  {b}")
+    if not blends:
+        return None
     real = [b for b in blends if "thumbnail" not in os.path.basename(b).lower()]
-    candidates = real or blends
-    return max(candidates, key=lambda b: os.path.getsize(b))   # модель обычно тяжелее
+    cand = real or blends
+    return max(cand, key=os.path.getsize)        # модель обычно самая тяжёлая
 
 
 def main():
-    blends = sorted(glob.glob(os.path.join(ASSETS, "**", "*.blend"), recursive=True))
-    if not blends:
-        print(f"[inspect] !!! нет .blend в {ASSETS}")
-        print("[inspect] положи туда .blend кита и запусти снова.")
+    sdir = script_dir()
+    kit = resolve_kit(sdir)
+
+    if not kit:
+        print("\n[inspect] !!! Кит не найден.")
+        print("[inspect] Положи cleaned.blend (+ текстуры) в render/iphone/assets/")
+        print("[inspect] ЛИБО впиши полный путь в KIT_PATH вверху скрипта.")
+        if sdir:
+            print(f"[inspect] (искал относительно: {sdir})")
         return
 
-    print("[inspect] найденные .blend:")
-    for b in blends:
-        print(f"    {os.path.getsize(b)//1024:>8} KB  {b}")
-    kit = pick_kit(blends)
-    print(f"[inspect] выбрана модель: {kit}")
+    # путь под инвентарь считаем ДО открытия кита (open_mainfile сотрёт data-блоки)
+    out_path = os.path.join(sdir, "kit_inventory.txt") if sdir \
+        else os.path.join(os.path.dirname(kit), "kit_inventory.txt")
+
+    print(f"[inspect] открываю модель: {kit}")
     bpy.ops.wm.open_mainfile(filepath=kit)
 
     lines = []
@@ -70,8 +78,10 @@ def main():
         lines.append(s)
         print(s)
 
-    w(f"KIT FILE: {kit}")
     w("=" * 70)
+    w("=== KIT INVENTORY (скопируй весь блок ниже и пришли Claude) ===")
+    w("=" * 70)
+    w(f"KIT FILE: {kit}")
 
     w("\n## OBJECTS (имя | тип | габариты XYZ | материалы)")
     for o in sorted(bpy.data.objects, key=lambda x: x.name):
@@ -84,21 +94,25 @@ def main():
     for m in sorted(bpy.data.materials, key=lambda x: x.name):
         w(f"  - {m.name}")
 
-    w("\n## COLLECTIONS (иерархия объектов)")
+    w("\n## COLLECTIONS")
     for c in sorted(bpy.data.collections, key=lambda x: x.name):
-        objs = [o.name for o in c.objects]
-        w(f"  - {c.name}: {objs}")
+        w(f"  - {c.name}: {[o.name for o in c.objects]}")
 
-    w("\n## SCENES / CAMERAS")
-    for sc in bpy.data.scenes:
-        cam = sc.camera.name if sc.camera else None
-        w(f"  - scene '{sc.name}' camera={cam}")
+    w("\n## CAMERAS / LIGHTS")
     for cam in bpy.data.cameras:
-        w(f"  - camera-data: {cam.name}")
+        w(f"  - camera: {cam.name}")
+    for la in bpy.data.lights:
+        w(f"  - light: {la.name} ({la.type})")
+    w("=" * 70)
 
-    with open(INV_PATH, "w", encoding="utf-8") as f:
-        f.write("\n".join(lines))
-    print(f"\n[inspect] инвентарь сохранён: {INV_PATH}")
-    print("[inspect] пришли его содержимое Claude.")
+    try:
+        with open(out_path, "w", encoding="utf-8") as f:
+            f.write("\n".join(lines))
+        print(f"\n[inspect] сохранено в файл: {out_path}")
+    except Exception as e:
+        print(f"\n[inspect] файл записать не вышло ({e}), но текст выше в консоли — копируй оттуда.")
+
+    print("[inspect] Готово. Пришли Claude блок KIT INVENTORY (из файла или консоли).")
+
 
 main()
