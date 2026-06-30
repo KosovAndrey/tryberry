@@ -267,10 +267,8 @@ def recolor_to_plum():
             unlink_base_color(mat, bc)
             bc.default_value = target
             if "Metallic" in p.inputs:
-                if is_black:
-                    p.inputs["Metallic"].default_value = 0.0
-                elif p.inputs["Metallic"].default_value < 0.5:
-                    p.inputs["Metallic"].default_value = 0.85
+                # плам — анодированный металл 0.85 (металл=1 выглядел серым зеркалом)
+                p.inputs["Metallic"].default_value = 0.0 if is_black else 0.85
             if "Roughness" in p.inputs:
                 if is_black:
                     p.inputs["Roughness"].default_value = 0.15     # глянцевое чёрное стекло
