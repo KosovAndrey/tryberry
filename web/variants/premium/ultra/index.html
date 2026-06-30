@@ -79,9 +79,10 @@ nav.scrolled{
 .nav-links{display:flex;align-items:center;gap:34px;font-size:.92rem}
 .nav-links a{color:var(--cream);opacity:.78;transition:opacity .25s}
 .nav-links a:hover{opacity:1}
-.nav-links a.nav-cta{
+.nav-links .nav-cta{
   font-family:var(--font-body);font-weight:600;font-size:.9rem;padding:9px 20px;border-radius:100px;
   background:var(--cream);color:var(--ink);opacity:1;transition:transform .3s var(--ease),box-shadow .3s;
+  border:0;cursor:pointer;
 }
 .nav-cta:hover{transform:translateY(-2px);box-shadow:0 10px 30px rgba(255,93,143,.3)}
 .burger{display:none;background:none;border:0;color:var(--cream);cursor:pointer;width:34px;height:34px;position:relative;z-index:1102;padding:7px 5px}
@@ -330,6 +331,9 @@ section{position:relative}
 .ccard .val{font-family:var(--font-display);font-weight:500;font-size:1.25rem;letter-spacing:-.01em;color:var(--ink)}
 .ccard .val a{color:var(--berry-deep)}
 .ccard .sub{font-size:.88rem;color:var(--muted-light);margin-top:8px}
+.ccard .links{display:flex;flex-direction:column;gap:7px}
+.ccard .links a{font-family:var(--font-display);font-weight:500;font-size:1.12rem;letter-spacing:-.01em;color:var(--berry-deep);transition:color .2s}
+.ccard .links a:hover{color:var(--berry)}
 
 /* ---------- footer ---------- */
 footer{background:var(--plum-deep);padding:70px 0 40px;border-top:1px solid var(--line)}
@@ -490,7 +494,7 @@ footer{background:var(--plum-deep);padding:70px 0 40px;border-top:1px solid var(
       <a href="#payment">Оплата</a>
       <a href="#faq">Вопросы</a>
       <a href="#contacts">Контакты</a>
-      <a href="https://t.me/TryBerryBot" target="_blank" rel="noopener" class="nav-cta">Открыть в Telegram</a>
+      <button type="button" class="nav-cta" id="navStart">Начать бесплатно</button>
     </div>
     <button class="burger" id="burger" aria-label="Меню"><span></span><span></span><span></span></button>
   </div>
@@ -502,7 +506,7 @@ footer{background:var(--plum-deep);padding:70px 0 40px;border-top:1px solid var(
   <div class="hero-bg"><div class="glow g1"></div><div class="glow g2"></div></div>
   <div class="wrap">
     <div>
-      <span class="eyebrow" data-reveal>Telegram · VK · MAX · бот для отслеживания цен</span>
+      <span class="eyebrow" data-reveal>Telegram • ВКонтакте • MAX</span>
       <h1><span class="kline"><span style="--d:.08s">Проверять цены</span></span><span class="kline"><span style="--d:.22s"><span class="accent">вручную</span></span></span><span class="kline"><span style="--d:.36s">больше не нужно.</span></span></h1>
       <p class="lead" data-reveal style="--d:.15s">Добавьте товар или поисковый запрос, а TryBerry автоматически <b style="color:var(--rose);font-weight:600">проследит</b> за изменением цены, <b style="color:var(--rose);font-weight:600">сообщит</b>, когда цена достигнет нужной отметки, и <b style="color:var(--rose);font-weight:600">покажет</b> динамику на графике.</p>
       <div class="hero-actions" data-reveal style="--d:.25s">
@@ -840,12 +844,19 @@ footer{background:var(--plum-deep);padding:70px 0 40px;border-top:1px solid var(
     <div class="contact-grid">
       <div class="ccard" data-reveal>
         <div class="lab">Бот</div>
-        <div class="val"><a href="https://t.me/TryBerryBot" target="_blank" rel="noopener">@TryBerryBot</a></div>
+        <div class="links">
+          <a href="https://t.me/TryBerryBot" target="_blank" rel="noopener">Telegram</a>
+          <a href="https://vk.me/tryberrybot" target="_blank" rel="noopener">ВКонтакте</a>
+          <a href="https://max.ru/tryberrybot" target="_blank" rel="noopener">MAX</a>
+        </div>
         <div class="sub">Запуск и настройка отслеживания</div>
       </div>
       <div class="ccard" data-reveal style="--d:.08s">
         <div class="lab">Поддержка</div>
-        <div class="val"><a href="https://t.me/kosov_andrey" target="_blank" rel="noopener">@kosov_andrey</a></div>
+        <div class="links">
+          <a href="https://t.me/kosov_andrey" target="_blank" rel="noopener">Telegram</a>
+          <a href="https://vk.com/kosov_andrey" target="_blank" rel="noopener">ВКонтакте</a>
+        </div>
         <div class="sub">Вопросы, тарифы, обратная связь</div>
       </div>
       <div class="ccard" data-reveal style="--d:.16s">
@@ -879,6 +890,7 @@ footer{background:var(--plum-deep);padding:70px 0 40px;border-top:1px solid var(
           <h4>Документы</h4>
           <a data-legal="privacy">Политика конфиденциальности</a>
           <a data-legal="offer">Публичная оферта</a>
+          <a data-legal="consent">Согласие на обработку ПД</a>
           <a href="#contacts">Контакты</a>
         </div>
         <div class="foot-col">
@@ -903,8 +915,8 @@ footer{background:var(--plum-deep);padding:70px 0 40px;border-top:1px solid var(
     <div class="mpick-sub">Откройте TryBerry в удобном мессенджере</div>
     <div class="mpick-opts">
       <a class="mpick-opt" href="https://t.me/TryBerryBot" target="_blank" rel="noopener">Telegram<span class="arr">→</span></a>
-      <a class="mpick-opt" href="https://vk.com/tryberrybot" target="_blank" rel="noopener">ВКонтакте<span class="arr">→</span></a>
-      <a class="mpick-opt" href="https://max.ru/TryBerryBot" target="_blank" rel="noopener">MAX<span class="arr">→</span></a>
+      <a class="mpick-opt" href="https://vk.me/tryberrybot" target="_blank" rel="noopener">ВКонтакте<span class="arr">→</span></a>
+      <a class="mpick-opt" href="https://max.ru/tryberrybot" target="_blank" rel="noopener">MAX<span class="arr">→</span></a>
     </div>
     <button class="mpick-close" id="mpickClose" type="button">Закрыть</button>
   </div>
@@ -954,6 +966,41 @@ footer{background:var(--plum-deep);padding:70px 0 40px;border-top:1px solid var(
 </div>
 
 <!-- LEGAL: OFFER -->
+<div class="legal" id="legal-consent">
+  <div class="legal-bar">
+    <a href="#" class="brand" onclick="closeLegal();return false"><img src="/logo.png" class="brand-logo" alt="TryBerry">TryBerry</a>
+    <button class="legal-close" onclick="closeLegal()">Закрыть ✕</button>
+  </div>
+  <div class="legal-body">
+    <h1>Согласие на обработку персональных данных</h1>
+    <div class="upd">Действует с 27 июня 2026 г.</div>
+    <p>Начиная использование Telegram-бота <a href="https://t.me/TryBerryBot" target="_blank" rel="noopener" style="color:var(--berry-deep)">@TryBerryBot</a> (подтверждая согласие соответствующим действием в боте), вы, действуя свободно, своей волей и в своём интересе, даёте согласие на обработку ваших персональных данных на условиях, изложенных ниже (ст. 9 Федерального закона № 152-ФЗ «О персональных данных»).</p>
+
+    <h2>1. Оператор</h2>
+    <p>Самозанятый Косов Андрей Александрович, плательщик НПД, ИНН 132608943050, email <a href="mailto:contact@kosovandrey.ru" style="color:var(--berry-deep)">contact@kosovandrey.ru</a>.</p>
+
+    <h2>2. Перечень персональных данных</h2>
+    <ul>
+      <li>идентификатор пользователя Telegram (telegram_id) и имя пользователя (username);</li>
+      <li>адрес электронной почты — если вы указали его при обращении (например, для возврата);</li>
+      <li>ссылки на товары и страницы выдачи, добавленные для отслеживания, и заданные вами параметры;</li>
+      <li>сведения о выбранном тарифе, статусе подписки и фактах оплаты.</li>
+    </ul>
+    <p>Реквизиты банковской карты Оператору не передаются и им не обрабатываются — их обрабатывает платёжный сервис Робокасса.</p>
+
+    <h2>3. Цели обработки</h2>
+    <p>Предоставление функций Сервиса (отслеживание цен и направление уведомлений), применение выбранного тарифа и лимитов, приём оплаты и формирование чеков, поддержка работоспособности и безопасности Сервиса, связь с вами по вашим обращениям.</p>
+
+    <h2>4. Действия с данными и способы обработки</h2>
+    <p>Сбор, запись, систематизация, накопление, хранение, уточнение, извлечение, использование, передача (предоставление, доступ) лицам, указанным в Политике конфиденциальности, блокирование, удаление и уничтожение — с использованием средств автоматизации и без таковых. Хранение данных граждан РФ осуществляется на серверах на территории Российской Федерации.</p>
+
+    <h2>5. Срок действия и отзыв согласия</h2>
+    <p>Согласие действует с момента его предоставления до достижения целей обработки либо до его отзыва. Вы вправе отозвать согласие в любой момент, направив запрос на <a href="mailto:contact@kosovandrey.ru" style="color:var(--berry-deep)">contact@kosovandrey.ru</a> или в Telegram <a href="https://t.me/kosov_andrey" target="_blank" rel="noopener" style="color:var(--berry-deep)">@kosov_andrey</a>. После отзыва Оператор прекращает обработку и удаляет данные, за исключением сведений, которые он обязан хранить в силу закона (например, данные о платежах для налогового учёта).</p>
+
+    <p style="margin-top:40px;color:var(--muted-light);font-size:.88rem">Подробнее о составе и условиях обработки — в <a data-legal="privacy" style="color:var(--berry-deep);cursor:pointer">Политике конфиденциальности</a>. Действующая редакция Согласия размещается на сайте tryberry.ru.</p>
+  </div>
+</div>
+
 <div class="legal" id="legal-offer">
   <div class="legal-bar">
     <a href="#" class="brand" onclick="closeLegal();return false"><img src="/logo.png" class="brand-logo" alt="TryBerry">TryBerry</a>
@@ -1089,6 +1136,7 @@ document.querySelectorAll('.faq-item').forEach(item=>{
 /* legal overlays */
 function openLegal(id){
   const el=document.getElementById('legal-'+id);if(!el)return;
+  document.querySelectorAll('.legal.open').forEach(l=>{if(l!==el)l.classList.remove('open');});
   el.classList.add('open');document.body.classList.add('no-scroll');el.scrollTop=0;
   if(location.hash!=='#'+id){history.pushState(null,'','#'+id);}
 }
@@ -1096,7 +1144,7 @@ function closeLegal(){
   const wasOpen=document.querySelector('.legal.open');
   document.querySelectorAll('.legal.open').forEach(l=>l.classList.remove('open'));
   document.body.classList.remove('no-scroll');
-  if(wasOpen&&(location.hash==='#offer'||location.hash==='#privacy')){
+  if(wasOpen&&(location.hash==='#offer'||location.hash==='#privacy'||location.hash==='#consent')){
     history.pushState(null,'',location.pathname+location.search);
   }
 }
@@ -1110,6 +1158,8 @@ const mpick=document.getElementById('mpick'),heroStart=document.getElementById('
 function openMpick(){if(!mpick)return;mpick.classList.add('open');document.body.classList.add('no-scroll');}
 function closeMpick(){if(!mpick)return;mpick.classList.remove('open');document.body.classList.remove('no-scroll');}
 if(heroStart)heroStart.addEventListener('click',openMpick);
+const navStart=document.getElementById('navStart');
+if(navStart)navStart.addEventListener('click',()=>{setMenu(false);openMpick();});
 const mpickClose=document.getElementById('mpickClose');
 if(mpickClose)mpickClose.addEventListener('click',closeMpick);
 if(mpick)mpick.addEventListener('click',e=>{if(e.target===mpick)closeMpick();});
@@ -1117,7 +1167,7 @@ if(mpick)mpick.addEventListener('click',e=>{if(e.target===mpick)closeMpick();});
    платёжного провайдера и кнопки «назад». Открываем модалку по hash при загрузке/смене. */
 function syncLegalFromHash(){
   const h=location.hash.replace('#','');
-  if(h==='offer'||h==='privacy'){openLegal(h);}
+  if(h==='offer'||h==='privacy'||h==='consent'){openLegal(h);}
   else{
     document.querySelectorAll('.legal.open').forEach(l=>l.classList.remove('open'));
     document.body.classList.remove('no-scroll');
