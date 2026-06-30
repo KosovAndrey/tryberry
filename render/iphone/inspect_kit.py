@@ -30,7 +30,8 @@ except NameError:
 ROOT     = os.path.normpath(os.path.join(HERE, "..", ".."))
 ASSETS   = os.path.join(ROOT, "render", "iphone", "assets")
 OUT_DIR  = os.path.join(ROOT, "render", "iphone", "out")
-INV_PATH = os.path.join(OUT_DIR, "kit_inventory.txt")
+# инвентарь пишем в отслеживаемый гитом файл — чтобы можно было просто запушить
+INV_PATH = os.path.join(ROOT, "render", "iphone", "kit_inventory.txt")
 os.makedirs(ASSETS, exist_ok=True)
 os.makedirs(OUT_DIR, exist_ok=True)
 
