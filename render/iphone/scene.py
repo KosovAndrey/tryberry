@@ -27,7 +27,7 @@ CONFIG = {
     "res_y":   1920,
     "samples": 96,          # превью; для финала поднимем
     "use_gpu": True,
-    "rainbow": True,        # DEBUG: каждый материал в свой цвет (для опознания деталей)
+    "rainbow": False,       # DEBUG: каждый материал в свой цвет (для опознания деталей)
 }
 
 # Палитра различимых цветов для debug-радуги (имя, RGB 0-255):
@@ -53,22 +53,29 @@ WORLD_BG = (0.02, 0.012, 0.02, 1.0)   # тёмный berry-фон под цве�
 
 # Наш плам для корпуса (sRGB 0..1). Подбираем по скриншоту.
 PLUM_SRGB = (0.37, 0.086, 0.25)       # ~#5e1640 — глубокий berry/plum
-# Материалы корпуса/кнопок/яблока — красим принудительно (по отчёту materials.txt):
-FORCE_BODY_MATS = {
-    "SLmJkLdkhbbuEfG",   # рамка/корпус
-    "sJxAokqqlZYuwzy",   # боковая/задняя
-    "SMUhrjUPCjJkPUK",   # задняя панель
-    "HETovHCBsEjcSiP",   # планка
-    "YQFhPSFSryEqJMp",   # кнопки + планка
-    "iAKEWdNafBldSCV",   # боковая кнопка
-    "PJgHvfOhNXkxvzq",   # боковая кнопка
-    "ieDmCkHnOnSIOcm",   # action-кнопка (обводка)
-    "hiWLrxfkqoGxruc",   # action-кнопка (обводка)
+
+# Роли материалов опознаны по rainbow_map (цвет → деталь).
+# Чёрные: линзы/сенсоры камер, вспышка, dynamic island, внутрянка:
+BLACK_MATS = {
+    "AYSuIKiLIvlGvvQ",   # центры объективов (RED)
+    "CVcxUAKakDuRdCf",   # сенсор (YELLOW)
+    "EOPlztmjOhyFwUF",   # сенсор (BLUE)
+    "EiHyBykxPjKZBgf",   # стекло линзы (ORANGE)
+    "NUlImpGytyodpBy",   # вспышка/датчики (LIME)
+    "hqDUrVMlYhzYusu",   # линза (SPRING)
+    "QEOvfSZiwySWiUk",   # линза (TEAL)
+    "jKYrqbVsPDbEaqj",   # линза (CHARTREUSE)
+    "nwfiSfJrPZRLBAj",   # детали камеры (GOLD)
+    "uFgsppDNoPNkBqW",   # внутрянка (EMERALD)
+    "vUNWrAqjHCArnzh",   # dynamic island (CORAL)
+    "YVjGRIfwSbFphGH",   # сенсор (NAVY)
+    "ybSvSfarxzoBKlb",   # мелкий сенсор (AMBER)
+    "UiBplfShRNPzcmF",   # стекло линзы (MINT)
+    "awYxKfiOpRgQIxD",   # передний сенсор/FaceID (GREY)
 }
-# Чёрные: dynamic island (спереди) + яблоко (сзади, заменим на наш логотип):
-BLACK_MATS = {"yPEFElLJTRhfWfw", "awYxKfiOpRgQIxD"}
-# Только передний дисплей не трогаем (заменим UI отдельным шагом):
-SCREEN_MATS = {"BsXHDwLKqtDOfrW"}
+# Не трогаем: экран + переднее стекло (заменим UI отдельно):
+KEEP_MATS = {"BsXHDwLKqtDOfrW", "LqxrKBoiOXSOFqs"}
+# Все остальные материалы → плам.
 
 # Если автопоиск не находит модель — впиши путь вручную:
 MODEL_PATH = r""   # напр. r"C:\...\render\iphone\assets\...\scene.gltf"
@@ -247,14 +254,12 @@ def recolor_to_plum():
         metal = round(p.inputs["Metallic"].default_value, 2) if "Metallic" in p.inputs else "-"
         warm = bool(eff and is_warm(eff))
         is_black = mat.name in BLACK_MATS
-        if mat.name in SCREEN_MATS:
-            target = None
+        if mat.name in KEEP_MATS:
+            target = None                        # экран/стекло — не трогаем
         elif is_black:
-            target = [0.0, 0.0, 0.0, 1.0]
-        elif mat.name in FORCE_BODY_MATS or warm:
-            target = plum
+            target = [0.0, 0.0, 0.0, 1.0]        # линзы/сенсоры/dynamic island
         else:
-            target = None
+            target = plum                        # всё остальное — корпус
         do = target is not None
 
         if do:
