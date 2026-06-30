@@ -31,8 +31,10 @@ WORLD_BG = (0.02, 0.012, 0.02, 1.0)   # тёмный berry-фон под цве�
 
 # Наш плам для корпуса (sRGB 0..1). Подбираем по скриншоту.
 PLUM_SRGB = (0.37, 0.086, 0.25)       # ~#5e1640 — глубокий berry/plum
-# Материалы корпуса, которые красим принудительно (вдруг автодетект промахнётся):
+# Материалы корпуса — красим принудительно (рамка/задняя панель, по инвентарю):
 FORCE_BODY_MATS = {"SLmJkLdkhbbuEfG", "sJxAokqqlZYuwzy"}
+# Экран не трогаем (стекло + заставка) — займёмся им отдельным шагом:
+SCREEN_MATS = {"BsXHDwLKqtDOfrW", "SMUhrjUPCjJkPUK"}
 
 # Если автопоиск не находит модель — впиши путь вручную:
 MODEL_PATH = r""   # напр. r"C:\...\render\iphone\assets\...\scene.gltf"
@@ -106,9 +108,17 @@ def is_coppery(rgb):
     return r > 0.18 and r > g > b and (r - b) > 0.08
 
 
+def unlink_base_color(mat, bc):
+    """Снять любую текстуру/ноду с входа Base Color — останется плоский цвет."""
+    nt = mat.node_tree
+    for link in list(nt.links):
+        if link.to_socket == bc:
+            nt.links.remove(link)
+
+
 def recolor_to_plum():
-    """Красим все оранжево-медные (и явно корпусные) материалы в наш плам.
-    Печатает диагностику каждого материала — по ней добиваем точно."""
+    """Корпусные материалы → плоский плам (текстуру цвета отцепляем).
+    Печатает диагностику — по ней добиваем оставшиеся оранжевые детали."""
     plum = srgb_to_linear(PLUM_SRGB) + [1.0]
     print("--- MATERIAL DIAGNOSTICS (имя | base | textured | metal | rough) ---")
     changed = []
@@ -124,13 +134,21 @@ def recolor_to_plum():
         rough = round(p.inputs["Roughness"].default_value, 2) if "Roughness" in p.inputs else "-"
         print(f"  {mat.name}: base={col} tex={textured} metal={metal} rough={rough}")
 
+        if mat.name in SCREEN_MATS:
+            continue
         force = mat.name in FORCE_BODY_MATS
-        if bc and not textured and (is_coppery(bc.default_value) or force):
-            bc.default_value = plum
-            changed.append(mat.name)
-        elif force and textured:
-            # корпус оказался текстурным — приглушим текстуру тинтом плама
-            print(f"  [recolor] {mat.name}: корпус ТЕКСТУРНЫЙ — нужен тинт (добью след. шагом)")
+        flat_orange = bool(bc and not textured and is_coppery(bc.default_value))
+        if not (force or flat_orange):
+            continue
+
+        unlink_base_color(mat, bc)             # снять текстуру цвета (если была)
+        bc.default_value = plum                # плоский плам
+        if "Metallic" in p.inputs and p.inputs["Metallic"].default_value < 0.5:
+            p.inputs["Metallic"].default_value = 0.85   # анодированный металл
+        if "Roughness" in p.inputs:
+            r = p.inputs["Roughness"].default_value or 0.3
+            p.inputs["Roughness"].default_value = min(0.45, max(0.15, r))
+        changed.append(mat.name)
     print(f"[recolor] перекрашены в плам: {changed}")
 
 
