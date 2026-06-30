@@ -36,6 +36,21 @@ os.makedirs(ASSETS, exist_ok=True)
 os.makedirs(OUT_DIR, exist_ok=True)
 
 
+# если в ките несколько .blend — можно жёстко указать имя нужного тут:
+KIT_FILE = ""   # напр. "cleaned.blend"; пусто = автовыбор
+
+
+def pick_kit(blends):
+    """Выбираем модель: вручную (KIT_FILE) → отсев thumbnailer → самый крупный файл."""
+    if KIT_FILE:
+        for b in blends:
+            if os.path.basename(b).lower() == KIT_FILE.lower():
+                return b
+    real = [b for b in blends if "thumbnail" not in os.path.basename(b).lower()]
+    candidates = real or blends
+    return max(candidates, key=lambda b: os.path.getsize(b))   # модель обычно тяжелее
+
+
 def main():
     blends = sorted(glob.glob(os.path.join(ASSETS, "**", "*.blend"), recursive=True))
     if not blends:
@@ -43,8 +58,11 @@ def main():
         print("[inspect] положи туда .blend кита и запусти снова.")
         return
 
-    kit = blends[0]
-    print(f"[inspect] открываю: {kit}")
+    print("[inspect] найденные .blend:")
+    for b in blends:
+        print(f"    {os.path.getsize(b)//1024:>8} KB  {b}")
+    kit = pick_kit(blends)
+    print(f"[inspect] выбрана модель: {kit}")
     bpy.ops.wm.open_mainfile(filepath=kit)
 
     lines = []
