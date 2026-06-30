@@ -29,6 +29,11 @@ CONFIG = {
 }
 WORLD_BG = (0.02, 0.012, 0.02, 1.0)   # тёмный berry-фон под цвет сайта
 
+# Наш плам для корпуса (sRGB 0..1). Подбираем по скриншоту.
+PLUM_SRGB = (0.37, 0.086, 0.25)       # ~#5e1640 — глубокий berry/plum
+# Материалы корпуса, которые красим принудительно (вдруг автодетект промахнётся):
+FORCE_BODY_MATS = {"SLmJkLdkhbbuEfG", "sJxAokqqlZYuwzy"}
+
 # Если автопоиск не находит модель — впиши путь вручную:
 MODEL_PATH = r""   # напр. r"C:\...\render\iphone\assets\...\scene.gltf"
 
@@ -80,6 +85,53 @@ def import_model(path):
             if o is not None:
                 bpy.context.collection.objects.link(o)
     return [o for o in bpy.context.scene.objects if o.type == "MESH"]
+
+
+def srgb_to_linear(c):
+    return [(v / 12.92 if v <= 0.04045 else ((v + 0.055) / 1.055) ** 2.4) for v in c]
+
+
+def get_principled(mat):
+    if not mat.use_nodes:
+        return None
+    for n in mat.node_tree.nodes:
+        if n.type == "BSDF_PRINCIPLED":
+            return n
+    return None
+
+
+def is_coppery(rgb):
+    """Оранжево-медный базовый цвет: R доминирует, синего мало."""
+    r, g, b = rgb[0], rgb[1], rgb[2]
+    return r > 0.18 and r > g > b and (r - b) > 0.08
+
+
+def recolor_to_plum():
+    """Красим все оранжево-медные (и явно корпусные) материалы в наш плам.
+    Печатает диагностику каждого материала — по ней добиваем точно."""
+    plum = srgb_to_linear(PLUM_SRGB) + [1.0]
+    print("--- MATERIAL DIAGNOSTICS (имя | base | textured | metal | rough) ---")
+    changed = []
+    for mat in bpy.data.materials:
+        p = get_principled(mat)
+        if not p:
+            print(f"  {mat.name}: нет Principled BSDF")
+            continue
+        bc = p.inputs.get("Base Color")
+        col = tuple(round(c, 3) for c in bc.default_value[:3]) if bc else None
+        textured = bool(bc and bc.is_linked)
+        metal = round(p.inputs["Metallic"].default_value, 2) if "Metallic" in p.inputs else "-"
+        rough = round(p.inputs["Roughness"].default_value, 2) if "Roughness" in p.inputs else "-"
+        print(f"  {mat.name}: base={col} tex={textured} metal={metal} rough={rough}")
+
+        force = mat.name in FORCE_BODY_MATS
+        if bc and not textured and (is_coppery(bc.default_value) or force):
+            bc.default_value = plum
+            changed.append(mat.name)
+        elif force and textured:
+            # корпус оказался текстурным — приглушим текстуру тинтом плама
+            print(f"  [recolor] {mat.name}: корпус ТЕКСТУРНЫЙ — нужен тинт (добью след. шагом)")
+    print(f"[recolor] перекрашены в плам: {changed}")
 
 
 def print_inventory(meshes):
@@ -203,6 +255,7 @@ def main():
         print("[scene] !!! модель импортировалась без мешей — проверь файл.")
         return
     print_inventory(meshes)
+    recolor_to_plum()
 
     center, size = world_bounds(meshes)
     print(f"[scene] центр={tuple(round(c,3) for c in center)} размер={round(size,3)}")
