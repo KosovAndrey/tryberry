@@ -647,7 +647,7 @@ func makeHandler(
 				UserID:         sub.UserID,
 				SubscriptionID: sub.ID,
 				ProductName:    sub.ProductName,
-				ProductURL:     sub.ProductURL,
+				ProductURL:     domain.CleanProductURL(sub.ProductURL),
 				PublicID:       sub.ProductPublicID,
 				OldPrice:       sub.BaselinePrice,
 				NewPrice:       event.NewPrice,
@@ -762,7 +762,7 @@ func makeSearchHandler(
 		for _, it := range shown {
 			alert.Items = append(alert.Items, telegram.SearchAlertItem{
 				Name:         it.Name,
-				URL:          it.URL,
+				URL:          domain.CleanProductURL(it.URL),
 				EffectiveRub: searchsub.Rubles(it.EffectiveKopecks),
 				PrevRub:      searchsub.Rubles(it.PrevPriceKopecks),
 				PointsRub:    searchsub.Rubles(it.FeedbackPointsKopecks),
@@ -903,7 +903,7 @@ func buildDigest(ctx context.Context, log *slog.Logger, subRepo *postgres.Subscr
 			fmt.Fprintf(&sb, "…и ещё %d\n", len(deals)-showN)
 			break
 		}
-		fmt.Fprintf(&sb, "%s — %.0f ₽\n%s\n%s\n\n", clipRunes(d.name, 60), d.price, d.verdict, d.url)
+		fmt.Fprintf(&sb, "%s — %.0f ₽\n%s\n%s\n\n", clipRunes(d.name, 60), d.price, d.verdict, domain.CleanProductURL(d.url))
 	}
 	sb.WriteString("Тип уведомлений — в /list · больше слотов — /plans")
 	return sb.String(), true
