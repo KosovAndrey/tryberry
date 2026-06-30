@@ -35,7 +35,7 @@ def script_dir():
 
 
 def resolve_kit(sdir):
-    """Находим .blend модели: ручной KIT_PATH → автопоиск в assets/."""
+    """Находим модель: ручной KIT_PATH → автопоиск .blend/.glb/.gltf в assets/."""
     if KIT_PATH and os.path.exists(KIT_PATH):
         return KIT_PATH
     if KIT_PATH:
@@ -43,14 +43,16 @@ def resolve_kit(sdir):
     if not sdir:
         return None
     assets = os.path.join(sdir, "assets")
-    blends = sorted(glob.glob(os.path.join(assets, "**", "*.blend"), recursive=True))
-    print(f"[inspect] ищу .blend в: {assets}")
-    for b in blends:
+    found = []
+    for ext in ("*.blend", "*.glb", "*.gltf"):
+        found += glob.glob(os.path.join(assets, "**", ext), recursive=True)
+    print(f"[inspect] ищу модель в: {assets}")
+    for b in sorted(found):
         print(f"    {os.path.getsize(b)//1024:>8} KB  {b}")
-    if not blends:
+    if not found:
         return None
-    real = [b for b in blends if "thumbnail" not in os.path.basename(b).lower()]
-    cand = real or blends
+    real = [b for b in found if "thumbnail" not in os.path.basename(b).lower()]
+    cand = real or found
     return max(cand, key=os.path.getsize)        # модель обычно самая тяжёлая
 
 
@@ -59,8 +61,8 @@ def main():
     kit = resolve_kit(sdir)
 
     if not kit:
-        print("\n[inspect] !!! Кит не найден.")
-        print("[inspect] Положи cleaned.blend (+ текстуры) в render/iphone/assets/")
+        print("\n[inspect] !!! Модель не найдена.")
+        print("[inspect] Положи .blend/.glb/.gltf (+ текстуры) в render/iphone/assets/")
         print("[inspect] ЛИБО впиши полный путь в KIT_PATH вверху скрипта.")
         if sdir:
             print(f"[inspect] (искал относительно: {sdir})")
@@ -70,8 +72,14 @@ def main():
     out_path = os.path.join(sdir, "kit_inventory.txt") if sdir \
         else os.path.join(os.path.dirname(kit), "kit_inventory.txt")
 
-    print(f"[inspect] открываю модель: {kit}")
-    bpy.ops.wm.open_mainfile(filepath=kit)
+    ext = os.path.splitext(kit)[1].lower()
+    if ext == ".blend":
+        print(f"[inspect] открываю .blend: {kit}")
+        bpy.ops.wm.open_mainfile(filepath=kit)
+    else:                                            # .glb / .gltf — импорт в чистую сцену
+        print(f"[inspect] импортирую {ext}: {kit}")
+        bpy.ops.wm.read_homefile(use_empty=True)     # пустая сцена без дефолтного куба
+        bpy.ops.import_scene.gltf(filepath=kit)
 
     lines = []
     def w(s=""):
