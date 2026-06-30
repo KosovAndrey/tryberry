@@ -43,6 +43,8 @@ FORCE_BODY_MATS = {
     "PJgHvfOhNXkxvzq",   # боковая кнопка
     "yPEFElLJTRhfWfw",   # яблоко (потом заменим на наш логотип)
     "awYxKfiOpRgQIxD",   # яблоко/инкрустация
+    "ieDmCkHnOnSIOcm",   # action-кнопка (обводка)
+    "hiWLrxfkqoGxruc",   # action-кнопка (обводка)
 }
 # Только передний дисплей не трогаем (заменим UI отдельным шагом):
 SCREEN_MATS = {"BsXHDwLKqtDOfrW"}
