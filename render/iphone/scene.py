@@ -1,206 +1,156 @@
 """
-scene.py — iteration 1: процедурный плейсхолдер-телефон для проверки всего
-рендер-пайплайна (геометрия → материалы → логотип-текстура → свет → камера →
-Cycles-рендер). НЕ финальная модель айфона — её подменим следующим шагом.
+scene.py — импорт реальной модели айфона из assets/, наш свет/камера/фон, рендер.
 
-Задача итерации: убедиться, что цепочка собирается и логотип tone-on-tone
-ложится на крышку. Премиальность света/материалов доводим по скриншотам.
+Что делает сам:
+  1. находит модель (.glb/.gltf/.blend) в render/iphone/assets/;
+  2. импортирует её;
+  3. печатает инвентарь (объекты/материалы) в System Console;
+  4. ставит тёмный фон + солнечный 3-точечный свет + камеру под модель;
+  5. рендерит в render/iphone/out/.
 
-Запуск (см. README.md):
-  GUI:      Scripting → открыть scene.py → Run Script
-  Headless: blender --background --python render/iphone/scene.py
+От тебя: Pull → Run Script → F12 → пришли скриншот.
+ВКЛЮЧИ КОНСОЛЬ: Window → Toggle System Console (там инвентарь и логи).
+
+Перекрас в наш цвет и логотип добавлю следующим шагом, по твоему скриншоту.
 """
 
 import os
+import glob
 import math
 import bpy
+from mathutils import Vector
 
 # ─────────────────────────── КОНФИГ ───────────────────────────
 CONFIG = {
-    "view":        "back",      # "back" (видим крышку с логотипом) или "front"
-    "res_x":       1080,
-    "res_y":       1920,        # 9:16 — годится и под hero, и под Reels
-    "samples":     128,         # превью; для финала поднять до 512
-    "use_gpu":     True,        # пытаемся OptiX/CUDA, иначе откат на CPU
-    "out_name":    "still",     # имя файла рендера (без расширения)
+    "res_x":   1080,
+    "res_y":   1920,
+    "samples": 96,          # превью; для финала поднимем
+    "use_gpu": True,
 }
+WORLD_BG = (0.02, 0.012, 0.02, 1.0)   # тёмный berry-фон под цвет сайта
 
-# Бренд-палитра (из web/index.html :root). Тёмно-фиолетовый корпус под цвет сайта.
-PURPLE_BODY   = (0.14, 0.05, 0.13, 1.0)   # тёмный plum-металл
-PURPLE_LOGO   = (0.30, 0.12, 0.26, 1.0)   # tone-on-tone, чуть светлее — ловит блик
-WORLD_BG      = (0.02, 0.01, 0.02, 1.0)   # почти чёрный berry-фон
-
-# Пропорции iPhone (мм → дециметры Blender): 71.5 × 146.7 × 7.8
-PW, PH, PD = 0.715, 1.467, 0.078
+# Если автопоиск не находит модель — впиши путь вручную:
+MODEL_PATH = r""   # напр. r"C:\...\render\iphone\assets\...\scene.gltf"
 
 
-# ─────────────────────── ПУТИ К АССЕТАМ ───────────────────────
-def repo_root():
-    """render/iphone/scene.py → корень репо (два уровня вверх)."""
+# ─────────────────────── ПУТИ / ПОИСК ─────────────────────────
+def script_dir():
     try:
-        here = os.path.dirname(os.path.realpath(__file__))
-    except NameError:                      # запуск из Text Editor без __file__
-        here = os.path.dirname(bpy.data.filepath) or os.getcwd()
-    return os.path.normpath(os.path.join(here, "..", ".."))
+        for t in bpy.data.texts:
+            if t.filepath and t.filepath.lower().endswith("scene.py"):
+                return os.path.dirname(bpy.path.abspath(t.filepath))
+    except Exception:
+        pass
+    try:
+        return os.path.dirname(os.path.realpath(__file__))
+    except NameError:
+        return None
 
-ROOT      = repo_root()
-LOGO_PATH = os.path.join(ROOT, "web", "logo.png")
-OUT_DIR   = os.path.join(ROOT, "render", "iphone", "out")
+SDIR = script_dir()
+OUT_DIR = os.path.join(SDIR, "out") if SDIR else os.getcwd()
 os.makedirs(OUT_DIR, exist_ok=True)
 
 
-# ─────────────────────────── УТИЛИТЫ ──────────────────────────
-def clear_scene():
-    bpy.ops.object.select_all(action="SELECT")
-    bpy.ops.object.delete(use_global=False)
-    for coll in (bpy.data.meshes, bpy.data.materials, bpy.data.lights,
-                 bpy.data.images, bpy.data.cameras):
-        for block in list(coll):
-            if block.users == 0:
-                coll.remove(block)
-
-def set_input(node, names, value):
-    """Принципиальный BSDF менял имена входов между версиями — пробуем варианты."""
-    for n in names:
-        if n in node.inputs:
-            node.inputs[n].default_value = value
-            return True
-    return False
-
-def principled_metal(name, color, roughness):
-    mat = bpy.data.materials.new(name)
-    mat.use_nodes = True
-    bsdf = mat.node_tree.nodes.get("Principled BSDF")
-    set_input(bsdf, ["Base Color"], color)
-    set_input(bsdf, ["Metallic"], 1.0)
-    set_input(bsdf, ["Roughness"], roughness)
-    return mat
-
-
-# ───────────────────────── ГЕОМЕТРИЯ ──────────────────────────
-def make_body():
-    bpy.ops.mesh.primitive_cube_add(size=1.0)
-    body = bpy.context.active_object
-    body.name = "PhoneBody"
-    body.scale = (PW / 2, PD / 2, PH / 2)     # X-ширина, Y-толщина, Z-высота
-    bpy.ops.object.transform_apply(scale=True)
-
-    bev = body.modifiers.new("Bevel", "BEVEL")
-    bev.width = 0.028
-    bev.segments = 8
-    bev.limit_method = "ANGLE"
-    bpy_shade_smooth(body)
-    body.data.materials.append(principled_metal("Body", PURPLE_BODY, 0.35))
-    return body
-
-def bpy_shade_smooth(obj):
-    for p in obj.data.polygons:
-        p.use_smooth = True
-
-def make_back_logo():
-    """Плоскость с логотипом на крышке (-Y). Альфа PNG = маска инкрустации."""
-    if not os.path.exists(LOGO_PATH):
-        print(f"[scene] !!! логотип не найден: {LOGO_PATH}")
+def find_model():
+    if MODEL_PATH and os.path.exists(MODEL_PATH):
+        return MODEL_PATH
+    if not SDIR:
         return None
-
-    bpy.ops.mesh.primitive_plane_add(size=1.0)
-    plane = bpy.context.active_object
-    plane.name = "BackLogo"
-    plane.scale = (0.26, 0.26, 1.0)
-    plane.rotation_euler = (math.radians(90), 0, 0)   # в плоскость XZ, нормаль -Y
-    plane.location = (0, -(PD / 2) - 0.001, 0.18)      # чуть выше центра крышки
-    bpy.ops.object.transform_apply(scale=True, rotation=True)
-
-    mat = bpy.data.materials.new("BackLogo")
-    mat.use_nodes = True
-    nt = mat.node_tree
-    nt.nodes.clear()
-
-    tex = nt.nodes.new("ShaderNodeTexImage")
-    tex.image = bpy.data.images.load(LOGO_PATH, check_existing=True)
-    tex.image.colorspace_settings.name = "Non-Color"   # альфу как маску, не как цвет
-
-    metal = nt.nodes.new("ShaderNodeBsdfPrincipled")
-    set_input(metal, ["Base Color"], PURPLE_LOGO)
-    set_input(metal, ["Metallic"], 1.0)
-    set_input(metal, ["Roughness"], 0.12)              # полированная инкрустация
-
-    transp = nt.nodes.new("ShaderNodeBsdfTransparent")
-    mix    = nt.nodes.new("ShaderNodeMixShader")
-    out    = nt.nodes.new("ShaderNodeOutputMaterial")
-
-    # Fac=alpha: 0 → прозрачно (видно корпус), 1 → металл-логотип
-    nt.links.new(tex.outputs["Alpha"], mix.inputs["Fac"])
-    nt.links.new(transp.outputs["BSDF"], mix.inputs[1])
-    nt.links.new(metal.outputs["BSDF"], mix.inputs[2])
-    nt.links.new(mix.outputs["Shader"], out.inputs["Surface"])
-
-    plane.data.materials.append(mat)
-    return plane
-
-def make_screen():
-    """Тёмный экран на фронте (+Y). Пока выключен; оживёт в анимации."""
-    bpy.ops.mesh.primitive_plane_add(size=1.0)
-    scr = bpy.context.active_object
-    scr.name = "Screen"
-    scr.scale = (PW / 2 - 0.03, PH / 2 - 0.03, 1.0)
-    scr.rotation_euler = (math.radians(90), 0, 0)
-    scr.location = (0, (PD / 2) + 0.001, 0)
-    bpy.ops.object.transform_apply(scale=True, rotation=True)
-
-    mat = bpy.data.materials.new("Screen")
-    mat.use_nodes = True
-    bsdf = mat.node_tree.nodes.get("Principled BSDF")
-    set_input(bsdf, ["Base Color"], (0.01, 0.01, 0.015, 1.0))
-    set_input(bsdf, ["Roughness"], 0.08)
-    scr.data.materials.append(mat)
-    return scr
+    assets = os.path.join(SDIR, "assets")
+    found = []
+    for ext in ("*.glb", "*.gltf", "*.blend"):
+        found += glob.glob(os.path.join(assets, "**", ext), recursive=True)
+    found = [f for f in found if "thumbnail" not in os.path.basename(f).lower()]
+    print(f"[scene] модели в {assets}:")
+    for f in found:
+        print(f"    {os.path.getsize(f)//1024:>8} KB  {f}")
+    return max(found, key=os.path.getsize) if found else None
 
 
-# ─────────────────────── СВЕТ / КАМЕРА ────────────────────────
-def add_area(name, loc, energy, size, rot=(0, 0, 0)):
-    light = bpy.data.lights.new(name, "AREA")
-    light.energy = energy
-    light.size = size
-    obj = bpy.data.objects.new(name, light)
-    obj.location = loc
+# ───────────────────────── ИМПОРТ ─────────────────────────────
+def import_model(path):
+    ext = os.path.splitext(path)[1].lower()
+    bpy.ops.wm.read_homefile(use_empty=True)     # чистая сцена
+    if ext in (".glb", ".gltf"):
+        bpy.ops.import_scene.gltf(filepath=path)
+    elif ext == ".blend":
+        with bpy.data.libraries.load(path) as (src, dst):
+            dst.objects = list(src.objects)
+        for o in dst.objects:
+            if o is not None:
+                bpy.context.collection.objects.link(o)
+    return [o for o in bpy.context.scene.objects if o.type == "MESH"]
+
+
+def print_inventory(meshes):
+    print("=" * 70)
+    print("=== KIT INVENTORY ===")
+    for o in sorted(bpy.data.objects, key=lambda x: x.name):
+        dims = tuple(round(d, 4) for d in o.dimensions) if o.type == "MESH" else "-"
+        mats = [s.material.name for s in o.material_slots if s.material] \
+               if hasattr(o, "material_slots") else []
+        print(f"  - {o.name} | {o.type} | dims={dims} | mats={mats}")
+    print("--- MATERIALS ---")
+    for m in bpy.data.materials:
+        print(f"  - {m.name}")
+    print("=" * 70)
+
+
+# ─────────────────── ГАБАРИТЫ / КАМЕРА / СВЕТ ──────────────────
+def world_bounds(meshes):
+    """Центр и размер общего bounding box модели в мировых координатах."""
+    mn = Vector(( 1e18,  1e18,  1e18))
+    mx = Vector((-1e18, -1e18, -1e18))
+    for o in meshes:
+        for corner in o.bound_box:
+            wc = o.matrix_world @ Vector(corner)
+            mn = Vector(map(min, mn, wc))
+            mx = Vector(map(max, mx, wc))
+    center = (mn + mx) / 2
+    size = max((mx - mn).x, (mx - mn).y, (mx - mn).z) or 1.0
+    return center, size
+
+
+def setup_camera(center, size):
+    cam_data = bpy.data.cameras.new("HeroCam")
+    cam_data.lens = 85
+    cam = bpy.data.objects.new("HeroCam", cam_data)
+    bpy.context.collection.objects.link(cam)
+    # 3/4 ракурс; какая сторона «лицо/спина» — разберём по скриншоту
+    offset = Vector((0.9, -1.0, 0.35)).normalized() * size * 3.2
+    cam.location = center + offset
+
+    tgt = bpy.data.objects.new("CamTarget", None)
+    tgt.location = center
+    bpy.context.collection.objects.link(tgt)
+    c = cam.constraints.new("TRACK_TO")
+    c.target = tgt
+    c.track_axis = "TRACK_NEGATIVE_Z"
+    c.up_axis = "UP_Y"
+    bpy.context.scene.camera = cam
+
+
+def add_sun(name, rot, energy):
+    la = bpy.data.lights.new(name, "SUN")     # солнце — не зависит от масштаба модели
+    la.energy = energy
+    obj = bpy.data.objects.new(name, la)
     obj.rotation_euler = rot
     bpy.context.collection.objects.link(obj)
-    return obj
 
-def setup_lighting():
-    # трёхточка: key спереди-сбоку, fill слабее с другой стороны, rim сзади-сверху
-    add_area("Key",  (-2.2, -2.6, 2.2), 700, 2.5, (math.radians(55), 0, math.radians(-35)))
-    add_area("Fill", ( 2.6, -1.8, 0.6), 200, 3.0, (math.radians(75), 0, math.radians(40)))
-    add_area("Rim",  ( 0.8,  2.8, 2.6), 500, 1.5, (math.radians(120), 0, math.radians(20)))
 
-def setup_camera():
-    cam_data = bpy.data.cameras.new("Cam")
-    cam_data.lens = 85                                  # «продуктовый» телевик
-    cam = bpy.data.objects.new("Cam", cam_data)
-    bpy.context.collection.objects.link(cam)
+def setup_lights():
+    add_sun("Key",  (math.radians(55), math.radians(10), math.radians(-40)), 4.0)
+    add_sun("Fill", (math.radians(70), 0,                math.radians(60)),  1.5)
+    add_sun("Rim",  (math.radians(120), 0,               math.radians(150)), 3.0)
 
-    side = -1 if CONFIG["view"] == "back" else 1        # back → камера за крышкой
-    cam.location = (1.1, side * 3.4, 0.5)
-
-    target = bpy.data.objects.new("CamTarget", None)
-    target.location = (0, 0, 0.05)
-    bpy.context.collection.objects.link(target)
-    track = cam.constraints.new("TRACK_TO")
-    track.target = target
-    track.track_axis = "TRACK_NEGATIVE_Z"
-    track.up_axis = "UP_Y"
-
-    bpy.context.scene.camera = cam
-    return cam
 
 def setup_world():
-    world = bpy.data.worlds.new("World")
-    bpy.context.scene.world = world
-    world.use_nodes = True
-    bg = world.node_tree.nodes.get("Background")
+    w = bpy.data.worlds.new("World")
+    bpy.context.scene.world = w
+    w.use_nodes = True
+    bg = w.node_tree.nodes.get("Background")
     bg.inputs["Color"].default_value = WORLD_BG
-    bg.inputs["Strength"].default_value = 0.15
+    bg.inputs["Strength"].default_value = 0.3
 
 
 # ──────────────────────────── РЕНДЕР ──────────────────────────
@@ -211,18 +161,18 @@ def try_enable_gpu():
             try:
                 prefs.compute_device_type = backend
                 prefs.get_devices()
-                gpus = [d for d in prefs.devices if d.type != "CPU"]
-                if gpus:
+                if any(d.type != "CPU" for d in prefs.devices):
                     for d in prefs.devices:
                         d.use = (d.type != "CPU")
                     bpy.context.scene.cycles.device = "GPU"
-                    print(f"[scene] GPU включён: {backend} ({len(gpus)} устр.)")
+                    print(f"[scene] GPU: {backend}")
                     return
             except Exception:
                 continue
-        print("[scene] GPU не найден — рендер на CPU")
+        print("[scene] GPU не найден — CPU")
     except Exception as e:
-        print(f"[scene] GPU init пропущен: {e}")
+        print(f"[scene] GPU init: {e}")
+
 
 def setup_render():
     sc = bpy.context.scene
@@ -231,34 +181,40 @@ def setup_render():
     sc.cycles.use_denoising = True
     sc.render.resolution_x = CONFIG["res_x"]
     sc.render.resolution_y = CONFIG["res_y"]
-    sc.render.resolution_percentage = 100
     sc.render.image_settings.file_format = "PNG"
-    sc.render.image_settings.color_mode = "RGBA"
-    sc.view_settings.view_transform = "AgX"             # приятный филмик-тон
+    sc.view_settings.view_transform = "AgX"
     if CONFIG["use_gpu"]:
         try_enable_gpu()
-    out = os.path.join(OUT_DIR, f"{CONFIG['out_name']}_{CONFIG['view']}.png")
+    out = os.path.join(OUT_DIR, "still.png")
     sc.render.filepath = out
     return out
 
 
 # ──────────────────────────── MAIN ────────────────────────────
 def main():
-    print(f"[scene] repo root: {ROOT}")
-    clear_scene()
-    make_body()
-    make_back_logo()
-    make_screen()
-    setup_lighting()
-    setup_camera()
+    model = find_model()
+    if not model:
+        print("\n[scene] !!! Модель не найдена в render/iphone/assets/")
+        print("[scene] Положи туда .glb/.gltf (+текстуры) ИЛИ впиши MODEL_PATH вверху.")
+        return
+    print(f"[scene] импортирую: {model}")
+    meshes = import_model(model)
+    if not meshes:
+        print("[scene] !!! модель импортировалась без мешей — проверь файл.")
+        return
+    print_inventory(meshes)
+
+    center, size = world_bounds(meshes)
+    print(f"[scene] центр={tuple(round(c,3) for c in center)} размер={round(size,3)}")
     setup_world()
+    setup_lights()
+    setup_camera(center, size)
     out = setup_render()
 
-    # При headless-запуске рендерим сразу; в GUI оставляем сцену для осмотра.
     if bpy.app.background:
         bpy.ops.render.render(write_still=True)
         print(f"[scene] рендер сохранён: {out}")
     else:
-        print(f"[scene] сцена собрана. F12 для рендера → сохранится в {out}")
+        print(f"[scene] сцена собрана. Жми F12 — рендер уйдёт в {out}")
 
 main()
