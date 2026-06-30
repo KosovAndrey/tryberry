@@ -1,0 +1,13 @@
+======================================================================
+=== KIT INVENTORY (скопируй весь блок ниже и пришли Claude) ===
+======================================================================
+KIT FILE: C:\Users\andre\GolandProjects\tryberrybot\render\iphone\assets\blenderkit\blendfiles\cleaned.blend
+
+## OBJECTS (имя | тип | габариты XYZ | материалы)
+
+## MATERIALS
+
+## COLLECTIONS
+
+## CAMERAS / LIGHTS
+======================================================================
