@@ -235,6 +235,15 @@ def recolor_to_plum():
             if "Roughness" in p.inputs:
                 r = p.inputs["Roughness"].default_value or 0.3
                 p.inputs["Roughness"].default_value = min(0.45, max(0.15, r))
+            # гасим оранжевое свечение, если цвет шёл из emission
+            em = p.inputs.get("Emission Color") or p.inputs.get("Emission")
+            if em:
+                for link in list(mat.node_tree.links):
+                    if link.to_socket == em:
+                        mat.node_tree.links.remove(link)
+                em.default_value = (0.0, 0.0, 0.0, 1.0)
+            if "Emission Strength" in p.inputs:
+                p.inputs["Emission Strength"].default_value = 0.0
             changed.append(mat.name)
 
         lines.append(f"{mat.name}: eff={effr} tex={textured} metal={metal} "
