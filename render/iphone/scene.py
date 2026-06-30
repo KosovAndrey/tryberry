@@ -32,8 +32,18 @@ WORLD_BG = (0.02, 0.012, 0.02, 1.0)   # тёмный berry-фон под цве�
 
 # Наш плам для корпуса (sRGB 0..1). Подбираем по скриншоту.
 PLUM_SRGB = (0.37, 0.086, 0.25)       # ~#5e1640 — глубокий berry/plum
-# Материалы корпуса — красим принудительно (рамка + задняя панель, по инвентарю):
-FORCE_BODY_MATS = {"SLmJkLdkhbbuEfG", "sJxAokqqlZYuwzy", "SMUhrjUPCjJkPUK"}
+# Материалы корпуса/кнопок/яблока — красим принудительно (по отчёту materials.txt):
+FORCE_BODY_MATS = {
+    "SLmJkLdkhbbuEfG",   # рамка/корпус
+    "sJxAokqqlZYuwzy",   # боковая/задняя
+    "SMUhrjUPCjJkPUK",   # задняя панель
+    "HETovHCBsEjcSiP",   # планка
+    "YQFhPSFSryEqJMp",   # кнопки + планка
+    "iAKEWdNafBldSCV",   # боковая кнопка
+    "PJgHvfOhNXkxvzq",   # боковая кнопка
+    "yPEFElLJTRhfWfw",   # яблоко (потом заменим на наш логотип)
+    "awYxKfiOpRgQIxD",   # яблоко/инкрустация
+}
 # Только передний дисплей не трогаем (заменим UI отдельным шагом):
 SCREEN_MATS = {"BsXHDwLKqtDOfrW"}
 
@@ -104,8 +114,11 @@ def get_principled(mat):
 
 
 def is_warm(rgb):
-    """Тёплый цвет (жёлтый/оранжевый/медный): синий — самый малый канал."""
+    """Тёплый цвет (жёлтый/оранжевый/медный): синий — самый малый канал.
+    Плюс ловим артефакт чтения анодир. оранжа (1.0, ~0.3, 1.0) — магента."""
     r, g, b = rgb[0], rgb[1], rgb[2]
+    if r > 0.85 and b > 0.85 and g < 0.6:        # магента-артефакт = оранж в текстуре
+        return True
     return r > 0.12 and b <= g and b <= r and (r - b) > 0.06
 
 
