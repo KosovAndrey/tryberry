@@ -32,22 +32,10 @@ WORLD_BG = (0.02, 0.012, 0.02, 1.0)   # тёмный berry-фон под цве�
 
 # Наш плам для корпуса (sRGB 0..1). Подбираем по скриншоту.
 PLUM_SRGB = (0.37, 0.086, 0.25)       # ~#5e1640 — глубокий berry/plum
-# Материалы корпуса/кнопок/яблока — красим принудительно (по отчёту materials.txt):
-FORCE_BODY_MATS = {
-    "SLmJkLdkhbbuEfG",   # рамка/корпус
-    "sJxAokqqlZYuwzy",   # боковая/задняя
-    "SMUhrjUPCjJkPUK",   # задняя панель
-    "HETovHCBsEjcSiP",   # планка
-    "YQFhPSFSryEqJMp",   # кнопки + планка
-    "iAKEWdNafBldSCV",   # боковая кнопка
-    "PJgHvfOhNXkxvzq",   # боковая кнопка
-    "yPEFElLJTRhfWfw",   # яблоко (потом заменим на наш логотип)
-    "awYxKfiOpRgQIxD",   # яблоко/инкрустация
-    "ieDmCkHnOnSIOcm",   # action-кнопка (обводка)
-    "hiWLrxfkqoGxruc",   # action-кнопка (обводка)
-}
-# Только передний дисплей не трогаем (заменим UI отдельным шагом):
-SCREEN_MATS = {"BsXHDwLKqtDOfrW"}
+# Новый подход: красим в плам ВСЁ, кроме явных исключений ниже.
+# Не трогаем: передний дисплей + любой тёмный материал (чёрные линзы/стекло камер).
+KEEP_MATS = {"BsXHDwLKqtDOfrW"}     # передний дисплей (UI заменим отдельно)
+DARK_KEEP_MAX = 0.13                # если самый яркий канал ниже — это чёрное/линза, оставляем
 
 # Если автопоиск не находит модель — впиши путь вручную:
 MODEL_PATH = r""   # напр. r"C:\...\render\iphone\assets\...\scene.gltf"
@@ -225,7 +213,9 @@ def recolor_to_plum():
         effr = tuple(round(c, 3) for c in eff) if eff else None
         metal = round(p.inputs["Metallic"].default_value, 2) if "Metallic" in p.inputs else "-"
         warm = bool(eff and is_warm(eff))
-        do = (mat.name in FORCE_BODY_MATS or warm) and mat.name not in SCREEN_MATS
+        # красим всё, КРОМЕ экрана и тёмных материалов (чёрные линзы/стекло камеры)
+        is_dark = bool(eff and max(eff) < DARK_KEEP_MAX)
+        do = mat.name not in KEEP_MATS and not is_dark
 
         if do:
             unlink_base_color(mat, bc)
