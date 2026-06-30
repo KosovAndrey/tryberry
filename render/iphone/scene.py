@@ -72,6 +72,7 @@ BLACK_MATS = {
     "ybSvSfarxzoBKlb",   # мелкий сенсор (AMBER)
     "UiBplfShRNPzcmF",   # стекло линзы (MINT)
     "awYxKfiOpRgQIxD",   # передний сенсор/FaceID (GREY)
+    "ieDmCkHnOnSIOcm",   # пилюля dynamic island (HOTPINK, меш 21x6 спереди)
 }
 # Не трогаем: экран + переднее стекло (заменим UI отдельно):
 KEEP_MATS = {"BsXHDwLKqtDOfrW", "LqxrKBoiOXSOFqs"}
