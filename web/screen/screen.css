@@ -71,6 +71,12 @@ body{
 .verdict.good{color:var(--good)} .verdict.warn{color:var(--warn)}
 .msg .meta{font-size:.76rem;color:var(--muted);line-height:1.35}
 .msg time{display:block;text-align:right;font-size:.66rem;color:var(--muted);margin-top:.35rem;opacity:.85}
+/* инлайн-кнопка «Купить» (CTA) */
+.cta{display:flex;align-items:center;justify-content:center;gap:.4rem;
+  margin-top:.55rem;padding:.65rem .8rem;border-radius:.7rem;text-decoration:none;
+  background:linear-gradient(135deg,var(--berry),var(--berry-deep));
+  color:#fff;font-weight:600;font-size:.92rem;
+  box-shadow:0 6px 18px rgba(160,22,81,.35)}
 
 /* список цен по маркетплейсам (сравнение) */
 .mps{display:flex;flex-direction:column;gap:.3rem;margin:.15rem 0 .55rem}
