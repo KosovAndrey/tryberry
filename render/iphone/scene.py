@@ -281,12 +281,22 @@ def recolor_to_plum():
                 p.inputs["Metallic"].default_value = 0.0 if (is_black or is_glass) else 0.85
             if "Roughness" in p.inputs:
                 if is_glass:
-                    p.inputs["Roughness"].default_value = 0.12     # глянцевое стекло — чёткий блик
+                    p.inputs["Roughness"].default_value = 0.06     # экран — зеркальное стекло, чёткий блик
                 elif is_black:
-                    p.inputs["Roughness"].default_value = 0.55     # матовое глубокое чёрное (без серых бликов)
+                    # снова глянцевое чёрное стекло: раньше серело из-за ярких обоев
+                    # ВКЛючённого экрана — теперь экран выключен, глянец безопасен
+                    p.inputs["Roughness"].default_value = 0.10
                 else:
                     r = p.inputs["Roughness"].default_value or 0.3
                     p.inputs["Roughness"].default_value = min(0.45, max(0.15, r))
+            # «мокрый» лак поверх стекла/чёрного — глубокий чёрный + резкие блики (Coat, Principled v2)
+            if is_glass or is_black:
+                coat = p.inputs.get("Coat Weight")
+                if coat is not None:
+                    coat.default_value = 1.0
+                    cr = p.inputs.get("Coat Roughness")
+                    if cr is not None:
+                        cr.default_value = 0.03
             # гасим оранжевое свечение, если цвет шёл из emission
             em = p.inputs.get("Emission Color") or p.inputs.get("Emission")
             if em:
@@ -421,10 +431,36 @@ def add_sun(name, rot, energy):
     bpy.context.collection.objects.link(obj)
 
 
-def setup_lights():
+# Софтбокс: вытянутый area-светильник — отражается в глянцевом стекле/камерах
+# продуктовой «полосой-бликом» (bliki). Энергию масштабируем по size², чтобы
+# яркость не зависела от масштаба импортированной модели.
+SOFTBOX_ENERGY = 1800.0   # ⚙ ЯРКОСТЬ БЛИКА — крутить после первого рендера (600..4000)
+
+def add_softbox(name, offset, center, size, target):
+    la = bpy.data.lights.new(name, "AREA")
+    la.shape = "RECTANGLE"
+    la.size = size * 1.2                        # ширина полосы
+    la.size_y = size * 3.2                      # длина — вытянутый блик
+    la.energy = SOFTBOX_ENERGY * max(size, 1e-4) ** 2
+    obj = bpy.data.objects.new(name, la)
+    obj.location = center + offset
+    bpy.context.collection.objects.link(obj)
+    c = obj.constraints.new("TRACK_TO")         # всегда смотрит в центр модели
+    c.target = target
+    c.track_axis = "TRACK_NEGATIVE_Z"
+    c.up_axis = "UP_Y"
+    return obj
+
+
+def setup_lights(center, size, target):
     add_sun("Key",  (math.radians(55), math.radians(10), math.radians(-40)), 4.0)
     add_sun("Fill", (math.radians(70), 0,                math.radians(60)),  1.5)
     add_sun("Rim",  (math.radians(120), 0,               math.radians(150)), 3.0)
+    # софтбоксы для чётких бликов на стекле/камерах — со стороны экрана и крышки
+    add_softbox("SoftFront", Vector(( 0.55, -1.0, 1.3)).normalized() * size * 2.4,
+                center, size, target)
+    add_softbox("SoftBack",  Vector((-0.55,  1.0, 1.3)).normalized() * size * 2.4,
+                center, size, target)
 
 
 def setup_world():
@@ -433,7 +469,9 @@ def setup_world():
     w.use_nodes = True
     bg = w.node_tree.nodes.get("Background")
     bg.inputs["Color"].default_value = WORLD_BG
-    bg.inputs["Strength"].default_value = 0.3
+    # фон невидим (film_transparent), но мир заливает мягкое отражение в глянце —
+    # чуть ярче, чтобы чёрное стекло читалось как стекло, а не как «дыра»
+    bg.inputs["Strength"].default_value = 0.6
 
 
 # ──────────────────────────── РЕНДЕР ──────────────────────────
@@ -540,9 +578,9 @@ def main():
     center, size = world_bounds(meshes)
     print(f"[scene] центр={tuple(round(c,3) for c in center)} размер={round(size,3)}")
     setup_world()
-    setup_lights()
     setup_render()
     cam, tgt = create_camera()
+    setup_lights(center, size, tgt)              # софтбоксы позиционируются вокруг center
 
     # рендерим сразу оба вида — front и back — за один Run
     sc = bpy.context.scene
