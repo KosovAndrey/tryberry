@@ -419,9 +419,9 @@ def create_camera():
     c = cam.constraints.new("TRACK_TO")
     c.target = tgt
     c.track_axis = "TRACK_NEGATIVE_Z"
-    # телефон стоит вертикально вдоль мировой Z (Blender Z-up) → верх камеры = Z.
-    # (UP_Y давал вырожденную ориентацию для анфас-взгляда вдоль -Y → кривой крен)
-    c.up_axis = "UP_Z"
+    # up_axis — ЛОКАЛЬНАЯ ось камеры, и она НЕ должна совпадать с track (лок. Z).
+    # UP_Y = локальная Y вверх (к мировому +Z) — стандарт; UP_Z конфликтовал с track -Z.
+    c.up_axis = "UP_Y"
     bpy.context.scene.camera = cam
     return cam, tgt
 
@@ -577,6 +577,19 @@ def export_screen_rect(cam, view):
     x0, x1 = max(0.0, rminx), min(1.0, rmaxx)    # клампим в кадр для CSS
     y0, y1 = max(0.0, rminy), min(1.0, rmaxy)
     dsize = [round(wmax[k] - wmin[k], 4) for k in range(3)]   # мировые габариты экрана (dx,dy,dz)
+    # ДИАГНОСТИКА: по каждому материалу-кандидату — проекция и мировые габариты,
+    # чтобы понять, какой из них настоящий видимый экран (тонкая ось = нормаль).
+    cand = {}
+    for m in sorted(KEEP_MATS | {SCREEN_DISPLAY_MAT}):
+        cxs, cys, cwmn, cwmx = _proj_verts_of_mats(scene, cam, w2c, {m})
+        if not cxs:
+            continue
+        cand[m] = {
+            "proj_x": [round(min(cxs), 3), round(max(cxs), 3)],
+            "proj_y": [round(min(cys), 3), round(max(cys), 3)],
+            "world_size": [round(cwmx[k] - cwmn[k], 4) for k in range(3)],
+            "nverts": len(cxs),
+        }
     rect = {                                     # проценты от размера still_front.png
         "left":   round(x0 * 100, 3),
         "top":    round((1.0 - y1) * 100, 3),    # camera-view y=0 внизу → CSS top сверху
@@ -588,6 +601,7 @@ def export_screen_rect(cam, view):
         "raw":    {"minx": round(rminx, 4), "maxx": round(rmaxx, 4),
                    "miny": round(rminy, 4), "maxy": round(rmaxy, 4)},
         "display_world_size": dsize,             # диагностика: тонкая ось = нормаль экрана
+        "candidates": cand,                      # по каждому KEEP-материалу: проекция + габариты
         "note":   "% от кадра still_front.png; CSS-оверлей экрана позиционируется по ним",
     }
     print(f"[screen] display_world_size(dx,dy,dz)={dsize} — тонкая ось = нормаль экрана")
