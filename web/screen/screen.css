@@ -87,7 +87,7 @@ body{
 
 /* правдоподобный степовый график истории цены (как на сайте tryberry.ru) */
 .pchart{margin:.3rem 0 .4rem}
-.pchart svg{width:100%;height:4.6rem;display:block;overflow:visible}
+.pchart svg{width:100%;height:auto;display:block;overflow:visible}
 .pchart .area{fill:rgba(255,93,143,.13)}
 .pchart .ln{fill:none;stroke:var(--berry-bright);stroke-width:2;stroke-linejoin:round;stroke-linecap:round;vector-effect:non-scaling-stroke}
 .pchart .usual{fill:none;stroke:var(--warn);stroke-width:1.2;stroke-dasharray:4 3;opacity:.8;vector-effect:non-scaling-stroke}
