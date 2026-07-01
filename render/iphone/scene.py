@@ -84,9 +84,10 @@ BLACK_MATS = {
 # Не трогаем: экран + переднее стекло (заменим UI отдельно):
 KEEP_MATS = {"BsXHDwLKqtDOfrW", "LqxrKBoiOXSOFqs"}
 SCREEN_DISPLAY_MAT = "BsXHDwLKqtDOfrW"   # именно дисплей (активная область) — для screen_rect
-# Задняя стеклянная панель вокруг яблока — темнее корпуса (по просьбе):
+# Задняя панель вокруг яблока = «старый основной» цвет PLUM_SRGB (светлее корпуса,
+# как на реальном айфоне). Корпус/рамку делаем чуть ТЕМНЕЕ через BODY_MUL.
 BACK_PANEL_MATS = {"SMUhrjUPCjJkPUK"}
-BACK_PLUM_MUL = 0.60                     # множитель к PLUM_SRGB для задней панели
+BODY_MUL = 0.80                          # корпус темнее панели (0.7 темнее, 0.9 ближе к панели)
 # Все остальные материалы → плам.
 
 # Если автопоиск не находит модель — впиши путь вручную:
@@ -241,8 +242,8 @@ def unlink_base_color(mat, bc):
 def recolor_to_plum():
     """Корпусные/тёплые материалы → плоский плам. Отчёт по каждому материалу
     (цвет, тёплый ли, перекрашен ли, какие меши используют) пишем в out/materials.txt."""
-    plum = srgb_to_linear(PLUM_SRGB) + [1.0]
-    back_plum = srgb_to_linear([c * BACK_PLUM_MUL for c in PLUM_SRGB]) + [1.0]
+    plum = srgb_to_linear([c * BODY_MUL for c in PLUM_SRGB]) + [1.0]   # корпус — чуть темнее панели
+    back_plum = srgb_to_linear(PLUM_SRGB) + [1.0]                      # задняя панель — старый основной (светлее)
 
     usage = {}                                   # материал -> [(меш, габариты)]
     for o in bpy.data.objects:
@@ -521,37 +522,52 @@ def setup_render():
 
 
 # ──────────────── ПРОЕКЦИЯ ЭКРАНА ДЛЯ HTML-ОВЕРЛЕЯ ─────────────
+def _proj_verts_of_mats(scene, cam, w2c, matset):
+    """Проецирует вершины ГРАНЕЙ, у которых материал ∈ matset (по material_index),
+    а не габарит объекта — точный контур экрана даже если материал на большом меше."""
+    xs, ys = [], []
+    for o in bpy.data.objects:
+        if o.type != "MESH":
+            continue
+        slots = [i for i, s in enumerate(o.material_slots)
+                 if s.material and s.material.name in matset]
+        if not slots:
+            continue
+        slots = set(slots)
+        me, mw = o.data, o.matrix_world
+        for poly in me.polygons:
+            if poly.material_index in slots:
+                for vi in poly.vertices:
+                    co = w2c(scene, cam, mw @ me.vertices[vi].co)
+                    xs.append(co.x); ys.append(co.y)
+    return xs, ys
+
+
 def export_screen_rect(cam, view):
-    """Проецирует углы мешей экрана (KEEP_MATS) через камеру и пишет прямоугольник
-    экрана в процентах кадра → out/screen_rect.json. По этим числам сайт ставит
-    живой HTML-экран (бабблы бота) точно в «дырку» рендера. Только для front."""
+    """Проецирует грани дисплея через камеру и пишет прямоугольник экрана в % кадра
+    → out/screen_rect.json. По этим числам сайт ставит живой HTML-экран (бабблы бота)
+    точно в «дырку» рендера. Только для front (анфас)."""
     if view != "front":
         return
     try:
-        from bpy_extras.object_utils import world_to_camera_view
+        from bpy_extras.object_utils import world_to_camera_view as w2c
     except Exception as e:
         print(f"[screen] нет world_to_camera_view ({e}) — screen_rect не записан")
         return
     scene = bpy.context.scene
-    # только дисплей (активная область), не всё переднее стекло — чтобы оверлей
-    # совпал с видимым экраном; фолбэк на KEEP_MATS, если дисплей не найден
-    objs = [o for o in bpy.data.objects
-            if o.type == "MESH"
-            and (SCREEN_DISPLAY_MAT in {s.material.name for s in o.material_slots if s.material})]
-    if not objs:
-        objs = [o for o in bpy.data.objects
-                if o.type == "MESH"
-                and ({s.material.name for s in o.material_slots if s.material} & KEEP_MATS)]
-    if not objs:
-        print("[screen] меши экрана не найдены — screen_rect не записан")
+    # точный контур дисплея по граням; фолбэк — всё переднее стекло (KEEP_MATS)
+    xs, ys = _proj_verts_of_mats(scene, cam, w2c, {SCREEN_DISPLAY_MAT})
+    src = f"display:{SCREEN_DISPLAY_MAT}"
+    if not xs:
+        xs, ys = _proj_verts_of_mats(scene, cam, w2c, KEEP_MATS)
+        src = "KEEP_MATS(fallback)"
+    if not xs:
+        print("[screen] грани экрана не найдены — screen_rect не записан")
         return
-    xs, ys = [], []
-    for o in objs:
-        for corner in o.bound_box:
-            co = world_to_camera_view(scene, cam, o.matrix_world @ Vector(corner))
-            xs.append(co.x); ys.append(co.y)
-    x0, x1 = max(0.0, min(xs)), min(1.0, max(xs))
-    y0, y1 = max(0.0, min(ys)), min(1.0, max(ys))
+    rminx, rmaxx = min(xs), max(xs)              # сырые (могут выходить за [0,1])
+    rminy, rmaxy = min(ys), max(ys)
+    x0, x1 = max(0.0, rminx), min(1.0, rmaxx)    # клампим в кадр для CSS
+    y0, y1 = max(0.0, rminy), min(1.0, rmaxy)
     rect = {                                     # проценты от размера still_front.png
         "left":   round(x0 * 100, 3),
         "top":    round((1.0 - y1) * 100, 3),    # camera-view y=0 внизу → CSS top сверху
@@ -559,6 +575,9 @@ def export_screen_rect(cam, view):
         "height": round((y1 - y0) * 100, 3),
         "res_x":  scene.render.resolution_x,
         "res_y":  scene.render.resolution_y,
+        "source": src,
+        "raw":    {"minx": round(rminx, 4), "maxx": round(rmaxx, 4),
+                   "miny": round(rminy, 4), "maxy": round(rmaxy, 4)},
         "note":   "% от кадра still_front.png; CSS-оверлей экрана позиционируется по ним",
     }
     import json
