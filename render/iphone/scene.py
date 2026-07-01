@@ -78,10 +78,6 @@ BLACK_MATS = {
 KEEP_MATS = {"BsXHDwLKqtDOfrW", "LqxrKBoiOXSOFqs"}
 # Все остальные материалы → плам.
 
-APPLE_OBJ   = "TqzMEiskVyWdFvm"   # меш яблока на крышке (гасим, ставим свой логотип)
-LOGO_STYLE  = "tone"             # "tone" — плам-инкрустация в тон; "bright" — яркий berry
-BERRY_SRGB  = (0.91, 0.20, 0.42) # ~#e8336c — наш berry для bright-варианта
-
 # Если автопоиск не находит модель — впиши путь вручную:
 MODEL_PATH = r""   # напр. r"C:\...\render\iphone\assets\...\scene.gltf"
 
@@ -102,7 +98,6 @@ def script_dir():
 SDIR = script_dir()
 OUT_DIR = os.path.join(SDIR, "out") if SDIR else os.getcwd()
 os.makedirs(OUT_DIR, exist_ok=True)
-LOGO_PATH = os.path.normpath(os.path.join(SDIR, "..", "..", "web", "logo.png")) if SDIR else ""
 
 
 def find_model():
@@ -355,86 +350,6 @@ def rainbow_materials():
         print(f"[rainbow] не записал rainbow_map.txt: {e}")
 
 
-def make_logo_material():
-    """Материал нашего логотипа: альфа PNG = форма колокольчика.
-    tone — плам-металл-инкрустация в тон; bright — яркий berry."""
-    mat = bpy.data.materials.new("BerryLogo")
-    mat.use_nodes = True
-    nt = mat.node_tree
-    nt.nodes.clear()
-
-    tex = nt.nodes.new("ShaderNodeTexImage")
-    tex.image = bpy.data.images.load(LOGO_PATH, check_existing=True)
-
-    shader = nt.nodes.new("ShaderNodeBsdfPrincipled")
-    if LOGO_STYLE == "bright":
-        shader.inputs["Base Color"].default_value = srgb_to_linear(BERRY_SRGB) + [1.0]
-        shader.inputs["Metallic"].default_value = 0.0
-        shader.inputs["Roughness"].default_value = 0.35
-        if "Emission Color" in shader.inputs:
-            shader.inputs["Emission Color"].default_value = srgb_to_linear(BERRY_SRGB) + [1.0]
-            shader.inputs["Emission Strength"].default_value = 0.25
-    else:  # tone — чуть светлее корпуса, полированный металл
-        lighter = [min(1.0, c * 1.7) for c in PLUM_SRGB]
-        shader.inputs["Base Color"].default_value = srgb_to_linear(lighter) + [1.0]
-        shader.inputs["Metallic"].default_value = 1.0
-        shader.inputs["Roughness"].default_value = 0.08
-
-    transp = nt.nodes.new("ShaderNodeBsdfTransparent")
-    mix = nt.nodes.new("ShaderNodeMixShader")
-    out = nt.nodes.new("ShaderNodeOutputMaterial")
-    nt.links.new(tex.outputs["Alpha"], mix.inputs["Fac"])   # 0→прозрачно, 1→логотип
-    nt.links.new(transp.outputs["BSDF"], mix.inputs[1])
-    nt.links.new(shader.outputs["BSDF"], mix.inputs[2])
-    nt.links.new(mix.outputs["Shader"], out.inputs["Surface"])
-    return mat
-
-
-def add_back_logo(model_center):
-    """Гасим яблоко и кладём на его место плоскость с нашим логотипом."""
-    if not LOGO_PATH or not os.path.exists(LOGO_PATH):
-        print(f"[logo] не найден логотип: {LOGO_PATH}")
-        return
-    apple = bpy.data.objects.get(APPLE_OBJ)
-    if not apple:
-        print(f"[logo] меш яблока {APPLE_OBJ} не найден")
-        return
-
-    cs = [apple.matrix_world @ Vector(c) for c in apple.bound_box]
-    cx = sum(c.x for c in cs) / 8
-    cy = sum(c.y for c in cs) / 8
-    cz = sum(c.z for c in cs) / 8
-    hw = (max(c.x for c in cs) - min(c.x for c in cs)) / 2 or 0.01
-    hh = (max(c.z for c in cs) - min(c.z for c in cs)) / 2 or 0.01
-    hw *= 1.0; hh *= 1.0                         # размер ~ как у яблока
-
-    apple.hide_render = True
-    apple.hide_viewport = True
-
-    outward = 1.0 if cy >= model_center.y else -1.0   # сторона крышки
-    y = cy + outward * 0.0008                          # чуть над поверхностью
-
-    me = bpy.data.meshes.new("BerryLogo")
-    obj = bpy.data.objects.new("BerryLogo", me)
-    bpy.context.collection.objects.link(obj)
-    verts = [(cx - hw, y, cz - hh), (cx + hw, y, cz - hh),
-             (cx + hw, y, cz + hh), (cx - hw, y, cz + hh)]
-    # порядок вершин задаёт нормаль наружу крышки
-    face = (0, 3, 2, 1) if outward > 0 else (0, 1, 2, 3)
-    me.from_pydata(verts, [], [face])
-    me.update()
-    uv = me.uv_layers.new(name="UVMap")
-    for loop in me.loops:
-        co = me.vertices[loop.vertex_index].co
-        u = 0.0 if co.x < cx else 1.0
-        v = 0.0 if co.z < cz else 1.0
-        if outward > 0:                            # вид сзади зеркалит X — отражаем U
-            u = 1.0 - u
-        uv.data[loop.index].uv = (u, v)
-    obj.data.materials.append(make_logo_material())
-    print(f"[logo] логотип ({LOGO_STYLE}) на крышке, центр≈({cx:.3f},{cy:.3f},{cz:.3f})")
-
-
 def print_inventory(meshes):
     print("=" * 70)
     print("=== KIT INVENTORY ===")
@@ -564,8 +479,6 @@ def main():
 
     center, size = world_bounds(meshes)
     print(f"[scene] центр={tuple(round(c,3) for c in center)} размер={round(size,3)}")
-    if not CONFIG.get("rainbow"):
-        add_back_logo(center)
     setup_world()
     setup_lights()
     setup_render()
