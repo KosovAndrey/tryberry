@@ -644,6 +644,7 @@ def main():
     sc = bpy.context.scene
     for view in ("front", "back"):
         place_camera(cam, tgt, center, size, view)
+        bpy.context.view_layer.update()          # применить TRACK_TO ДО проекции (иначе матрица камеры устаревшая)
         export_screen_rect(cam, view)            # прямоугольник экрана для HTML-оверлея
         out = os.path.join(OUT_DIR, f"still_{view}.png")
         sc.render.filepath = out
