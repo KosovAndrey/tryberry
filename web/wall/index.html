@@ -9,25 +9,15 @@
 <style>
   *{margin:0;padding:0;box-sizing:border-box}
   html,body{height:100%;overflow:hidden}
-  /* тёмные berry-обои под наш hero: верх спокойный (там часы iOS), свечение ниже */
+  /* чистые тёмные berry-обои под hero: верх спокойный (там часы iOS), свечение ниже */
   body{
     background:
-      radial-gradient(70% 45% at 50% 74%, rgba(255,93,143,.32), transparent 62%),
-      radial-gradient(90% 60% at 82% 60%, rgba(160,22,81,.55), transparent 58%),
-      radial-gradient(80% 55% at 16% 52%, rgba(120,20,70,.45), transparent 60%),
+      radial-gradient(70% 45% at 50% 74%, rgba(255,93,143,.30), transparent 62%),
+      radial-gradient(90% 60% at 82% 60%, rgba(160,22,81,.52), transparent 58%),
+      radial-gradient(80% 55% at 16% 52%, rgba(120,20,70,.42), transparent 60%),
       linear-gradient(178deg,#0e0409 0%,#1a0714 42%,#3a0d2b 78%,#210a18 100%);
-    display:flex;align-items:center;justify-content:center;
   }
-  /* мягко светящийся колокольчик низ-центр (не мешает часам сверху) */
-  .logo{position:absolute;top:60%;left:50%;transform:translate(-50%,-50%);
-    width:32vw;max-width:190px;opacity:.92;
-    filter:drop-shadow(0 0 26px rgba(255,93,143,.55)) drop-shadow(0 0 60px rgba(160,22,81,.5))}
-  .grain{position:absolute;inset:0;opacity:.05;pointer-events:none;
-    background-image:radial-gradient(rgba(255,255,255,.7) .5px, transparent .6px);background-size:3px 3px}
 </style>
 </head>
-<body>
-  <img class="logo" src="/logo.png" alt="">
-  <div class="grain"></div>
-</body>
+<body></body>
 </html>
