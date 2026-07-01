@@ -1,0 +1,40 @@
+/* Апп-режим /screenapp — PWA под iPhone.
+   «На главный экран» → полноэкранно (standalone), Safari нет, статус-бар iOS настоящий
+   (тёмный фон приложения под ним). Отличие от screen.css: лента скроллится ВНУТРИ,
+   а строка ввода закреплена внизу (не уезжает со скроллом). */
+
+html,body{height:100%;overflow:hidden;background:#0e0409}
+
+/* весь экран = колонка: шапка · лента(растёт) · composer.
+   100dvh корректно работает в standalone (панелей браузера нет). */
+.app{
+  height:100svh;height:100dvh;
+  display:flex;flex-direction:column;overflow:hidden;
+  background:
+    radial-gradient(120% 55% at 50% -8%, rgba(160,22,81,.35), transparent 60%),
+    linear-gradient(180deg,#1d0815,#120510 60%,#0e0409);
+}
+
+/* ── ШАПКА: под реальным статус-баром iOS (padding-top = safe-area) ── */
+.head{
+  position:static;flex:none;z-index:10;
+  padding:calc(env(safe-area-inset-top) + .5rem) .9rem .6rem;
+  backdrop-filter:none;-webkit-backdrop-filter:none;
+  background:linear-gradient(180deg,#1e0a18,#190713);
+}
+
+/* ── ЛЕНТА: скроллится ВНУТРИ, между шапкой и composer ── */
+.thread{
+  flex:1;min-height:0;overflow-y:auto;-webkit-overflow-scrolling:touch;
+  padding:.7rem .8rem 1rem;
+}
+.thread::-webkit-scrollbar{display:none}
+
+/* ── COMPOSER: закреплён снизу, с учётом home-индикатора (safe-area-bottom) ── */
+.composer{
+  flex:none;
+  padding:.55rem .8rem calc(env(safe-area-inset-bottom) + .55rem);
+}
+
+/* хвоста-скролла из screen.css здесь нет */
+.tail{display:none}
