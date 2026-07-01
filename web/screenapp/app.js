@@ -24,9 +24,14 @@
     requestAnimationFrame(step);
   }
 
+  var t1 = thread.querySelector('.typing.t1');
+  var t2 = thread.querySelector('.typing.t2');
+
   function hide() {                 // вернуть в «пустое» состояние (до анимаций)
     clearTimeout(timer);
     app.classList.remove('play');
+    if (t1) t1.classList.remove('done');
+    if (t2) t2.classList.remove('done');
     thread.scrollTop = 0;
   }
 
@@ -37,12 +42,18 @@
       el.textContent = pad(now.getHours()) + ':' + pad(now.getMinutes());
     });
     app.classList.remove('play');
+    if (t1) t1.classList.remove('done');
+    if (t2) t2.classList.remove('done');
     thread.scrollTop = 0;
     void app.offsetWidth;           // reflow → перезапуск CSS-анимаций
     app.classList.add('play');
-    // следуем за появлением сообщений (тайминги = задержки в screen.css)
-    setTimeout(function () { scrollToBottom(650); }, 1650);   // после m1
-    setTimeout(function () { scrollToBottom(700); }, 3800);   // после m2
+    // как «печатает…» отыграл — убираем его из потока (сообщение встаёт на его место),
+    // тайминги = задержки появления m1/m2 в screen.css
+    setTimeout(function () { if (t1) t1.classList.add('done'); }, 1300);
+    setTimeout(function () { if (t2) t2.classList.add('done'); }, 3450);
+    // следуем за появлением сообщений
+    setTimeout(function () { scrollToBottom(650); }, 1900);   // после m1
+    setTimeout(function () { scrollToBottom(700); }, 4050);   // после m2
     // через ~12 с чат снова «пустой» (готов к повторному дублю записи)
     timer = setTimeout(hide, 12000);
   }

@@ -3,12 +3,13 @@
    (тёмный фон приложения под ним). Отличие от screen.css: лента скроллится ВНУТРИ,
    а строка ввода закреплена внизу (не уезжает со скроллом). */
 
-html,body{height:100%;overflow:hidden;background:#0e0409}
+html,body{height:100%;margin:0;overflow:hidden;background:#0e0409}
+/* Прижимаем «экран» к реальному низу вьюпорта: position:fixed+inset:0 надёжнее
+   любых vh/dvh (и в standalone, и в Safari) — composer гарантированно у нижнего края. */
+body{position:fixed;inset:0}
 
-/* весь экран = колонка: шапка · лента(растёт) · composer.
-   100dvh корректно работает в standalone (панелей браузера нет). */
 .app{
-  height:100svh;height:100dvh;
+  height:100%;
   display:flex;flex-direction:column;overflow:hidden;
   background:
     radial-gradient(120% 55% at 50% -8%, rgba(160,22,81,.35), transparent 60%),
@@ -26,14 +27,19 @@ html,body{height:100%;overflow:hidden;background:#0e0409}
 /* ── ЛЕНТА: скроллится ВНУТРИ, между шапкой и composer ── */
 .thread{
   flex:1;min-height:0;overflow-y:auto;-webkit-overflow-scrolling:touch;
-  padding:.7rem .8rem 1rem;
+  padding:.6rem .8rem 1rem;gap:.28rem;      /* плотнее между элементами */
 }
 .thread::-webkit-scrollbar{display:none}
+.daysep{margin-bottom:.05rem}
+
+/* «печатает…»: когда отыграл — убрать из потока, чтобы не оставлял пустоту
+   между «сегодня»↔сообщением и между сообщениями (класс ставит app.js). */
+.typing.done{display:none}
 
 /* ── COMPOSER: закреплён снизу, с учётом home-индикатора (safe-area-bottom) ── */
 .composer{
   flex:none;
-  padding:.55rem .8rem calc(env(safe-area-inset-bottom) + .55rem);
+  padding:.5rem .8rem calc(env(safe-area-inset-bottom) + .45rem);
 }
 
 /* хвоста-скролла из screen.css здесь нет */
