@@ -72,6 +72,13 @@ body{
 .msg .meta{font-size:.76rem;color:var(--muted);line-height:1.35}
 .msg time{display:block;text-align:right;font-size:.66rem;color:var(--muted);margin-top:.35rem;opacity:.85}
 
+/* список цен по маркетплейсам (сравнение) */
+.mps{display:flex;flex-direction:column;gap:.3rem;margin:.15rem 0 .55rem}
+.mp{display:flex;justify-content:space-between;align-items:center;gap:1rem;
+  font-size:.86rem;color:#e7d3dd;padding:.4rem .6rem;border-radius:.55rem;background:rgba(255,255,255,.04)}
+.mp.best{color:#fff;background:rgba(255,93,143,.14);border:1px solid rgba(255,93,143,.3)}
+.mp.best b:last-child{font-family:var(--font-display);font-size:1rem}
+
 /* мини-график истории цены (для разоблачения накрутки) */
 .spark{margin:.1rem 0 .55rem}
 .spark svg{width:100%;height:2.6rem;display:block;overflow:visible}
