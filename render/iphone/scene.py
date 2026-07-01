@@ -83,6 +83,10 @@ BLACK_MATS = {
 }
 # Не трогаем: экран + переднее стекло (заменим UI отдельно):
 KEEP_MATS = {"BsXHDwLKqtDOfrW", "LqxrKBoiOXSOFqs"}
+SCREEN_DISPLAY_MAT = "BsXHDwLKqtDOfrW"   # именно дисплей (активная область) — для screen_rect
+# Задняя стеклянная панель вокруг яблока — темнее корпуса (по просьбе):
+BACK_PANEL_MATS = {"SMUhrjUPCjJkPUK"}
+BACK_PLUM_MUL = 0.60                     # множитель к PLUM_SRGB для задней панели
 # Все остальные материалы → плам.
 
 # Если автопоиск не находит модель — впиши путь вручную:
@@ -238,6 +242,7 @@ def recolor_to_plum():
     """Корпусные/тёплые материалы → плоский плам. Отчёт по каждому материалу
     (цвет, тёплый ли, перекрашен ли, какие меши используют) пишем в out/materials.txt."""
     plum = srgb_to_linear(PLUM_SRGB) + [1.0]
+    back_plum = srgb_to_linear([c * BACK_PLUM_MUL for c in PLUM_SRGB]) + [1.0]
 
     usage = {}                                   # материал -> [(меш, габариты)]
     for o in bpy.data.objects:
@@ -269,6 +274,8 @@ def recolor_to_plum():
             target = [0.004, 0.004, 0.006, 1.0] if CONFIG.get("screen_off") else None
         elif is_black:
             target = [0.0, 0.0, 0.0, 1.0]        # линзы/сенсоры/dynamic island
+        elif mat.name in BACK_PANEL_MATS:
+            target = back_plum                   # задняя панель вокруг яблока — темнее
         else:
             target = plum                        # всё остальное — корпус
         do = target is not None
@@ -417,8 +424,9 @@ def create_camera():
 
 
 def place_camera(cam, tgt, center, size, view):
-    # front — как на первом рендере; back — противоположная сторона (видно крышку)
-    d = Vector((0.9, -1.0, 0.35)) if view == "front" else Vector((-0.9, 1.0, 0.35))
+    # front — СТРОГО анфас (экран = чистый прямоугольник под DOM-оверлей);
+    # back — ¾ ракурс, видно крышку/логотип (для beauty/Reels)
+    d = Vector((0.0, -1.0, 0.0)) if view == "front" else Vector((-0.9, 1.0, 0.35))
     cam.location = center + d.normalized() * size * 3.2
     tgt.location = center
 
@@ -525,11 +533,17 @@ def export_screen_rect(cam, view):
         print(f"[screen] нет world_to_camera_view ({e}) — screen_rect не записан")
         return
     scene = bpy.context.scene
+    # только дисплей (активная область), не всё переднее стекло — чтобы оверлей
+    # совпал с видимым экраном; фолбэк на KEEP_MATS, если дисплей не найден
     objs = [o for o in bpy.data.objects
             if o.type == "MESH"
-            and ({s.material.name for s in o.material_slots if s.material} & KEEP_MATS)]
+            and (SCREEN_DISPLAY_MAT in {s.material.name for s in o.material_slots if s.material})]
     if not objs:
-        print("[screen] меши экрана (KEEP_MATS) не найдены — screen_rect не записан")
+        objs = [o for o in bpy.data.objects
+                if o.type == "MESH"
+                and ({s.material.name for s in o.material_slots if s.material} & KEEP_MATS)]
+    if not objs:
+        print("[screen] меши экрана не найдены — screen_rect не записан")
         return
     xs, ys = [], []
     for o in objs:
