@@ -154,27 +154,34 @@ nav.scrolled{
 .phone-render{position:absolute;inset:0;width:100%;height:100%;object-fit:contain;
   filter:drop-shadow(0 42px 80px rgba(0,0,0,.55)) drop-shadow(0 10px 26px rgba(160,22,81,.22))}
 /* экран позиционируется по screen_rect.json (проекция дисплея в кадре рендера) */
-/* экран: все размеры в em, база = cqw контейнера .phone → масштаб под любой размер */
-.phone-screen{position:absolute;left:20.32%;top:13.84%;width:59.35%;height:72.32%;
-  border-radius:7% / 3.3%;overflow:hidden;background:linear-gradient(180deg,#1d0815,#120510);
+/* экран: позиция по замеру пикселей экрана в рендере (measure_screen.py);
+   размеры контента в em, база = cqw контейнера .phone → масштаб под любой размер */
+.phone-screen{position:absolute;left:18.06%;top:13.23%;width:63.8%;height:73.85%;
+  border-radius:15% / 7.2%;overflow:hidden;background:linear-gradient(180deg,#1d0815,#120510);
   font-size:2.8cqw;padding:3.4em 1.15em 1em}
-/* dynamic island по пропорциям iPhone (≈32% ширины экрана, пилюля) */
-.phone-notch{position:absolute;top:2.6%;left:50%;transform:translateX(-50%);width:32%;height:2em;background:#050308;border-radius:99px;z-index:7}
-/* lock screen: авто Face ID → уезжает вверх → чат (без ручного свайпа) */
-.lockscreen{position:absolute;inset:0;z-index:5;overflow:hidden;
-  display:flex;flex-direction:column;align-items:center;justify-content:center;gap:.7em;
-  background:linear-gradient(180deg,#2a0c20,#120510);
-  animation:unlock .7s var(--ease) 1.9s both}
-.lockscreen::before{content:"";position:absolute;top:-12%;width:130%;height:48%;
-  background:radial-gradient(circle,var(--berry-deep),transparent 70%);filter:blur(42px);opacity:.6}
-.lock-glyph{position:relative;width:1.6em;height:1.5em;font-size:1.9em}
-.lock-glyph span{position:absolute;inset:0;display:flex;align-items:center;justify-content:center}
-.g-lock{animation:glyphOut .3s ease 1.2s both}
-.g-open{opacity:0;animation:glyphIn .35s var(--ease) 1.3s both}
-.lock-time{font-family:var(--font-display);font-weight:700;font-size:3.4em;color:#fff;line-height:1}
-@keyframes unlock{0%,64%{transform:translateY(0);opacity:1}100%{transform:translateY(-18%);opacity:0;visibility:hidden}}
-@keyframes glyphOut{to{opacity:0;transform:scale(.55)}}
-@keyframes glyphIn{0%{opacity:0;transform:scale(.4)}60%{transform:scale(1.15)}100%{opacity:1;transform:scale(1)}}
+/* dynamic island (≈28% ширины экрана, пилюля) */
+.phone-notch{position:absolute;top:1.9%;left:50%;transform:translateX(-50%);width:28%;height:1.75em;background:#050308;border-radius:99px;z-index:7}
+/* lock screen: реалистичный iOS-экран (обои+часы) → авто Face ID → уезжает вверх */
+.lockscreen{position:absolute;inset:0;z-index:5;overflow:hidden;color:#fff;
+  background:
+    radial-gradient(90% 60% at 22% 12%, rgba(255,130,180,.55), transparent 60%),
+    radial-gradient(85% 70% at 86% 26%, rgba(160,22,81,.8), transparent 55%),
+    radial-gradient(130% 85% at 50% 112%, #2a0a1f, transparent 70%),
+    linear-gradient(158deg,#5c1542,#210a18);
+  animation:unlock .75s var(--ease) 2.2s both}
+.lock-lockicon{position:absolute;top:8.5%;left:50%;transform:translateX(-50%);width:1.6em;height:1.6em;opacity:.92}
+.lock-lockicon svg{position:absolute;inset:0;width:100%;height:100%}
+.lk-closed{animation:lkOut .3s ease 1.5s both}
+.lk-open{opacity:0;animation:lkIn .38s var(--ease) 1.6s both}
+.lock-clock{position:absolute;top:23%;left:0;right:0;text-align:center;text-shadow:0 2px 20px rgba(0,0,0,.25)}
+.lock-date{font-size:.95em;font-weight:600;opacity:.92;margin-bottom:.15em}
+.lock-time{font-family:var(--font-display);font-weight:600;font-size:4.6em;line-height:.95;letter-spacing:-.02em}
+.lock-actions{position:absolute;bottom:5.5%;left:9%;right:9%;display:flex;justify-content:space-between}
+.lock-actions i{width:2.4em;height:2.4em;border-radius:50%;background:rgba(0,0,0,.3);display:flex;align-items:center;justify-content:center}
+.lock-actions svg{width:1.2em;height:1.2em}
+@keyframes unlock{0%,60%{transform:translateY(0);opacity:1}100%{transform:translateY(-16%);opacity:0;visibility:hidden}}
+@keyframes lkOut{to{opacity:0;transform:scale(.7)}}
+@keyframes lkIn{0%{opacity:0;transform:scale(.5)}60%{transform:scale(1.12)}100%{opacity:1;transform:scale(1)}}
 .tg-header{display:flex;align-items:center;gap:.7em;padding-bottom:1em;border-bottom:1px solid rgba(255,255,255,.06)}
 .tg-ava{width:2.4em;height:2.4em;object-fit:contain;flex:none}
 .tg-header .nm{font-weight:600;font-size:1.05em}
@@ -182,9 +189,9 @@ nav.scrolled{
 .bubble{
   background:#26102a;border-radius:1.15em 1.15em 1.15em .3em;padding:1em;margin-top:1em;
   border:1px solid rgba(255,93,143,.14);opacity:0;transform:translateY(1em);
-  animation:bubbleIn .7s var(--ease) 2.6s forwards;   /* после разблокировки */
+  animation:bubbleIn .7s var(--ease) 3.1s forwards;   /* после разблокировки (unlock ~2.95s) */
 }
-.bubble.b2{animation-delay:3.5s;background:#1f0c2a}
+.bubble.b2{animation-delay:4s;background:#1f0c2a}
 .bubble .ttl{font-size:.92em;color:var(--berry-bright);font-weight:600;display:flex;align-items:center;gap:.45em;margin-bottom:.6em}
 .bubble .prod{font-size:.95em;color:#e7d3dd;line-height:1.35;margin-bottom:.7em}
 .price-row{display:flex;align-items:baseline;gap:.55em}
@@ -539,8 +546,18 @@ footer{background:var(--plum-deep);padding:70px 0 40px;border-top:1px solid var(
         <div class="phone-screen">
           <div class="phone-notch"></div>
           <div class="lockscreen" aria-hidden="true">
-            <div class="lock-glyph"><span class="g-lock">🔒</span><span class="g-open">🔓</span></div>
-            <div class="lock-time">9:41</div>
+            <div class="lock-lockicon">
+              <svg class="lk-closed" viewBox="0 0 24 24" fill="#fff"><rect x="5" y="11" width="14" height="9.5" rx="2.6"/><path d="M8 11V7.6a4 4 0 0 1 8 0V11" fill="none" stroke="#fff" stroke-width="2"/></svg>
+              <svg class="lk-open" viewBox="0 0 24 24" fill="#fff"><rect x="5" y="11" width="14" height="9.5" rx="2.6"/><path d="M8 11V7.6a4 4 0 0 1 7.7-1.6" fill="none" stroke="#fff" stroke-width="2"/></svg>
+            </div>
+            <div class="lock-clock">
+              <div class="lock-date">среда, 1 июля</div>
+              <div class="lock-time">9:41</div>
+            </div>
+            <div class="lock-actions">
+              <i><svg viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="1.8"><path d="M9 3h6l-1.2 5.5a2.8 2.8 0 0 1-5.6 0z"/><path d="M12 14v5" stroke-linecap="round"/></svg></i>
+              <i><svg viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="1.8"><rect x="4" y="7.5" width="16" height="11.5" rx="3"/><circle cx="12" cy="13.2" r="3"/><path d="M9 7.5 10 5.5h4L15 7.5" stroke-linejoin="round"/></svg></i>
+            </div>
           </div>
           <div class="tg-header">
             <img src="/logo.png" class="tg-ava" alt="TryBerry">
