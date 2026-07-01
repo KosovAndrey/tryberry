@@ -149,16 +149,15 @@ nav.scrolled{
   font-family:var(--font-body);font-size:.86rem;cursor:pointer;transition:color .25s}
 .mpick-close:hover{color:var(--cream)}
 
-/* phone mock */
-.phone{
-  position:relative;width:min(330px,82vw);margin:0 auto;aspect-ratio:330/660;
-  border-radius:42px;padding:13px;
-  background:linear-gradient(160deg,#2a0c20,#160710);
-  border:1px solid rgba(255,209,225,.12);
-  box-shadow:0 50px 120px rgba(0,0,0,.6),inset 0 1px 0 rgba(255,255,255,.06);
-}
-.phone-screen{position:relative;height:100%;border-radius:30px;overflow:hidden;background:linear-gradient(180deg,#1d0815,#120510);padding:54px 16px 18px}
-.phone-notch{position:absolute;top:14px;left:50%;transform:translateX(-50%);width:110px;height:26px;background:#0d0309;border-radius:0 0 16px 16px;z-index:7}
+/* phone: 3D-рендер корпуса (Blender) + живой HTML-экран поверх */
+.phone{position:relative;width:min(400px,86vw);margin:0 auto;aspect-ratio:1080/1920}
+.phone-render{position:absolute;inset:0;width:100%;height:100%;object-fit:contain;
+  filter:drop-shadow(0 42px 80px rgba(0,0,0,.55)) drop-shadow(0 10px 26px rgba(160,22,81,.22))}
+/* экран позиционируется по screen_rect.json (проекция дисплея в кадре рендера) */
+.phone-screen{position:absolute;left:20.32%;top:13.84%;width:59.35%;height:72.32%;
+  border-radius:7% / 3.3%;overflow:hidden;background:linear-gradient(180deg,#1d0815,#120510);
+  padding:13% 7% 6%}
+.phone-notch{position:absolute;top:3.2%;left:50%;transform:translateX(-50%);width:34%;height:5.2%;background:#07040a;border-radius:99px;z-index:7}
 /* lock screen: экран включается → уезжает вверх (unlock) → открывает чат */
 .lockscreen{position:absolute;inset:0;z-index:5;border-radius:30px;overflow:hidden;
   display:flex;flex-direction:column;align-items:center;justify-content:center;gap:8px;
@@ -531,6 +530,8 @@ footer{background:var(--plum-deep);padding:70px 0 40px;border-top:1px solid var(
     </div>
     <div data-reveal="scale" style="--d:.2s">
       <div class="phone">
+        <img class="phone-render" src="/hero-iphone.png" width="1080" height="1920"
+             alt="TryBerry в Telegram" fetchpriority="high" decoding="async">
         <div class="phone-screen">
           <div class="phone-notch"></div>
           <div class="lockscreen" aria-hidden="true">
