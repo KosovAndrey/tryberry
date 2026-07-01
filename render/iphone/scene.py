@@ -8,11 +8,16 @@ scene.py — импорт реальной модели айфона из assets
   4. ставит тёмный фон + солнечный 3-точечный свет + камеру под модель;
   5. рендерит в render/iphone/out/.
 
-От тебя: Pull → Run Script → дождись двух рендеров → пришли out/still_front.png
-и out/still_back.png. (Run сам рендерит оба вида, F12 не нужен.)
+От тебя: Pull → Run Script → дождись двух рендеров → пришли из out/:
+  • still_front.png  — фронт, ПРОЗРАЧНЫЙ фон, экран выключен (тёмное стекло);
+  • still_back.png   — крышка с логотипом;
+  • screen_rect.json — прямоугольник экрана в % кадра (для HTML-оверлея на сайте).
+(Run сам рендерит оба вида, F12 не нужен.)
 ВКЛЮЧИ КОНСОЛЬ: Window → Toggle System Console (там инвентарь и логи).
 
-Перекрас в наш цвет и логотип добавлю следующим шагом, по твоему скриншоту.
+Экран специально выключен: живой UI бота (бабблы) кладём HTML-оверлеем поверх
+рендера на сайте — по координатам из screen_rect.json. 3D-разворот — отдельным
+проходом позже (это и есть анимация-интро; последний кадр = этот фронт-рендер).
 """
 
 import os
@@ -28,6 +33,8 @@ CONFIG = {
     "samples": 96,          # превью; для финала поднимем
     "use_gpu": True,
     "rainbow": False,       # DEBUG: каждый материал в свой цвет (для опознания деталей)
+    "screen_off": True,     # экран = выключенное тёмное стекло (UI кладём HTML-оверлеем на сайте)
+    "transparent": True,    # прозрачный фон (film) — корпус «парит» поверх hero-фона сайта
 }
 
 # Палитра различимых цветов для debug-радуги (имя, RGB 0-255):
@@ -255,8 +262,11 @@ def recolor_to_plum():
         metal = round(p.inputs["Metallic"].default_value, 2) if "Metallic" in p.inputs else "-"
         warm = bool(eff and is_warm(eff))
         is_black = mat.name in BLACK_MATS
-        if mat.name in KEEP_MATS:
-            target = None                        # экран/стекло — не трогаем
+        is_glass = mat.name in KEEP_MATS         # экран/переднее стекло
+        if is_glass:
+            # выключенный экран: почти-чёрное глянцевое стекло с бликом.
+            # Реальный UI кладём HTML-оверлеем на сайте (screen_rect.json).
+            target = [0.004, 0.004, 0.006, 1.0] if CONFIG.get("screen_off") else None
         elif is_black:
             target = [0.0, 0.0, 0.0, 1.0]        # линзы/сенсоры/dynamic island
         else:
@@ -268,9 +278,11 @@ def recolor_to_plum():
             bc.default_value = target
             if "Metallic" in p.inputs:
                 # плам — анодированный металл 0.85 (металл=1 выглядел серым зеркалом)
-                p.inputs["Metallic"].default_value = 0.0 if is_black else 0.85
+                p.inputs["Metallic"].default_value = 0.0 if (is_black or is_glass) else 0.85
             if "Roughness" in p.inputs:
-                if is_black:
+                if is_glass:
+                    p.inputs["Roughness"].default_value = 0.12     # глянцевое стекло — чёткий блик
+                elif is_black:
                     p.inputs["Roughness"].default_value = 0.55     # матовое глубокое чёрное (без серых бликов)
                 else:
                     r = p.inputs["Roughness"].default_value or 0.3
@@ -453,10 +465,58 @@ def setup_render():
     sc.render.resolution_x = CONFIG["res_x"]
     sc.render.resolution_y = CONFIG["res_y"]
     sc.render.image_settings.file_format = "PNG"
+    sc.render.image_settings.color_mode = "RGBA"       # альфа для прозрачного фона
+    # прозрачный фон (film) — чтобы корпус лёг PNG-оверлеем поверх hero-фона сайта
+    sc.render.film_transparent = bool(CONFIG.get("transparent") and not CONFIG.get("rainbow"))
     # в радуге — Standard, чтобы цвета были чистые и различимые; иначе AgX
     sc.view_settings.view_transform = "Standard" if CONFIG.get("rainbow") else "AgX"
     if CONFIG["use_gpu"]:
         try_enable_gpu()
+
+
+# ──────────────── ПРОЕКЦИЯ ЭКРАНА ДЛЯ HTML-ОВЕРЛЕЯ ─────────────
+def export_screen_rect(cam, view):
+    """Проецирует углы мешей экрана (KEEP_MATS) через камеру и пишет прямоугольник
+    экрана в процентах кадра → out/screen_rect.json. По этим числам сайт ставит
+    живой HTML-экран (бабблы бота) точно в «дырку» рендера. Только для front."""
+    if view != "front":
+        return
+    try:
+        from bpy_extras.object_utils import world_to_camera_view
+    except Exception as e:
+        print(f"[screen] нет world_to_camera_view ({e}) — screen_rect не записан")
+        return
+    scene = bpy.context.scene
+    objs = [o for o in bpy.data.objects
+            if o.type == "MESH"
+            and ({s.material.name for s in o.material_slots if s.material} & KEEP_MATS)]
+    if not objs:
+        print("[screen] меши экрана (KEEP_MATS) не найдены — screen_rect не записан")
+        return
+    xs, ys = [], []
+    for o in objs:
+        for corner in o.bound_box:
+            co = world_to_camera_view(scene, cam, o.matrix_world @ Vector(corner))
+            xs.append(co.x); ys.append(co.y)
+    x0, x1 = max(0.0, min(xs)), min(1.0, max(xs))
+    y0, y1 = max(0.0, min(ys)), min(1.0, max(ys))
+    rect = {                                     # проценты от размера still_front.png
+        "left":   round(x0 * 100, 3),
+        "top":    round((1.0 - y1) * 100, 3),    # camera-view y=0 внизу → CSS top сверху
+        "width":  round((x1 - x0) * 100, 3),
+        "height": round((y1 - y0) * 100, 3),
+        "res_x":  scene.render.resolution_x,
+        "res_y":  scene.render.resolution_y,
+        "note":   "% от кадра still_front.png; CSS-оверлей экрана позиционируется по ним",
+    }
+    import json
+    try:
+        path = os.path.join(OUT_DIR, "screen_rect.json")
+        with open(path, "w", encoding="utf-8") as f:
+            json.dump(rect, f, ensure_ascii=False, indent=2)
+        print(f"[screen] screen_rect → {path}: {rect}")
+    except Exception as e:
+        print(f"[screen] не записал screen_rect.json: {e}")
 
 
 # ──────────────────────────── MAIN ────────────────────────────
@@ -488,6 +548,7 @@ def main():
     sc = bpy.context.scene
     for view in ("front", "back"):
         place_camera(cam, tgt, center, size, view)
+        export_screen_rect(cam, view)            # прямоугольник экрана для HTML-оверлея
         out = os.path.join(OUT_DIR, f"still_{view}.png")
         sc.render.filepath = out
         print(f"[scene] рендерю {view}…")
