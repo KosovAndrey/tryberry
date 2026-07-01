@@ -419,7 +419,9 @@ def create_camera():
     c = cam.constraints.new("TRACK_TO")
     c.target = tgt
     c.track_axis = "TRACK_NEGATIVE_Z"
-    c.up_axis = "UP_Y"
+    # телефон стоит вертикально вдоль мировой Z (Blender Z-up) → верх камеры = Z.
+    # (UP_Y давал вырожденную ориентацию для анфас-взгляда вдоль -Y → кривой крен)
+    c.up_axis = "UP_Z"
     bpy.context.scene.camera = cam
     return cam, tgt
 
@@ -524,8 +526,11 @@ def setup_render():
 # ──────────────── ПРОЕКЦИЯ ЭКРАНА ДЛЯ HTML-ОВЕРЛЕЯ ─────────────
 def _proj_verts_of_mats(scene, cam, w2c, matset):
     """Проецирует вершины ГРАНЕЙ, у которых материал ∈ matset (по material_index),
-    а не габарит объекта — точный контур экрана даже если материал на большом меше."""
+    а не габарит объекта — точный контур экрана даже если материал на большом меше.
+    Возвращает (xs, ys в координатах кадра; wmin, wmax — мировой bbox этих граней)."""
     xs, ys = [], []
+    wmin = [1e18, 1e18, 1e18]
+    wmax = [-1e18, -1e18, -1e18]
     for o in bpy.data.objects:
         if o.type != "MESH":
             continue
@@ -538,9 +543,12 @@ def _proj_verts_of_mats(scene, cam, w2c, matset):
         for poly in me.polygons:
             if poly.material_index in slots:
                 for vi in poly.vertices:
-                    co = w2c(scene, cam, mw @ me.vertices[vi].co)
+                    wv = mw @ me.vertices[vi].co
+                    co = w2c(scene, cam, wv)
                     xs.append(co.x); ys.append(co.y)
-    return xs, ys
+                    for k in range(3):
+                        wmin[k] = min(wmin[k], wv[k]); wmax[k] = max(wmax[k], wv[k])
+    return xs, ys, wmin, wmax
 
 
 def export_screen_rect(cam, view):
@@ -556,10 +564,10 @@ def export_screen_rect(cam, view):
         return
     scene = bpy.context.scene
     # точный контур дисплея по граням; фолбэк — всё переднее стекло (KEEP_MATS)
-    xs, ys = _proj_verts_of_mats(scene, cam, w2c, {SCREEN_DISPLAY_MAT})
+    xs, ys, wmin, wmax = _proj_verts_of_mats(scene, cam, w2c, {SCREEN_DISPLAY_MAT})
     src = f"display:{SCREEN_DISPLAY_MAT}"
     if not xs:
-        xs, ys = _proj_verts_of_mats(scene, cam, w2c, KEEP_MATS)
+        xs, ys, wmin, wmax = _proj_verts_of_mats(scene, cam, w2c, KEEP_MATS)
         src = "KEEP_MATS(fallback)"
     if not xs:
         print("[screen] грани экрана не найдены — screen_rect не записан")
@@ -568,6 +576,7 @@ def export_screen_rect(cam, view):
     rminy, rmaxy = min(ys), max(ys)
     x0, x1 = max(0.0, rminx), min(1.0, rmaxx)    # клампим в кадр для CSS
     y0, y1 = max(0.0, rminy), min(1.0, rmaxy)
+    dsize = [round(wmax[k] - wmin[k], 4) for k in range(3)]   # мировые габариты экрана (dx,dy,dz)
     rect = {                                     # проценты от размера still_front.png
         "left":   round(x0 * 100, 3),
         "top":    round((1.0 - y1) * 100, 3),    # camera-view y=0 внизу → CSS top сверху
@@ -578,8 +587,10 @@ def export_screen_rect(cam, view):
         "source": src,
         "raw":    {"minx": round(rminx, 4), "maxx": round(rmaxx, 4),
                    "miny": round(rminy, 4), "maxy": round(rmaxy, 4)},
+        "display_world_size": dsize,             # диагностика: тонкая ось = нормаль экрана
         "note":   "% от кадра still_front.png; CSS-оверлей экрана позиционируется по ним",
     }
+    print(f"[screen] display_world_size(dx,dy,dz)={dsize} — тонкая ось = нормаль экрана")
     import json
     try:
         path = os.path.join(OUT_DIR, "screen_rect.json")
