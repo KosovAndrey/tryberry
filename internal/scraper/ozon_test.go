@@ -153,6 +153,19 @@ func TestOzonAgeGateReal(t *testing.T) {
 	}
 }
 
+// TestOzonAgeGateAnonLive: ТОЧНАЯ сигнатура анонимного 18+ гейта, снятая вживую
+// (probe_dump, нож 1729108994, 2026-07-02): ответ 200, ~9КБ, ЕДИНСТВЕННЫЙ виджет
+// userAdultModal (ни карточки, ни меню). Ключ содержит "adult" → ErrAgeRestricted.
+// Это тот случай, на котором гибрид уходит на authed-дорожку.
+func TestOzonAgeGateAnonLive(t *testing.T) {
+	body := []byte(`{"widgetStates":{
+		"userAdultModal-747789-default-1":"{\"title\":{\"text\":\"Подтвердите возраст\",\"textStyle\":\"tsHeadL\"},\"subtitle\":{\"text\":\"Данный раздел предназначен только для лиц, достигших 18 лет.\"}}"
+	}}`)
+	if _, err := parseOzonWidgets(body); err != ErrAgeRestricted {
+		t.Fatalf("ожидался ErrAgeRestricted на живой сигнатуре userAdultModal; got %v", err)
+	}
+}
+
 // TestOzonLoginGateReal: протухшая сессия (карточки нет, страница логина) → ErrAuthExpired.
 func TestOzonLoginGateReal(t *testing.T) {
 	body := []byte(`{"widgetStates":{
