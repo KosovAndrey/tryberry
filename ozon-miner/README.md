@@ -120,13 +120,15 @@ cd ~/projects/tryberrybot
 set -a; . ./.env; set +a
 NET=$(docker network ls --format '{{.Name}}' | grep -m1 tryberry)
 
-# БЕЗ прокси (датацентр-direct) — проверяем, можно ли жить без мобильного:
+# БЕЗ прокси (датацентр-direct) — проверяем, можно ли жить без мобильного.
+# NB: монтируем ПАПКУ в /probe (bind-mount одиночного файла в Docker Desktop/WSL2
+# иногда подменяется пустой директорией → "can't find '__main__'").
 docker run --rm --network "$NET" \
-  -v "$PWD/ozon-miner/probe_load.py:/app/probe_load.py" \
+  -v "$PWD/ozon-miner:/probe" \
   -e OZON_PROXY_URL="" \
   -e OZON_LOAD_IDS="1889984997,<id2>,<id3>" \
   -e OZON_LOAD_N=80 -e OZON_LOAD_INTERVAL_S=20 \
-  --entrypoint python tryberrybot-ozon-miner /app/probe_load.py
+  --entrypoint python tryberrybot-ozon-miner /probe/probe_load.py
 ```
 Затем прогнать второй раз с `OZON_PROXY_URL="$OZON_PROXY_URL"` и сравнить
 `blocked_rate`. Задай **реальные id из трек-листа** в `OZON_LOAD_IDS` (дефолт — один
