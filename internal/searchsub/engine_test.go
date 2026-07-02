@@ -56,8 +56,8 @@ func TestDecide_DiscountPct_FirstTime(t *testing.T) {
 }
 
 func TestDecide_Repeat_OnlyOnFurtherDrop(t *testing.T) {
-	// После первого уведомления тип триггера уже не важен — важна только
-	// цена последнего уведомления.
+	// Повторные уведомления: цена должна упасть НИЖЕ последней уведомлённой,
+	// и правило триггера должно по-прежнему выполняться.
 	for _, kind := range []TriggerKind{Below, AnyDrop, Discount} {
 		r := Rule{Kind: kind, TargetKopecks: 9_000_000, DiscountPct: 5}
 		st := ProductState{
@@ -75,11 +75,50 @@ func TestDecide_Repeat_OnlyOnFurtherDrop(t *testing.T) {
 		if Decide(r, st) {
 			t.Errorf("%s: цена выросла — не должно слать", kind)
 		}
-		// Цена упала ещё ниже — шлём.
+		// Цена упала ещё ниже (и правило выполняется) — шлём.
 		st.CurrentKopecks = 5_999_000
 		if !Decide(r, st) {
 			t.Errorf("%s: цена упала ниже последней уведомлённой — должно слать", kind)
 		}
+	}
+}
+
+func TestDecide_Repeat_RuleStillEnforced(t *testing.T) {
+	// Регрессия: юзер сменил any_drop → below_target 50 000 ПОСЛЕ первого
+	// уведомления (notified остался TRUE, last_notified ≈ 62 004 ₽). Снижение
+	// на 4 ₽ до 62 000 ₽ раньше слало уведомление (повторная фаза игнорировала
+	// правило) — теперь порог обязателен и на повторных.
+	r := Rule{Kind: Below, TargetKopecks: 5_000_000} // 50 000 ₽
+	st := ProductState{
+		BaselineKopecks:     6_250_000,
+		LastNotifiedKopecks: 6_200_400, // 62 004 ₽
+		HasNotified:         true,
+		CurrentKopecks:      6_200_000, // 62 000 ₽ — ниже last_notified, но выше порога
+	}
+	if Decide(r, st) {
+		t.Error("below_target: цена выше порога — повторное уведомление не должно слаться")
+	}
+	// Дошли до порога — шлём.
+	st.CurrentKopecks = 5_000_000
+	if !Decide(r, st) {
+		t.Error("below_target: цена достигла порога — должно слать")
+	}
+
+	// Аналогично для discount_pct: last_notified унаследован от прежней
+	// стратегии, скидка от baseline ещё не достигнута — молчим.
+	rd := Rule{Kind: Discount, DiscountPct: 20}
+	std := ProductState{
+		BaselineKopecks:     6_250_000, // порог 20% → 5_000_000
+		LastNotifiedKopecks: 6_200_400,
+		HasNotified:         true,
+		CurrentKopecks:      6_200_000,
+	}
+	if Decide(rd, std) {
+		t.Error("discount_pct: скидка не достигнута — повторное уведомление не должно слаться")
+	}
+	std.CurrentKopecks = 5_000_000
+	if !Decide(rd, std) {
+		t.Error("discount_pct: скидка достигнута — должно слать")
 	}
 }
 

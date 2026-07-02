@@ -259,7 +259,8 @@ func (b *Bot) handleProductTrigger(ctx context.Context, maxID int64, user *domai
 		b.send(ctx, maxID, "🔔 Тип уведомления: "+domain.TriggerDescription(domain.TriggerBackInStock, nil, nil),
 			maxTrackOOSKeyboard(p.ID, hasPrice, b.chartURLForSub(ctx, p.ID)))
 	case "below":
-		b.startBelowTarget(ctx, maxID, p.ID)
+		// Подсказки целевой цены убраны — сразу ручной ввод.
+		b.promptManualTarget(ctx, maxID, p.ID)
 	case "disc":
 		if err := b.setTrackFSM(ctx, maxID, maxTrackFSM{SubID: p.ID, Trigger: string(domain.TriggerDiscountPct)}); err != nil {
 			b.send(ctx, maxID, "Не получилось начать ввод (нет связи с хранилищем). Останется «Любое снижение».", nil)
@@ -267,30 +268,6 @@ func (b *Bot) handleProductTrigger(ctx context.Context, maxID int64, user *domai
 		}
 		b.send(ctx, maxID, "％ Введи процент скидки от текущей цены (1–99, например 20).", nil)
 	}
-}
-
-func (b *Bot) startBelowTarget(ctx context.Context, maxID, subID int64) {
-	var current float64
-	var stats domain.PriceStats
-	if s, err := b.subRepo.GetByID(ctx, subID); err == nil {
-		current = s.FirstSeenPrice
-		if b.priceRepo != nil {
-			if p, _, e := b.priceRepo.GetLatest(ctx, s.ProductID); e == nil && p > 0 {
-				current = p
-			}
-			if st, e := b.priceRepo.Stats(ctx, s.ProductID, time.Now()); e == nil {
-				stats = st
-			}
-		}
-	}
-	sugg := domain.SuggestTargets(current, stats, time.Now())
-	if current <= 0 || len(sugg) == 0 {
-		b.promptManualTarget(ctx, maxID, subID)
-		return
-	}
-	b.send(ctx, maxID, fmt.Sprintf(
-		"📉 Уведомить, когда подешевеет.\nТекущая цена: %.0f ₽. Выбери порог или задай свой:", current),
-		maxBelowTargetKeyboard(subID, sugg))
 }
 
 func (b *Bot) promptManualTarget(ctx context.Context, maxID, subID int64) {
@@ -301,20 +278,10 @@ func (b *Bot) promptManualTarget(ctx context.Context, maxID, subID int64) {
 	b.send(ctx, maxID, "💰 Введи целевую цену в рублях (например 1499).\nУведомлю, когда цена опустится до неё или ниже.", nil)
 }
 
-func maxBelowTargetKeyboard(subID int64, sugg []domain.TargetSuggestion) *Keyboard {
-	pl := func(k string) string {
-		return fmt.Sprintf(`{"cmd":%q,"id":%d,"k":%q}`, cmdPTarget, subID, k)
-	}
-	var rows [][]Button
-	for _, s := range sugg {
-		rows = append(rows, []Button{TextButton(
-			fmt.Sprintf("≤ %.0f ₽ · %s", s.Price, s.Label),
-			pl(fmt.Sprintf("%.0f", s.Price)), ColorPrimary)})
-	}
-	rows = append(rows, []Button{TextButton("✏️ Своя цена", pl("manual"), ColorSecondary)})
-	return &Keyboard{Buttons: rows}
-}
-
+// handleProductTarget — выбор подсказанной цены: k=manual → ручной ввод, k=<rub> →
+// ставим below_target сразу. Кнопки с подсказками больше не создаются, обработчик
+// оставлен для callback'ов cmdPTarget из старых сообщений, которые уже разосланы
+// пользователям.
 func (b *Bot) handleProductTarget(ctx context.Context, maxID int64, user *domain.User, p payloadData) {
 	if p.Kind == "manual" {
 		b.promptManualTarget(ctx, maxID, p.ID)

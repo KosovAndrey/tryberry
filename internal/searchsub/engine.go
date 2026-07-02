@@ -44,18 +44,25 @@ type ProductState struct {
 //
 // Две фазы (см. §7H source-of-truth):
 //   - ПЕРВОЕ уведомление: по типу триггера, относительно baseline/target.
-//   - ПОВТОРНЫЕ: унифицированно — только если цена упала НИЖЕ цены последнего
-//     уведомления. Это само по себе глушит спам: пока цена не падает дальше,
-//     тишина; отдельный таймер-кулдаун не нужен.
+//   - ПОВТОРНЫЕ: только если цена упала НИЖЕ цены последнего уведомления
+//     И правило триггера ПО-ПРЕЖНЕМУ выполняется. Первое условие глушит спам
+//     (пока цена не падает дальше — тишина, таймер-кулдаун не нужен); второе
+//     не даёт «унаследовать» notified от прежней стратегии: если юзер сменил
+//     any_drop → below_target 50 000, падение 62 004→62 000 молчит, хотя оно
+//     ниже последнего уведомления — порог не достигнут.
 func Decide(r Rule, st ProductState) bool {
-	if st.HasNotified {
-		return st.CurrentKopecks < st.LastNotifiedKopecks
+	if st.HasNotified && st.CurrentKopecks >= st.LastNotifiedKopecks {
+		return false // не упала ниже последнего уведомления — тишина
 	}
 
 	switch r.Kind {
 	case Below:
 		return r.TargetKopecks > 0 && st.CurrentKopecks <= r.TargetKopecks
 	case AnyDrop:
+		// Повторное: current < last_notified — это уже «любое снижение».
+		if st.HasNotified {
+			return true
+		}
 		return st.BaselineKopecks > 0 && st.CurrentKopecks < st.BaselineKopecks
 	case Discount:
 		t := DiscountThreshold(st.BaselineKopecks, r.DiscountPct)

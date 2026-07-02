@@ -198,31 +198,9 @@ func (b *Bot) handleTrackTriggerCallback(ctx context.Context, cb *tgbotapi.Callb
 		b.answerCallback(cb.ID, "Готово")
 
 	case "below":
-		// Подсказка целевой цены из истории (honest-price): считаем текущую цену +
-		// Stats, предлагаем кнопки. Фолбэк на ручной ввод сохранён («Своя цена»).
-		var current float64
-		var stats domain.PriceStats
-		if s, err := b.subRepo.GetByID(ctx, subID); err == nil {
-			current = s.FirstSeenPrice
-			if b.priceRepo != nil {
-				if p, _, e := b.priceRepo.GetLatest(ctx, s.ProductID); e == nil && p > 0 {
-					current = p
-				}
-				if st, e := b.priceRepo.Stats(ctx, s.ProductID, time.Now()); e == nil {
-					stats = st
-				}
-			}
-		}
-		sugg := domain.SuggestTargets(current, stats, time.Now())
-		if current <= 0 || len(sugg) == 0 {
-			// Нет опорной цены → старый путь: ручной ввод.
-			b.promptManualTarget(ctx, cb.From.ID, chatID, subID)
-			b.answerCallback(cb.ID, "")
-			return
-		}
-		b.editMenu(chatID, cb.Message.MessageID,
-			fmt.Sprintf("📉 <b>Уведомить, когда подешевеет</b>\nТекущая цена: %.0f ₽. Выбери порог или задай свою:", current),
-			belowTargetKeyboard(subID, sugg))
+		// Подсказки целевой цены (минимум за 90 дней / −5% / −10%) убраны — теперь
+		// сразу переходим к ручному вводу цены пользователем.
+		b.promptManualTarget(ctx, cb.From.ID, chatID, subID)
 		b.answerCallback(cb.ID, "")
 
 	case "disc":
@@ -291,26 +269,6 @@ func (b *Bot) confirmTrackTrigger(ctx context.Context, chatID, subID int64, t do
 	b.send(m)
 }
 
-// belowTargetKeyboard — кнопки подсказанных целевых цен + «своя цена». Каждая кнопка
-// несёт готовую цену (ptgt:<subID>:<rub>); manual → ручной ввод.
-func belowTargetKeyboard(subID int64, sugg []domain.TargetSuggestion) tgbotapi.InlineKeyboardMarkup {
-	rows := make([][]tgbotapi.InlineKeyboardButton, 0, len(sugg)+2)
-	for _, s := range sugg {
-		rows = append(rows, tgbotapi.NewInlineKeyboardRow(
-			tgbotapi.NewInlineKeyboardButtonData(
-				fmt.Sprintf("≤ %.0f ₽ · %s", s.Price, s.Label),
-				fmt.Sprintf("ptgt:%d:%.0f", subID, s.Price)),
-		))
-	}
-	rows = append(rows,
-		tgbotapi.NewInlineKeyboardRow(
-			tgbotapi.NewInlineKeyboardButtonData("✏️ Своя цена", fmt.Sprintf("ptgt:%d:manual", subID))),
-		tgbotapi.NewInlineKeyboardRow(
-			tgbotapi.NewInlineKeyboardButtonData("◀️ В меню", "menu:main")),
-	)
-	return tgbotapi.NewInlineKeyboardMarkup(rows...)
-}
-
 // promptManualTarget — запросить ручной ввод целевой цены (фолбэк, как было).
 func (b *Bot) promptManualTarget(ctx context.Context, tgID, chatID, subID int64) {
 	if err := b.setTrackFSM(ctx, tgID, trackFSM{SubID: subID, Trigger: string(domain.TriggerBelowTarget)}); err != nil {
@@ -322,6 +280,9 @@ func (b *Bot) promptManualTarget(ctx context.Context, tgID, chatID, subID int64)
 
 // handleTrackTargetCallback — выбор целевой цены: ptgt:<subID>:<rub> ставит триггер
 // сразу, ptgt:<subID>:manual → ручной ввод. Владельца резолвим по telegram_id.
+// Кнопки с подсказками больше не создаются (см. "below" в handleTrackTriggerCallback),
+// но обработчик оставлен для callback'ов ptgt из старых сообщений, которые уже
+// разосланы пользователям.
 func (b *Bot) handleTrackTargetCallback(ctx context.Context, cb *tgbotapi.CallbackQuery) {
 	parts := strings.Split(strings.TrimPrefix(cb.Data, "ptgt:"), ":")
 	if len(parts) != 2 {
