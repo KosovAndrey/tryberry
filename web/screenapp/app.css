@@ -1,0 +1,49 @@
+/* Апп-режим /screenapp — PWA под iPhone.
+   «На главный экран» → полноэкранно (standalone), Safari нет, статус-бар iOS настоящий
+   (тёмный фон приложения под ним). Отличие от screen.css: лента скроллится ВНУТРИ,
+   а строка ввода закреплена внизу (не уезжает со скроллом). */
+
+html,body{height:100%;margin:0;overflow:hidden;background:#0e0409}
+/* Прижимаем «экран» к реальному низу вьюпорта: position:fixed+inset:0 надёжнее
+   любых vh/dvh (и в standalone, и в Safari) — composer гарантированно у нижнего края. */
+body{position:fixed;inset:0}
+
+.app{
+  height:100%;
+  display:flex;flex-direction:column;overflow:hidden;
+  background:
+    radial-gradient(120% 55% at 50% -8%, rgba(160,22,81,.35), transparent 60%),
+    linear-gradient(180deg,#1d0815,#120510 60%,#0e0409);
+}
+
+/* ── ШАПКА: под реальным статус-баром iOS (padding-top = safe-area) ── */
+.head{
+  position:static;flex:none;z-index:10;
+  padding:calc(env(safe-area-inset-top) + .5rem) .9rem .6rem;
+  backdrop-filter:none;-webkit-backdrop-filter:none;
+  background:linear-gradient(180deg,#1e0a18,#190713);
+}
+
+/* ── ЛЕНТА: скроллится ВНУТРИ, между шапкой и composer ── */
+.thread{
+  flex:1;min-height:0;overflow-y:auto;-webkit-overflow-scrolling:touch;
+  padding:.6rem .8rem 1rem;gap:.28rem;      /* плотнее между элементами */
+}
+.thread::-webkit-scrollbar{display:none}
+.daysep{margin-bottom:.05rem}
+
+/* «печатает…»: когда отыграл — убрать из потока, чтобы не оставлял пустоту
+   между «сегодня»↔сообщением и между сообщениями (класс ставит app.js). */
+.typing.done{display:none}
+
+/* ── COMPOSER: закреплён снизу, НАД home-индикатором (safe-area-bottom).
+   Без этого отступа круглая кнопка «отправить» уходит низом за край экрана
+   и срезается в полоску. В standalone-PWA safe-area = ровно высота полоски
+   home-индикатора (~34px), поле встаёт над ней — кнопка целиком видна. ── */
+.composer{
+  flex:none;
+  padding:.5rem .8rem calc(env(safe-area-inset-bottom) + .5rem);
+}
+
+/* хвоста-скролла из screen.css здесь нет */
+.tail{display:none}

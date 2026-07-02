@@ -9,13 +9,39 @@ package max
 
 import (
 	"context"
+	"crypto/tls"
+	"crypto/x509"
+	_ "embed"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net/http"
+	"time"
 
 	maxbot "github.com/max-messenger/max-bot-api-client-go"
 	"github.com/max-messenger/max-bot-api-client-go/schemes"
 )
+
+// platform-api2.max.ru обслуживается за «Russian Trusted Root CA» (Минцифры),
+// которого нет в Mozilla-бандле alpine → стандартная проверка TLS падает с
+// "certificate signed by unknown authority". Встраиваем корень + промежуточный
+// и доверяем им ТОЛЬКО для запросов к MAX API (системный пул глобально не трогаем).
+//
+//go:embed russian_trusted_ca.pem
+var russianTrustedCA []byte
+
+// maxHTTPClient — http.Client с системным пулом CA + российским корнем, только
+// для MAX. Транспорт — клон DefaultTransport (сохраняет прокси/таймауты диалера).
+func maxHTTPClient() *http.Client {
+	pool, err := x509.SystemCertPool()
+	if err != nil || pool == nil {
+		pool = x509.NewCertPool()
+	}
+	pool.AppendCertsFromPEM(russianTrustedCA)
+	tr := http.DefaultTransport.(*http.Transport).Clone()
+	tr.TLSClientConfig = &tls.Config{RootCAs: pool, MinVersion: tls.VersionTLS12}
+	return &http.Client{Timeout: 30 * time.Second, Transport: tr}
+}
 
 // Client — обёртка над maxbot.Api с VK-подобным API отправки.
 type Client struct {
@@ -23,7 +49,7 @@ type Client struct {
 }
 
 func NewClient(token string) (*Client, error) {
-	api, err := maxbot.New(token)
+	api, err := maxbot.New(token, maxbot.WithHTTPClient(maxHTTPClient()))
 	if err != nil {
 		return nil, err
 	}

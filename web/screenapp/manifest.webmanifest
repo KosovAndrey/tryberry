@@ -1,0 +1,13 @@
+{
+  "name": "TryBerry",
+  "short_name": "TryBerry",
+  "display": "standalone",
+  "orientation": "portrait",
+  "background_color": "#140310",
+  "theme_color": "#140310",
+  "start_url": "/screenapp/",
+  "scope": "/screenapp/",
+  "icons": [
+    { "src": "/logo.png", "sizes": "256x256", "type": "image/png", "purpose": "any maskable" }
+  ]
+}
