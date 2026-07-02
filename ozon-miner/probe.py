@@ -166,7 +166,7 @@ def _nudge(page):
 
 def egress_ip(browser) -> str:
     try:
-        p = browser.new_page()
+        p = browser.new_page(no_viewport=True)
         p.goto("https://api.ipify.org?format=json", timeout=15000)
         ip = json.loads(p.evaluate("() => document.body.innerText")).get("ip", "?")
         p.close()
@@ -209,7 +209,7 @@ def probe(browser) -> int:
         log.error("не разобрал id товара из URL: %s", PROBE_URL)
         return 1
 
-    page = browser.new_page()
+    page = browser.new_page(no_viewport=True)
     injected = cookie_jar(OZON_COOKIE)
     logged_in = any(c["name"] == "__Secure-access-token" for c in injected)
     added = add_cookies_safe(page.context, injected) if injected else 0

@@ -98,7 +98,7 @@ def main():
              proxy["server"] if proxy else "НЕТ", WARM_ID, DUMP_ID)
 
     with Camoufox(**kw) as browser:
-        page = browser.new_page()
+        page = browser.new_page(no_viewport=True)
         try:
             page.goto(f"https://www.ozon.ru/product/{WARM_ID}/",
                       wait_until="domcontentloaded", timeout=int(NAV_TIMEOUT_S * 1000))

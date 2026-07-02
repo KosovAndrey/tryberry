@@ -285,7 +285,11 @@ class Lane:
                         self.idx, _first_line(e))
             self._cam = AsyncCamoufox(**kw)
             self._browser = await self._cam.__aenter__()
-        self._page = await self._browser.new_page()
+        # no_viewport=True: НЕ слать setDefaultViewport (playwright кладёт туда поле
+        # isMobile, которого Firefox-juggler camoufox не знает → new_page падает
+        # "isMobile ... not described in this scheme"). Размер окна держит сам
+        # camoufox через фингерпринт, viewport от playwright тут лишний и вредный.
+        self._page = await self._browser.new_page(no_viewport=True)
         await _add_cookies_safe(self._page.context, _cookie_jar(self.cookie))
 
     async def start(self):
@@ -427,7 +431,7 @@ class Lane:
 
     async def _egress_ip(self) -> str:
         try:
-            p = await self._browser.new_page()
+            p = await self._browser.new_page(no_viewport=True)
             await p.goto("https://api.ipify.org?format=json", timeout=15000)
             txt = await p.evaluate("() => document.body.innerText")
             await p.close()

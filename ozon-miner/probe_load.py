@@ -113,7 +113,7 @@ def parse_proxy(url: str):
 
 def egress_ip(browser) -> str:
     try:
-        p = browser.new_page()
+        p = browser.new_page(no_viewport=True)
         p.goto("https://api.ipify.org?format=json", timeout=15000)
         ip = json.loads(p.evaluate("() => document.body.innerText")).get("ip", "?")
         p.close()
@@ -167,7 +167,7 @@ def main():
     with Camoufox(**kw) as browser:
         ip = egress_ip(browser)
         log.info("exit-IP: %s", ip)
-        page = browser.new_page()
+        page = browser.new_page(no_viewport=True)
 
         # Прогрев: навигация на карточку, ждём FAB-пропуск (in-page fetch 200).
         warm_url = f"https://www.ozon.ru/product/{WARM_ID}/"
