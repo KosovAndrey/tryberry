@@ -290,6 +290,56 @@ func (b *Bot) handleProductTrigger(ctx context.Context, vkID int64, user *domain
 	}
 }
 
+// maybeInstantBelowTargetAlert — мгновенный алерт, если порог below_target уже
+// выполнен в момент установки (текущая известная цена ≤ target). Без этого
+// пользователь получал бы «Готово» и ждал уведомления до часа (следующий цикл
+// скрейпа), хотя условие срабатывания было известно сразу.
+// Возвращает true, если алерт отправлен — тогда вызывающий НЕ должен слать
+// обычное «Готово!» (алерт уже содержит подтверждение установки порога).
+func (b *Bot) maybeInstantBelowTargetAlert(ctx context.Context, vkID, subID int64, target float64) bool {
+	sub, err := b.subRepo.GetByID(ctx, subID)
+	if err != nil {
+		return false
+	}
+	current := sub.FirstSeenPrice
+	if b.priceRepo != nil {
+		if p, _, err := b.priceRepo.GetLatest(ctx, sub.ProductID); err == nil && p > 0 {
+			current = p
+		}
+	}
+	if current <= 0 || current > target {
+		return false
+	}
+
+	product, err := b.prodRepo.GetByID(ctx, sub.ProductID)
+	if err != nil {
+		b.log.Error("vk: get product for instant alert", "sub_id", subID, "err", err)
+		return false
+	}
+	// Товар не в наличии: last-цена есть, но «уже стоит X ₽» ввёл бы в
+	// заблуждение. Ждём штатного цикла — notifier при OOS ценовые триггеры
+	// не оценивает, алерт придёт после возврата в продажу.
+	if !product.InStock {
+		return false
+	}
+
+	// UpdateBaseline фиксирует baseline_price=current и notified=TRUE — это
+	// «гасит» дубль от notifier (Decide шлёт повторные только при цене НИЖЕ
+	// baseline), а следующее уведомление придёт при дальнейшем падении цены.
+	if err := b.subRepo.UpdateBaseline(ctx, subID, current); err != nil {
+		b.log.Warn("vk: update baseline on instant alert", "sub_id", subID, "err", err)
+	}
+
+	text := fmt.Sprintf(
+		"✅ Порог %.0f ₽ установлен.\n\n"+
+			"🎯 %s уже стоит %.0f ₽ — ниже твоего порога!\n"+
+			"Следующее уведомление пришлю, когда цена опустится ещё ниже.",
+		target, product.Name, current,
+	)
+	b.send(ctx, vkID, text, vkTriggerKeyboard(subID, domain.TriggerBelowTarget, b.chartURL(product.PublicID)))
+	return true
+}
+
 // promptManualTarget — фолбэк-ввод целевой цены вручную (FSM).
 func (b *Bot) promptManualTarget(ctx context.Context, vkID, subID int64) {
 	if err := b.setTrackFSM(ctx, vkID, vkTrackFSM{SubID: subID, Trigger: string(domain.TriggerBelowTarget)}); err != nil {
@@ -319,6 +369,9 @@ func (b *Bot) handleProductTarget(ctx context.Context, vkID int64, user *domain.
 		b.send(ctx, vkID, "Произошла ошибка, попробуй позже.", nil)
 		return
 	}
+	if b.maybeInstantBelowTargetAlert(ctx, vkID, p.ID, price) {
+		return
+	}
 	b.send(ctx, vkID, "✅ Готово! "+domain.TriggerDescription(domain.TriggerBelowTarget, &price, nil),
 		vkTriggerKeyboard(p.ID, domain.TriggerBelowTarget, b.chartURLForSub(ctx, p.ID)))
 }
@@ -336,6 +389,9 @@ func (b *Bot) handleTrackThreshold(ctx context.Context, vkID int64, user *domain
 		if err := b.subRepo.SetTrigger(ctx, fsm.SubID, user.ID, string(domain.TriggerBelowTarget), &price, nil); err != nil {
 			b.log.Error("vk: set trigger below", "sub_id", fsm.SubID, "err", err)
 			b.send(ctx, vkID, "Произошла ошибка, попробуй позже.", nil)
+			return
+		}
+		if b.maybeInstantBelowTargetAlert(ctx, vkID, fsm.SubID, price) {
 			return
 		}
 		b.send(ctx, vkID, "✅ Готово! "+domain.TriggerDescription(domain.TriggerBelowTarget, &price, nil),

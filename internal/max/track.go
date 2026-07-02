@@ -270,6 +270,56 @@ func (b *Bot) handleProductTrigger(ctx context.Context, maxID int64, user *domai
 	}
 }
 
+// maybeInstantBelowTargetAlert — мгновенный алерт, если порог below_target уже
+// выполнен в момент установки (текущая известная цена ≤ target). Без этого
+// пользователь получал бы «Готово» и ждал уведомления до часа (следующий цикл
+// скрейпа), хотя условие срабатывания было известно сразу.
+// Возвращает true, если алерт отправлен — тогда вызывающий НЕ должен слать
+// обычное «Готово!» (алерт уже содержит подтверждение установки порога).
+func (b *Bot) maybeInstantBelowTargetAlert(ctx context.Context, maxID, subID int64, target float64) bool {
+	sub, err := b.subRepo.GetByID(ctx, subID)
+	if err != nil {
+		return false
+	}
+	current := sub.FirstSeenPrice
+	if b.priceRepo != nil {
+		if p, _, err := b.priceRepo.GetLatest(ctx, sub.ProductID); err == nil && p > 0 {
+			current = p
+		}
+	}
+	if current <= 0 || current > target {
+		return false
+	}
+
+	product, err := b.prodRepo.GetByID(ctx, sub.ProductID)
+	if err != nil {
+		b.log.Error("max: get product for instant alert", "sub_id", subID, "err", err)
+		return false
+	}
+	// Товар не в наличии: last-цена есть, но «уже стоит X ₽» ввёл бы в
+	// заблуждение. Ждём штатного цикла — notifier при OOS ценовые триггеры
+	// не оценивает, алерт придёт после возврата в продажу.
+	if !product.InStock {
+		return false
+	}
+
+	// UpdateBaseline фиксирует baseline_price=current и notified=TRUE — это
+	// «гасит» дубль от notifier (Decide шлёт повторные только при цене НИЖЕ
+	// baseline), а следующее уведомление придёт при дальнейшем падении цены.
+	if err := b.subRepo.UpdateBaseline(ctx, subID, current); err != nil {
+		b.log.Warn("max: update baseline on instant alert", "sub_id", subID, "err", err)
+	}
+
+	text := fmt.Sprintf(
+		"✅ Порог %.0f ₽ установлен.\n\n"+
+			"🎯 %s уже стоит %.0f ₽ — ниже твоего порога!\n"+
+			"Следующее уведомление пришлю, когда цена опустится ещё ниже.",
+		target, product.Name, current,
+	)
+	b.send(ctx, maxID, text, maxTriggerKeyboard(subID, domain.TriggerBelowTarget, b.chartURL(product.PublicID)))
+	return true
+}
+
 func (b *Bot) promptManualTarget(ctx context.Context, maxID, subID int64) {
 	if err := b.setTrackFSM(ctx, maxID, maxTrackFSM{SubID: subID, Trigger: string(domain.TriggerBelowTarget)}); err != nil {
 		b.send(ctx, maxID, "Не получилось начать ввод (нет связи с хранилищем). Останется «Любое снижение».", nil)
@@ -298,6 +348,9 @@ func (b *Bot) handleProductTarget(ctx context.Context, maxID int64, user *domain
 		b.send(ctx, maxID, "Произошла ошибка, попробуй позже.", nil)
 		return
 	}
+	if b.maybeInstantBelowTargetAlert(ctx, maxID, p.ID, price) {
+		return
+	}
 	b.send(ctx, maxID, "✅ Готово! "+domain.TriggerDescription(domain.TriggerBelowTarget, &price, nil),
 		maxTriggerKeyboard(p.ID, domain.TriggerBelowTarget, b.chartURLForSub(ctx, p.ID)))
 }
@@ -314,6 +367,9 @@ func (b *Bot) handleTrackThreshold(ctx context.Context, maxID int64, user *domai
 		if err := b.subRepo.SetTrigger(ctx, fsm.SubID, user.ID, string(domain.TriggerBelowTarget), &price, nil); err != nil {
 			b.log.Error("max: set trigger below", "sub_id", fsm.SubID, "err", err)
 			b.send(ctx, maxID, "Произошла ошибка, попробуй позже.", nil)
+			return
+		}
+		if b.maybeInstantBelowTargetAlert(ctx, maxID, fsm.SubID, price) {
 			return
 		}
 		b.send(ctx, maxID, "✅ Готово! "+domain.TriggerDescription(domain.TriggerBelowTarget, &price, nil),
