@@ -155,7 +155,10 @@ def main():
         log.warning("OZON_LOAD_IDS не задан — гоняю по одному товару, мало показательно. "
                     "Задай реальные id из трек-листа через запятую.")
 
-    kw = {"headless": HEADLESS}
+    # geoip=True — как в проде (server.py): выравнивает локаль/таймзону/гео под
+    # exit-IP. БЕЗ него на RU-мобильном прокси FAB подозрительнее (locale-mismatch)
+    # → дорожка не прогревается. Образ ozon-miner несёт camoufox[geoip].
+    kw = {"headless": HEADLESS, "geoip": True}
     if proxy:
         kw["proxy"] = proxy
     tally = {"ok": 0, "no_price": 0, "blocked": 0, "error": 0}
@@ -199,9 +202,9 @@ def main():
                 lat_sum += dt
                 lat_n += 1
             total = sum(tally.values())
-            log.info("[%d/%d] id=%s → %s (%.2fс, len=%s) | ok=%d no_price=%d blocked=%d error=%d "
-                     "blocked_rate=%.1f%%",
-                     k, N, pid, cls, dt, f.get("len", "—"),
+            log.info("[%d/%d] id=%s → %s (status=%s, %.2fс, len=%s) | ok=%d no_price=%d "
+                     "blocked=%d error=%d blocked_rate=%.1f%%",
+                     k, N, pid, cls, f.get("status"), dt, f.get("len", "—"),
                      tally["ok"], tally["no_price"], tally["blocked"], tally["error"],
                      100.0 * tally["blocked"] / total)
             if k < N:
