@@ -115,15 +115,17 @@ OZON_LANE_2_COOKIE=__Secure-access-token=...;...  # authed → 18+
 кадансом и считает `blocked_rate`. ⚠️ Может подпалить боевой egress-IP — гоняй с
 изолированного IP или будь готов переждать.
 
+`--network` НЕ нужен: probe ходит напрямую в интернет (ozon.ru + прокси), а не во
+внутреннюю docker-сеть. Монтируем ПАПКУ `ozon-miner` в `/probe` и запускаем оттуда
+(если скрипта нет в собранном образе — bind-mount его подтащит; при отсутствии
+файла-источника docker создаёт пустую папку → "can't find '__main__'").
+
 ```bash
 cd ~/projects/tryberrybot
 set -a; . ./.env; set +a
-NET=$(docker network ls --format '{{.Name}}' | grep -m1 tryberry)
 
-# БЕЗ прокси (датацентр-direct) — проверяем, можно ли жить без мобильного.
-# NB: монтируем ПАПКУ в /probe (bind-mount одиночного файла в Docker Desktop/WSL2
-# иногда подменяется пустой директорией → "can't find '__main__'").
-docker run --rm --network "$NET" \
+# БЕЗ прокси (датацентр-direct) — проверяем, можно ли жить без мобильного:
+docker run --rm \
   -v "$PWD/ozon-miner:/probe" \
   -e OZON_PROXY_URL="" \
   -e OZON_LOAD_IDS="1889984997,<id2>,<id3>" \
