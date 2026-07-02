@@ -36,8 +36,11 @@ type Product struct {
 	Name        string
 	ImageURL    string
 	Marketplace string
-	CreatedAt   time.Time
-	UpdatedAt   time.Time
+	// InStock — наличие по последнему скрейпу. Заполняется только read-путём
+	// ProductRepo.GetByID (write-пути вроде Upsert его не возвращают).
+	InStock   bool
+	CreatedAt time.Time
+	UpdatedAt time.Time
 }
 
 type Subscription struct {

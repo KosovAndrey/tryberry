@@ -94,12 +94,12 @@ func (r *ProductRepo) Upsert(ctx context.Context, url, name, imageURL, marketpla
 
 func (r *ProductRepo) GetByID(ctx context.Context, id int64) (*domain.Product, error) {
 	const q = `
-		SELECT id, public_id, url, name, image_url, marketplace, created_at, updated_at
+		SELECT id, public_id, url, name, image_url, marketplace, in_stock, created_at, updated_at
 		FROM products WHERE id = $1`
 
 	p := &domain.Product{}
 	err := r.db.QueryRow(ctx, q, id).
-		Scan(&p.ID, &p.PublicID, &p.URL, &p.Name, &p.ImageURL, &p.Marketplace, &p.CreatedAt, &p.UpdatedAt)
+		Scan(&p.ID, &p.PublicID, &p.URL, &p.Name, &p.ImageURL, &p.Marketplace, &p.InStock, &p.CreatedAt, &p.UpdatedAt)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, domain.ErrNotFound
 	}
