@@ -36,10 +36,12 @@ body{position:fixed;inset:0}
    между «сегодня»↔сообщением и между сообщениями (класс ставит app.js). */
 .typing.done{display:none}
 
-/* ── COMPOSER: закреплён снизу, с учётом home-индикатора (safe-area-bottom) ── */
+/* ── COMPOSER: закреплён в САМЫЙ низ, без safe-area-bottom-отступа.
+   На реальном iPhone home-индикатор ляжет поверх — для записи так и нужно
+   (бар у нижнего края экрана, поле не «висит» на высоте своего же бара). ── */
 .composer{
   flex:none;
-  padding:.5rem .8rem calc(env(safe-area-inset-bottom) + .45rem);
+  padding:.5rem .8rem .5rem;
 }
 
 /* хвоста-скролла из screen.css здесь нет */
