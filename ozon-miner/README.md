@@ -81,6 +81,57 @@ OZON_LANE_MIN_INTERVAL_MS=1500                   # человекоподобн�
 (прокси+аккаунт), внутри дорожки — flat. Дешевле новых дорожек — растягивать каданс
 низкоприоритетных товаров (`OZON_MIN_INTERVAL_MINUTES`).
 
+## Фаза 3: анонимный / гибридный режим (2026-07-02)
+
+`probe.py` c пустым `OZON_COOKIE` доказал: **camoufox проходит FAB БЕЗ логина**
+(status=200, widgetStates+цена). Аккаунт-cookie был легаси-грузом из до-camoufox
+эпохи — обычным товарам он не нужен. Нужен **только под 18+** (нож/алкоголь/табак):
+анонимная сессия упирается в возрастной гейт (ввод даты рождения).
+
+**Гибрид (реализован):**
+- Дорожка **без cookie** = анонимная (штатная). Обычный поток идёт через неё —
+  аккаунт не светится → нечего банить, масштаб только по IP.
+- Дорожка **с cookie** (залогинена, 18+ подтверждён) = `authed`, резерв под 18+.
+- Go на анонимный `ErrAgeRestricted` ретраит `GET /scrape?id=<id>&authed=1` →
+  сайдкар берёт `authed`-дорожку. Нет authed-дорожки → Go отдаёт `ErrAgeRestricted`
+  (как раньше).
+
+Пример конфига (2 анонимные дорожки + 1 authed под 18+):
+```env
+OZON_POOL_SIZE=3
+OZON_LANE_0_PROXY=http://user:pass@host0:port     # аноним (без _COOKIE)
+OZON_LANE_1_PROXY=http://user:pass@host1:port     # аноним
+OZON_LANE_2_PROXY=http://user:pass@host2:port
+OZON_LANE_2_COOKIE=__Secure-access-token=...;...  # authed → 18+
+```
+Чисто анонимный прод (без 18+): просто не задавать ни одной `_COOKIE`.
+
+Метрики: `ozon_miner_authed_lanes` (0 = 18+ недоступны), `ozon_miner_lane_healthy{authed="0|1"}`.
+
+### `probe_load.py` — серийный тест «жизнь без мобильного прокси»
+
+Открытие: одиночный probe прошёл FAB анонимно **даже с датацентр-IP** (без прокси).
+Но мобильный прокси ценен под НАГРУЗКОЙ. Скрипт эмулирует одну дорожку под боевым
+кадансом и считает `blocked_rate`. ⚠️ Может подпалить боевой egress-IP — гоняй с
+изолированного IP или будь готов переждать.
+
+```bash
+cd ~/projects/tryberrybot
+set -a; . ./.env; set +a
+NET=$(docker network ls --format '{{.Name}}' | grep -m1 tryberry)
+
+# БЕЗ прокси (датацентр-direct) — проверяем, можно ли жить без мобильного:
+docker run --rm --network "$NET" \
+  -v "$PWD/ozon-miner/probe_load.py:/app/probe_load.py" \
+  -e OZON_PROXY_URL="" \
+  -e OZON_LOAD_IDS="1889984997,<id2>,<id3>" \
+  -e OZON_LOAD_N=80 -e OZON_LOAD_INTERVAL_S=20 \
+  --entrypoint python tryberrybot-ozon-miner /app/probe_load.py
+```
+Затем прогнать второй раз с `OZON_PROXY_URL="$OZON_PROXY_URL"` и сравнить
+`blocked_rate`. Задай **реальные id из трек-листа** в `OZON_LOAD_IDS` (дефолт — один
+товар, мало показателен). Образ — `tryberrybot-ozon-miner` (там camoufox), не token-miner.
+
 ### Статус скелета (TODO до прода)
 
 - [ ] прогнать `probe.py` с залогиненной cookie → подтвердить, что метод друга даёт 200;

@@ -5,6 +5,7 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -207,7 +208,33 @@ func (s *OzonScraper) Scrape(ctx context.Context, url string) (*Result, error) {
 		return nil, err
 	}
 
-	statusCode, body, err := s.fetch(ctx, id)
+	// Обычный поток идёт через анонимную дорожку (аккаунт бережём). Если товар
+	// оказался за возрастным гейтом 18+ (нож/алкоголь/табак), анонимная сессия
+	// цену не отдаёт — повторяем через авторизованную дорожку (аккаунт с
+	// подтверждённым 18+). Только browser-режим: в tls-режиме дорожка всегда одна
+	// и уже под аккаунтом.
+	res, err := s.scrapeOnce(ctx, id, false)
+	if errors.Is(err, ErrAgeRestricted) && s.mode == ozonModeBrowser {
+		s.log.Info("ozon: age-gated on anon lane, retrying via authed lane", "id", id)
+		if err := s.limiter.Wait(ctx); err != nil {
+			return nil, err
+		}
+		res2, err2 := s.scrapeOnce(ctx, id, true)
+		if err2 != nil {
+			// Авторизованной дорожки нет / retry не удался → отдаём исходный 18+
+			// (то же поведение, что и раньше, а не мутный sidecar-error).
+			s.log.Warn("ozon: authed retry for age-gated item failed", "id", id, "err", err2)
+			return nil, ErrAgeRestricted
+		}
+		return res2, nil
+	}
+	return res, err
+}
+
+// scrapeOnce делает один заход: fetch (анонимной или авторизованной дорожкой в
+// browser-режиме) + разбор статуса/тела. authed игнорируется в tls-режиме.
+func (s *OzonScraper) scrapeOnce(ctx context.Context, id string, authed bool) (*Result, error) {
+	statusCode, body, err := s.fetch(ctx, id, authed)
 	if err != nil {
 		return nil, err
 	}
@@ -250,9 +277,9 @@ func (s *OzonScraper) Scrape(ctx context.Context, url string) (*Result, error) {
 // по режиму: browser → через сайдкар-пул (живой Chromium), иначе → tls-client
 // (mobile/web). Дальше Scrape единообразно разбирает статус/тело независимо от
 // транспорта.
-func (s *OzonScraper) fetch(ctx context.Context, id string) (int, []byte, error) {
+func (s *OzonScraper) fetch(ctx context.Context, id string, authed bool) (int, []byte, error) {
 	if s.mode == ozonModeBrowser {
-		return s.fetchViaBrowser(ctx, id)
+		return s.fetchViaBrowser(ctx, id, authed)
 	}
 	return s.fetchViaTLS(ctx, id)
 }
@@ -277,8 +304,12 @@ func (s *OzonScraper) fetchViaTLS(ctx context.Context, id string) (int, []byte, 
 // storefront-API из живой залогиненной сессии (она проходит FAB и сама рефрешит
 // токен). Сайдкар возвращает сырое тело widgetStates и зеркалит upstream-статус
 // (включая 403 при FAB), поэтому дальнейшая обработка в Scrape — общая.
-func (s *OzonScraper) fetchViaBrowser(ctx context.Context, id string) (int, []byte, error) {
+func (s *OzonScraper) fetchViaBrowser(ctx context.Context, id string, authed bool) (int, []byte, error) {
 	api := s.browserURL + "/scrape?id=" + url.QueryEscape(id)
+	if authed {
+		// authed=1 → сайдкар возьмёт авторизованную дорожку (для 18+ товаров).
+		api += "&authed=1"
+	}
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, api, nil)
 	if err != nil {
 		return 0, nil, err

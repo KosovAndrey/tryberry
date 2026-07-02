@@ -2,10 +2,12 @@
 """
 server.py — ozon-miner, фаза 2: БРАУЗЕР-КАК-ТРАНСПОРТ с ПУЛОМ ДОРОЖЕК (camoufox).
 
-Долгоживущий HTTP-сервис. Держит пул из N «дорожек» (lane). Каждая дорожка =
-отдельный залогиненный браузер **camoufox** (анти-детект Firefox) через СВОЙ
-мобильный прокси и СВОЮ аккаунт-cookie. Живая сессия проходит антибот FAB
-(camoufox пробил его там, где голый Chromium палился) и сама держит доверие/токен.
+Долгоживущий HTTP-сервис. Держит пул из N «дорожек» (lane). Дорожка = отдельный
+браузер **camoufox** (анти-детект Firefox) через свой прокси. camoufox проходит
+антибот FAB (пробил его там, где голый Chromium палился) БЕЗ логина, поэтому
+дорожки по умолчанию АНОНИМНЫЕ (без cookie). Аккаунт-cookie нужен ТОЛЬКО под
+товары 18+ (возрастной гейт) — такая дорожка помечается authed и резервируется
+под 18+, обычный поток идёт через анонимные (аккаунт бережём от бана).
 Цену достаём «методом друга»: in-page fetch к entrypoint-api ИЗНУТРИ доверенного
 контекста (JA3 + куки + решённый челлендж согласованы) — см. probe.py.
 
@@ -21,8 +23,9 @@ GET /search?text=<запрос> (выдача) → дорожка делает i
   - опц. ротация IP по switch-ссылке провайдера (OZON_PROXY_ROTATE_URL) с
     последующим пере-прогревом — против накопления репутации на одном IP.
 
-Масштабирование = добавить дорожек (по IP+аккаунту): OZON_POOL_SIZE +
-OZON_LANE_<i>_PROXY/_COOKIE. Дорожка 0 фолбэчит на OZON_PROXY_URL / OZON_COOKIE.
+Масштабирование = добавить дорожек: OZON_POOL_SIZE + OZON_LANE_<i>_PROXY (cookie
+задавать НЕ обязательно — без него дорожка анонимная). Дорожка 0 фолбэчит на
+OZON_PROXY_URL / OZON_COOKIE. Route /scrape?id=X&authed=1 → authed-дорожка (18+).
 """
 
 import asyncio
@@ -225,6 +228,10 @@ def _looks_blocked(status: int, body: str) -> bool:
 
 
 def _load_lane_configs():
+    """Собрать дорожки из env. Дорожка БЕЗ cookie — валидна и штатна (анонимная):
+    camoufox проходит FAB без логина, аккаунт нужен ТОЛЬКО для товаров 18+
+    (возрастной гейт). Дорожка С cookie (залогинена, 18+ подтверждён) резервируется
+    под 18+; обычный поток идёт через анонимные (аккаунт бережём от бана)."""
     configs = []
     for i in range(POOL_SIZE):
         proxy = os.getenv(f"OZON_LANE_{i}_PROXY", "").strip()
@@ -232,9 +239,6 @@ def _load_lane_configs():
         if i == 0:
             proxy = proxy or os.getenv("OZON_PROXY_URL", "").strip()
             cookie = cookie or os.getenv("OZON_COOKIE", "").strip()
-        if not cookie:
-            log.warning("дорожка %d: нет cookie (OZON_LANE_%d_COOKIE) — пропускаю", i, i)
-            continue
         configs.append({"idx": i, "proxy": proxy, "cookie": cookie})
     return configs
 
@@ -249,6 +253,9 @@ class Lane:
         self.idx = cfg["idx"]
         self.proxy = cfg["proxy"]
         self.cookie = cfg["cookie"]
+        # authed = залогиненная сессия (есть access-token) → умеет 18+. Анонимная
+        # дорожка (authed=False) обычные товары тянет, но на 18+ упрётся в гейт.
+        self.authed = "__Secure-access-token" in self.cookie
         self.lock = asyncio.Lock()
         self.healthy = False
         self.egress_ip = ""
@@ -453,25 +460,39 @@ class Pool:
         self.lanes = lanes
 
     def pick(self, product_id: str):
-        if not self.lanes:
+        """Дорожка под обычный товар. Предпочитаем АНОНИМНЫЕ живые (аккаунт бережём
+        от бана — он нужен только под 18+), шардируя по product_id для липкости
+        товар→дорожка. Если анонимных нет — фолбэк на любую живую (в т.ч. authed)."""
+        pool = [l for l in self.lanes if l.healthy and not l.authed]
+        if not pool:
+            pool = [l for l in self.lanes if l.healthy]
+        if not pool:
             return None
         try:
-            i = int(product_id) % len(self.lanes)
+            i = int(product_id) % len(pool)
         except ValueError:
-            i = hash(product_id) % len(self.lanes)
-        lane = self.lanes[i]
-        if lane.healthy:
-            return lane
-        alive = [l for l in self.lanes if l.healthy]
-        return alive[i % len(alive)] if alive else None
+            i = hash(product_id) % len(pool)
+        return pool[i]
+
+    def pick_authed(self):
+        """Живая АВТОРИЗОВАННАЯ дорожка — для товаров 18+ (аноним упирается в
+        возрастной гейт). None → нет живой authed-дорожки (18+ недоступны)."""
+        alive = [l for l in self.lanes if l.healthy and l.authed]
+        return random.choice(alive) if alive else None
 
     def pick_any(self):
-        """Любая живая дорожка (для поиска — нет product_id для шардирования)."""
-        alive = [l for l in self.lanes if l.healthy]
-        return random.choice(alive) if alive else None
+        """Любая живая дорожка (поиск/витрина — нет product_id для шардирования).
+        Предпочитаем анонимные, чтобы не гонять аккаунт по массовому потоку."""
+        pool = [l for l in self.lanes if l.healthy and not l.authed]
+        if not pool:
+            pool = [l for l in self.lanes if l.healthy]
+        return random.choice(pool) if pool else None
 
     def healthy_count(self) -> int:
         return sum(1 for l in self.lanes if l.healthy)
+
+    def authed_healthy_count(self) -> int:
+        return sum(1 for l in self.lanes if l.healthy and l.authed)
 
     async def maintenance_loop(self):
         """Раз в MAINT_INTERVAL_S: ротация по расписанию, перепрогрев нездоровых
@@ -506,9 +527,13 @@ async def handle_scrape(request: web.Request) -> web.Response:
     product_id = (request.query.get("id") or "").strip()
     if not product_id.isdigit():
         return web.json_response({"error": "id must be numeric"}, status=400)
-    lane = pool.pick(product_id)
+    # authed=1 → товар за возрастным гейтом 18+, нужна авторизованная дорожка
+    # (Go зовёт этот путь ретраем после ErrAgeRestricted на анонимной дорожке).
+    authed = request.query.get("authed") == "1"
+    lane = pool.pick_authed() if authed else pool.pick(product_id)
     if lane is None:
-        return web.Response(status=502, text="no healthy lanes")
+        return web.Response(status=502,
+                            text="no healthy authed lanes" if authed else "no healthy lanes")
     status, body = await lane.fetch_path(_product_path(product_id), f"product:{product_id}")
     if status == 0:
         return web.Response(status=502, text="lane fetch failed")
@@ -576,11 +601,13 @@ async def handle_page(request: web.Request) -> web.Response:
 
 async def handle_health(request: web.Request) -> web.Response:
     pool: Pool = request.app["pool"]
-    lanes = [{"idx": l.idx, "healthy": l.healthy, "egress_ip": l.egress_ip}
-             for l in pool.lanes]
+    lanes = [{"idx": l.idx, "healthy": l.healthy, "authed": l.authed,
+              "egress_ip": l.egress_ip} for l in pool.lanes]
     healthy = pool.healthy_count()
-    return web.json_response({"healthy": healthy, "total": len(pool.lanes), "lanes": lanes},
-                             status=200 if healthy > 0 else 503)
+    return web.json_response(
+        {"healthy": healthy, "authed_healthy": pool.authed_healthy_count(),
+         "total": len(pool.lanes), "lanes": lanes},
+        status=200 if healthy > 0 else 503)
 
 
 async def handle_metrics(request: web.Request) -> web.Response:
@@ -596,11 +623,16 @@ async def handle_metrics(request: web.Request) -> web.Response:
         "# HELP ozon_miner_total_lanes Всего сконфигурённых дорожек",
         "# TYPE ozon_miner_total_lanes gauge",
         f"ozon_miner_total_lanes {len(pool.lanes)}",
+        "# HELP ozon_miner_authed_lanes Число живых АВТОРИЗОВАННЫХ дорожек (0 = 18+ товары недоступны)",
+        "# TYPE ozon_miner_authed_lanes gauge",
+        f"ozon_miner_authed_lanes {pool.authed_healthy_count()}",
         "# HELP ozon_miner_lane_healthy Здоровье конкретной дорожки (1=healthy, 0=нет)",
         "# TYPE ozon_miner_lane_healthy gauge",
     ]
     for l in pool.lanes:
-        lines.append(f'ozon_miner_lane_healthy{{lane="{l.idx}"}} {1 if l.healthy else 0}')
+        lines.append(
+            f'ozon_miner_lane_healthy{{lane="{l.idx}",authed="{1 if l.authed else 0}"}} '
+            f'{1 if l.healthy else 0}')
     lines.extend(_latency_metric_lines())
     return web.Response(text="\n".join(lines) + "\n", content_type="text/plain")
 
@@ -610,9 +642,10 @@ async def main():
     if not configs:
         raise SystemExit("нет ни одной сконфигурённой дорожки: задай OZON_COOKIE "
                          "(дорожка 0) или OZON_LANE_<i>_COOKIE")
-    log.info("старт ozon-miner: port=%d дорожек=%d (POOL_SIZE=%d) движок=camoufox "
-             "ротация=%s keepalive=%.0fмин",
-             PORT, len(configs), POOL_SIZE,
+    n_authed = sum(1 for c in configs if "__Secure-access-token" in c["cookie"])
+    log.info("старт ozon-miner: port=%d дорожек=%d (аноним=%d authed=%d, POOL_SIZE=%d) "
+             "движок=camoufox ротация=%s keepalive=%.0fмин",
+             PORT, len(configs), len(configs) - n_authed, n_authed, POOL_SIZE,
              f"{ROTATE_INTERVAL_S/60:.0f}мин" if ROTATE_INTERVAL_S > 0 else "выкл",
              WARM_KEEPALIVE_S / 60)
 
