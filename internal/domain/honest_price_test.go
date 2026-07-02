@@ -66,53 +66,6 @@ func TestHonestPriceLine(t *testing.T) {
 	}
 }
 
-func TestSuggestTargets(t *testing.T) {
-	now := time.Now()
-	old := now.Add(-30 * 24 * time.Hour)
-	full := PriceStats{Min30: 100, Median30: 150, Min90: 90, MinAll: 80, Seg30: 4, CountAll: 50, Since: old, HasData: true}
-
-	t.Run("история есть: минимум, -5% от обычной, -10%", func(t *testing.T) {
-		got := SuggestTargets(200, full, now) // current=200 > всех кандидатов
-		// ждём 90 (минимум), 142 (median*0.95), 180 (-10%) — все < 200, по возрастанию
-		if len(got) != 3 {
-			t.Fatalf("got %d вариантов: %+v; хотим 3", len(got), got)
-		}
-		if !(got[0].Price < got[1].Price && got[1].Price < got[2].Price) {
-			t.Errorf("не отсортировано по возрастанию: %+v", got)
-		}
-		for _, s := range got {
-			if s.Price >= 200 {
-				t.Errorf("target %.0f не ниже текущей 200", s.Price)
-			}
-		}
-	})
-
-	t.Run("мало данных: только -10% фолбэк", func(t *testing.T) {
-		got := SuggestTargets(200, PriceStats{}, now)
-		if len(got) != 1 || got[0].Label != "−10%" {
-			t.Fatalf("хотим только -10%% фолбэк; got %+v", got)
-		}
-		if got[0].Price != 180 {
-			t.Errorf("-10%% от 200 = 180; got %.0f", got[0].Price)
-		}
-	})
-
-	t.Run("нулевая цена → пусто", func(t *testing.T) {
-		if got := SuggestTargets(0, full, now); got != nil {
-			t.Errorf("при current=0 ждём nil; got %+v", got)
-		}
-	})
-
-	t.Run("текущая уже у минимума: варианты только ниже неё", func(t *testing.T) {
-		got := SuggestTargets(90, full, now)
-		for _, s := range got {
-			if s.Price >= 90 {
-				t.Errorf("target %.0f не ниже текущей 90", s.Price)
-			}
-		}
-	})
-}
-
 func contains(s, sub string) bool {
 	for i := 0; i+len(sub) <= len(s); i++ {
 		if s[i:i+len(sub)] == sub {

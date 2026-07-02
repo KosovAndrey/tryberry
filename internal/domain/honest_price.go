@@ -2,8 +2,6 @@ package domain
 
 import (
 	"fmt"
-	"math"
-	"sort"
 	"time"
 )
 
@@ -80,60 +78,6 @@ func AssessHonestPrice(current float64, s PriceStats, now time.Time) HonestPrice
 		hp.Verdict = VerdictAboveTypical
 	}
 	return hp
-}
-
-// TargetSuggestion — предложенная целевая цена для триггера below_target (кнопка в боте).
-type TargetSuggestion struct {
-	Price float64 // рубли, округлено
-	Label string  // пояснение («минимум за 90 дней», «−10%»)
-}
-
-// SuggestTargets предлагает варианты целевой цены для «уведомить когда дешевле X»,
-// опираясь на историю (honest-price): минимум за 90 дней и −5% от обычной (медианы).
-// Всегда добавляет относительный фолбэк «−10% от текущей», чтобы кнопки были даже без
-// истории. Возвращает только цены СТРОГО НИЖЕ current (target ≥ current сработал бы
-// мгновенно), дедуплицирует близкие, сортирует по возрастанию, максимум 3.
-func SuggestTargets(current float64, s PriceStats, now time.Time) []TargetSuggestion {
-	if current <= 0 {
-		return nil
-	}
-	type cand struct {
-		price float64
-		label string
-	}
-	var cands []cand
-	// Из истории — только если данных достаточно (тот же гейт, что у вердикта).
-	if AssessHonestPrice(current, s, now).Verdict != VerdictInsufficient {
-		if s.Min90 > 0 {
-			cands = append(cands, cand{math.Round(s.Min90), "минимум за 90 дней"})
-		}
-		if s.Median30 > 0 {
-			cands = append(cands, cand{math.Round(s.Median30 * 0.95), "−5% от обычной"})
-		}
-	}
-	cands = append(cands, cand{math.Round(current * 0.90), "−10%"}) // относительный фолбэк — всегда
-
-	out := make([]TargetSuggestion, 0, len(cands))
-	for _, c := range cands {
-		if c.price <= 0 || c.price >= current {
-			continue // target ≥ current бесполезен (сработал бы сразу)
-		}
-		dup := false
-		for _, o := range out {
-			if math.Abs(o.Price-c.price)/current < 0.01 { // близкие цены не дублируем
-				dup = true
-				break
-			}
-		}
-		if !dup {
-			out = append(out, TargetSuggestion{Price: c.price, Label: c.label})
-		}
-	}
-	sort.Slice(out, func(i, j int) bool { return out[i].Price < out[j].Price })
-	if len(out) > 3 {
-		out = out[:3]
-	}
-	return out
 }
 
 // Line — одна строка для вставки в уведомление (TG и VK). Пусто для Insufficient
