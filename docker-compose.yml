@@ -111,7 +111,7 @@ services:
         GIT_COMMIT: "${GIT_COMMIT:-dev}"
     container_name: pt_api
     ports:
-      - "8081:8081"
+      - "127.0.0.1:8081:8081"
     environment:
       DATABASE_URL: "postgres://user:password@postgres:5432/tryberrybot?sslmode=disable"
       REDIS_URL: "redis://redis:6379"
@@ -263,7 +263,7 @@ services:
         SERVICE: scraper
     container_name: pt_scraper
     ports:
-      - "8090:8090"
+      - "127.0.0.1:8090:8090"
     environment:
       DATABASE_URL: "postgres://user:password@postgres:5432/tryberrybot?sslmode=disable"
       REDIS_URL: "redis://redis:6379"
@@ -417,7 +417,7 @@ services:
         SERVICE: notifier
     container_name: pt_notifier
     ports:
-      - "8091:8091"
+      - "127.0.0.1:8091:8091"
     environment:
       DATABASE_URL: "postgres://user:password@postgres:5432/tryberrybot?sslmode=disable"
       REDIS_URL: "redis://redis:6379"
@@ -631,7 +631,7 @@ services:
       POSTGRES_USER: user
       POSTGRES_PASSWORD: password
     ports:
-      - "5433:5432"
+      - "127.0.0.1:5433:5432"
     volumes:
       - pgdata:/var/lib/postgresql/data
     healthcheck:
@@ -659,10 +659,23 @@ services:
       - "yes"
       - --appendfsync
       - everysec
+      # Хардинг после инцидента 2026-07-03 (rogue-replica attack): отключаем
+      # репликацию и загрузку модулей — мы их не используем, а это ровно векторы
+      # атаки (REPLICAOF на чужой мастер + MODULE LOAD = RCE). Defense-in-depth
+      # поверх закрытых портов.
+      - --rename-command
+      - REPLICAOF
+      - ""
+      - --rename-command
+      - SLAVEOF
+      - ""
+      - --rename-command
+      - MODULE
+      - ""
     volumes:
       - redis_data:/data
     ports:
-      - "6379:6379"
+      - "127.0.0.1:6379:6379"
     healthcheck:
       test: ["CMD", "redis-cli", "ping"]
       interval: 5s
@@ -681,7 +694,7 @@ services:
     container_name: pt_kafka
     depends_on: [zookeeper]
     ports:
-      - "9092:9092"
+      - "127.0.0.1:9092:9092"
     environment:
       KAFKA_BROKER_ID: 1
       KAFKA_ZOOKEEPER_CONNECT: zookeeper:2181
@@ -710,7 +723,7 @@ services:
     image: prom/prometheus:v2.54.1
     container_name: pt_prometheus
     ports:
-      - "9090:9090"
+      - "127.0.0.1:9090:9090"
     volumes:
       - ./monitoring/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
       - ./monitoring/prometheus/rules:/etc/prometheus/rules:ro
@@ -731,7 +744,7 @@ services:
     image: grafana/loki:3.2.0
     container_name: pt_loki
     ports:
-      - "3100:3100"
+      - "127.0.0.1:3100:3100"
     volumes:
       - ./monitoring/loki/loki-config.yml:/etc/loki/loki-config.yml:ro
       - loki_data:/loki
@@ -753,7 +766,7 @@ services:
     image: prometheuscommunity/postgres-exporter:v0.15.0
     container_name: pt_postgres_exporter
     ports:
-      - "9187:9187"
+      - "127.0.0.1:9187:9187"
     environment:
       DATA_SOURCE_NAME: "postgresql://user:password@postgres:5432/tryberrybot?sslmode=disable"
     depends_on:
@@ -764,7 +777,7 @@ services:
     image: oliver006/redis_exporter:v1.62.0
     container_name: pt_redis_exporter
     ports:
-      - "9121:9121"
+      - "127.0.0.1:9121:9121"
     command:
       - '--redis.addr=redis://redis:6379'
       - '--check-single-keys=wb:search:token:mined_at,wb:search:token:exp,wb:search:pool:healthy,wb:search:pool:oldest_mined_at,wb:search:pool:mined_total,wb:search:pool:mine_failed_total,wb:reseller:pool:healthy,wb:reseller:pool:oldest_mined_at,wb:reseller:pool:mined_total,wb:reseller:pool:mine_failed_total'
@@ -776,7 +789,7 @@ services:
     image: danielqsj/kafka-exporter:v1.7.0
     container_name: pt_kafka_exporter
     ports:
-      - "9308:9308"
+      - "127.0.0.1:9308:9308"
     command:
       - '--kafka.server=kafka:29092'
     depends_on:
@@ -787,7 +800,7 @@ services:
     image: prom/alertmanager:v0.27.0
     container_name: pt_alertmanager
     ports:
-      - "9093:9093"
+      - "127.0.0.1:9093:9093"
     volumes:
       - ./monitoring/alertmanager:/config:ro
       - alertmanager_data:/alertmanager
@@ -802,8 +815,8 @@ services:
     image: jaegertracing/all-in-one:latest
     container_name: pt_jaeger
     ports:
-      - "16686:16686"  # UI
-      - "4317:4317"    # OTLP gRPC (куда сервисы шлют спаны)
+      - "127.0.0.1:16686:16686"  # UI
+      - "127.0.0.1:4317:4317"    # OTLP gRPC (куда сервисы шлют спаны)
     environment:
       COLLECTOR_OTLP_ENABLED: "true"
       # Хранение в памяти — для пет-проекта норм
@@ -815,7 +828,7 @@ services:
     image: grafana/grafana:11.3.0
     container_name: pt_grafana
     ports:
-      - "3000:3000"
+      - "127.0.0.1:3000:3000"
     volumes:
       - ./monitoring/grafana/provisioning:/etc/grafana/provisioning:ro
       - ./monitoring/grafana/dashboards:/var/lib/grafana/dashboards:ro
