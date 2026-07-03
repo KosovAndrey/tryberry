@@ -768,7 +768,7 @@ services:
     ports:
       - "127.0.0.1:9187:9187"
     environment:
-      DATA_SOURCE_NAME: "postgresql://user:password@postgres:5432/tryberrybot?sslmode=disable"
+      DATA_SOURCE_NAME: "postgresql://user:${POSTGRES_PASSWORD}@postgres:5432/tryberrybot?sslmode=disable"
     depends_on:
       postgres:
         condition: service_healthy
