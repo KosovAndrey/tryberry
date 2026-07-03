@@ -113,7 +113,7 @@ services:
     ports:
       - "127.0.0.1:8081:8081"
     environment:
-      DATABASE_URL: "postgres://user:password@postgres:5432/tryberrybot?sslmode=disable"
+      DATABASE_URL: "postgres://user:${POSTGRES_PASSWORD}@postgres:5432/tryberrybot?sslmode=disable"
       REDIS_URL: "redis://redis:6379"
       KAFKA_BROKERS: "kafka:29092"
       KAFKA_GROUP_ID: "price-tracker"
@@ -174,7 +174,7 @@ services:
         SERVICE: bot-worker
     container_name: pt_bot_worker
     environment:
-      DATABASE_URL: "postgres://user:password@postgres:5432/tryberrybot?sslmode=disable"
+      DATABASE_URL: "postgres://user:${POSTGRES_PASSWORD}@postgres:5432/tryberrybot?sslmode=disable"
       REDIS_URL: "redis://redis:6379"
       KAFKA_BROKERS: "kafka:29092"
       KAFKA_GROUP_ID: "bot-workers"
@@ -265,7 +265,7 @@ services:
     ports:
       - "127.0.0.1:8090:8090"
     environment:
-      DATABASE_URL: "postgres://user:password@postgres:5432/tryberrybot?sslmode=disable"
+      DATABASE_URL: "postgres://user:${POSTGRES_PASSWORD}@postgres:5432/tryberrybot?sslmode=disable"
       REDIS_URL: "redis://redis:6379"
       KAFKA_BROKERS: "kafka:29092"
       KAFKA_GROUP_ID: "price-tracker"
@@ -322,7 +322,7 @@ services:
         SERVICE: search-worker
     container_name: pt_search_worker
     environment:
-      DATABASE_URL: "postgres://user:password@postgres:5432/tryberrybot?sslmode=disable"
+      DATABASE_URL: "postgres://user:${POSTGRES_PASSWORD}@postgres:5432/tryberrybot?sslmode=disable"
       REDIS_URL: "redis://redis:6379"
       KAFKA_BROKERS: "kafka:29092"
       KAFKA_GROUP_ID: "search-workers"
@@ -370,7 +370,7 @@ services:
       args:
         SERVICE: search-worker
     environment:
-      DATABASE_URL: "postgres://user:password@postgres:5432/tryberrybot?sslmode=disable"
+      DATABASE_URL: "postgres://user:${POSTGRES_PASSWORD}@postgres:5432/tryberrybot?sslmode=disable"
       REDIS_URL: "redis://redis:6379"
       KAFKA_BROKERS: "kafka:29092"
       KAFKA_GROUP_ID: "reseller-workers"
@@ -419,7 +419,7 @@ services:
     ports:
       - "127.0.0.1:8091:8091"
     environment:
-      DATABASE_URL: "postgres://user:password@postgres:5432/tryberrybot?sslmode=disable"
+      DATABASE_URL: "postgres://user:${POSTGRES_PASSWORD}@postgres:5432/tryberrybot?sslmode=disable"
       REDIS_URL: "redis://redis:6379"
       KAFKA_BROKERS: "kafka:29092"
       KAFKA_GROUP_ID: "price-tracker"
@@ -577,7 +577,7 @@ services:
           SERVICE: scheduler
       container_name: pt_scheduler
       environment:
-        DATABASE_URL: "postgres://user:password@postgres:5432/tryberrybot?sslmode=disable"
+        DATABASE_URL: "postgres://user:${POSTGRES_PASSWORD}@postgres:5432/tryberrybot?sslmode=disable"
         KAFKA_BROKERS: "kafka:29092"
         SCRAPE_INTERVAL_MINUTES: "15"
         OZON_MIN_INTERVAL_MINUTES: "${OZON_MIN_INTERVAL_MINUTES:-20}"
