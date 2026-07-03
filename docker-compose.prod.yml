@@ -145,7 +145,7 @@ services:
       POSTGRES_HOST: postgres
       POSTGRES_DB: tryberrybot
       POSTGRES_USER: user
-      POSTGRES_PASSWORD: password
+      POSTGRES_PASSWORD: "${POSTGRES_PASSWORD:?POSTGRES_PASSWORD must be set in .env}"
       POSTGRES_EXTRA_OPTS: "-Z6 --blobs"   # gzip уровень 6
       SCHEDULE: "@daily"                   # раз в сутки в полночь
       BACKUP_KEEP_DAYS: 7                  # 7 дневных
