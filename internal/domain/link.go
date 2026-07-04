@@ -108,3 +108,14 @@ func MaxStartLink(botURL, payload string) string {
 	}
 	return botURL + "?start=" + payload
 }
+
+// VKRefLink — ссылка на VK-бота с ref-параметром: https://vk.me/club<id>?ref=<payload>.
+// VK кладёт payload в message_new.object.message.ref первого сообщения после
+// перехода (юзеру достаточно нажать «Начать») → VK-бот редимит link_<код> без
+// ручного ввода. "" если ссылка на бота не задана.
+func VKRefLink(botURL, payload string) string {
+	if botURL == "" || payload == "" {
+		return ""
+	}
+	return botURL + "?ref=" + payload
+}

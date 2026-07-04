@@ -48,3 +48,14 @@ func TestMaxStartLink(t *testing.T) {
 		t.Error("empty payload must give empty link")
 	}
 }
+
+func TestVKRefLink(t *testing.T) {
+	got := VKRefLink("https://vk.me/club239474122", "link_ABCD2345")
+	want := "https://vk.me/club239474122?ref=link_ABCD2345"
+	if got != want {
+		t.Errorf("VKRefLink = %q, want %q", got, want)
+	}
+	if VKRefLink("", "link_x") != "" || VKRefLink("https://vk.me/c1", "") != "" {
+		t.Error("empty botURL/payload must give empty link")
+	}
+}

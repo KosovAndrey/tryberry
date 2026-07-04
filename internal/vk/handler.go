@@ -28,13 +28,16 @@ type CallbackEvent struct {
 }
 
 // messageNew — object события message_new. Payload приходит от нажатий
-// text-кнопок клавиатуры (JSON-строка, см. TextButton).
+// text-кнопок клавиатуры (JSON-строка, см. TextButton). Ref — параметр ?ref=
+// ссылки vk.me, по которой юзер пришёл в диалог (первое сообщение после
+// перехода): кнопка «Привязать VK» в TG передаёт в нём link_<код>.
 type messageNew struct {
 	Message struct {
 		FromID  int64  `json:"from_id"`
 		PeerID  int64  `json:"peer_id"`
 		Text    string `json:"text"`
 		Payload string `json:"payload"`
+		Ref     string `json:"ref"`
 	} `json:"message"`
 }
 
@@ -225,6 +228,18 @@ func (b *Bot) HandleEvent(ctx context.Context, ev CallbackEvent) {
 	}
 	// Только личные сообщения (peer_id > 2e9 — чаты, их игнорируем).
 	if m.Message.PeerID != m.Message.FromID {
+		return
+	}
+	// Deep-link привязки: юзер пришёл по vk.me/...?ref=link_<код> (кнопка
+	// «Привязать VK» в TG) — гасим код сразу, само сообщение («Начать») не
+	// интересно. handleLink сам отвечает и об успехе, и о протухшем коде.
+	if code, ok := strings.CutPrefix(m.Message.Ref, "link_"); ok && code != "" {
+		user, err := b.userRepo.UpsertVK(ctx, m.Message.FromID)
+		if err != nil {
+			b.log.Error("vk: upsert user (ref link)", "err", err)
+			return
+		}
+		b.handleLink(ctx, m.Message.FromID, user, code)
 		return
 	}
 	b.handleMessage(ctx, m.Message.FromID, strings.TrimSpace(m.Message.Text), m.Message.Payload)
