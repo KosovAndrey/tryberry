@@ -700,17 +700,23 @@ func (b *Bot) issueLinkCodeMax(ctx context.Context, vkID int64, u *domain.User) 
 		return
 	}
 	ttlMin := int(domain.LinkCodeTTL.Minutes())
+	// С deep-link кнопкой (?start=link_<код>) MAX отдаст код боту сам; ручной
+	// ввод оставляем как фолбэк (и единственный путь, если MAX_BOT_URL не задан).
+	steps := "1. Открой нашего бота в MAX\n2. Отправь ему сообщение:"
+	if b.maxBotURL != "" {
+		steps = "Нажми «Привязать в MAX» — код передастся автоматически.\n" +
+			"Если не сработало — отправь боту вручную:"
+	}
 	text := fmt.Sprintf(
 		"🔗 Привязка MAX\n\n"+
-			"1. Открой нашего бота в MAX\n"+
-			"2. Отправь ему сообщение:\n\nпривязать %s\n\n"+
+			"%s\n\nпривязать %s\n\n"+
 			"Код действует %d минут и работает один раз. Никому его не пересылай — "+
 			"это ключ к твоему аккаунту.",
-		code, ttlMin)
+		steps, code, ttlMin)
 	var kb *Keyboard
 	if b.maxBotURL != "" {
 		kb = &Keyboard{Inline: true, Buttons: [][]Button{
-			{LinkButton("Открыть бота в MAX", b.maxBotURL)},
+			{LinkButton("🔗 Привязать в MAX", domain.MaxStartLink(b.maxBotURL, "link_"+code))},
 		}}
 	}
 	b.send(ctx, vkID, text, kb)
