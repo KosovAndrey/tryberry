@@ -17,11 +17,16 @@
 #   sudo tee /etc/cron.d/tryberry-selfcheck >/dev/null <<'CRON'
 #   */15 * * * * root /home/kosovandrey/projects/tryberrybot/scripts/security-selfcheck.sh >> /var/log/tryberry-selfcheck.log 2>&1
 #   CRON
-set -uo pipefail
+# Без pipefail: проверки вида `ufw status | grep -q` меряются по exit-коду grep,
+# а pipefail превращал SIGPIPE у ufw (grep -q закрывает канал после первого
+# совпадения) в ложный «UFW не активен».
+set -u
 
 # Под cron PATH урезан до /usr/bin:/bin — ufw/iptables из /usr/sbin не находятся
 # и проверка фаервола ложно алертит «UFW не активен».
 export PATH="/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+# Парсим вывод ufw по английской локали («Status: active»).
+export LC_ALL=C
 
 PROJECT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 ENV_FILE="$PROJECT_DIR/.env"
