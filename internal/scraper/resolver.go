@@ -2,8 +2,10 @@ package scraper
 
 import (
 	"context"
+	"log/slog"
 	"net/http"
 	"net/url"
+	"os"
 	"regexp"
 	"strings"
 	"time"
@@ -32,6 +34,11 @@ type LinkResolver struct {
 	// вручную браузерным клиентом. nil (ошибка инициализации) → YM-шорты
 	// возвращаются как есть.
 	tls tlsDoer
+	// tlsProxy — фолбэк на showcaptcha при резолве яндексовых шортов: один
+	// повтор хопа через RU-прокси, общий cookie-jar с tls (как direct+proxy у
+	// YM-скрейпера). nil без прокси — остаёмся на direct.
+	tlsProxy tlsDoer
+	log      *slog.Logger
 }
 
 // tlsDoer — минимальный срез tls_client.HttpClient (для подмены в тестах).
@@ -77,12 +84,16 @@ var resolverURLRe = regexp.MustCompile(`https?://[^\s]+`)
 // NewLinkResolver строит резолвер с собственным http-клиентом (прямой, без прокси:
 // редиректоры отдают 3xx с Location без антибота — для самого редиректа IP-репутация
 // не нужна, а тяжёлую товарную страницу мы не тянем, её скрейпит уже нужный скрейпер
-// со своим egress). timeout<=0 → 8с.
-func NewLinkResolver(timeout time.Duration) *LinkResolver {
+// со своим egress). timeout<=0 → 8с; log==nil → slog.Default().
+func NewLinkResolver(timeout time.Duration, log *slog.Logger) *LinkResolver {
 	if timeout <= 0 {
 		timeout = 8 * time.Second
 	}
+	if log == nil {
+		log = slog.Default()
+	}
 	r := &LinkResolver{
+		log: log,
 		client: &http.Client{
 			Timeout: timeout,
 			// Явный direct-transport: Proxy=nil. НЕ наследуем HTTPS_PROXY из окружения
@@ -105,17 +116,37 @@ func NewLinkResolver(timeout time.Duration) *LinkResolver {
 			},
 		},
 	}
-	// Клиент для яндексовых шортов: Chrome-профиль (как у YM-скрейпера), без
+	// Клиенты для яндексовых шортов: Chrome-профиль (как у YM-скрейпера), без
 	// авто-редиректов — Location каждого хопа проверяем сами (стоп на showcaptcha,
-	// ранний выход на каноническом URL без фетча тяжёлой страницы). Direct, без
-	// прокси — по той же причине, что и client выше. Ошибка init не фатальна.
-	if tc, err := tls_client.NewHttpClient(tls_client.NewNoopLogger(),
-		tls_client.WithTimeoutSeconds(int(timeout/time.Second)),
+	// ранний выход на каноническом URL без фетча тяжёлой страницы). Основной —
+	// direct; на showcaptcha один повтор через RU-прокси с ОБЩИМ cookie-jar
+	// (куки, добытые прокси-хопом, видны direct-клиенту — схема getWithFallback).
+	// Прокси берём из env (YANDEX_PROXY_URL → OZON_PROXY_URL, как у YM-скрейпера):
+	// резолвер создаётся внутри трёх ботов, тянуть параметр через их конструкторы
+	// ради опционального фолбэка — лишняя обвязка. Ошибки init не фатальны.
+	jar := tls_client.NewCookieJar()
+	base := []tls_client.HttpClientOption{
+		tls_client.WithTimeoutSeconds(int(timeout / time.Second)),
 		tls_client.WithClientProfile(profiles.Chrome_146),
-		tls_client.WithCookieJar(tls_client.NewCookieJar()),
+		tls_client.WithCookieJar(jar),
 		tls_client.WithNotFollowRedirects(),
-	); err == nil {
+	}
+	if tc, err := tls_client.NewHttpClient(tls_client.NewNoopLogger(), base...); err == nil {
 		r.tls = tc
+	} else {
+		log.Warn("link resolver: tls client init failed, yandex short links disabled", "err", err)
+	}
+	proxyURL := os.Getenv("YANDEX_PROXY_URL")
+	if proxyURL == "" {
+		proxyURL = os.Getenv("OZON_PROXY_URL")
+	}
+	if proxyURL != "" && r.tls != nil {
+		if pc, err := tls_client.NewHttpClient(tls_client.NewNoopLogger(),
+			append(base, tls_client.WithProxyUrl(proxyURL))...); err == nil {
+			r.tlsProxy = pc
+		} else {
+			log.Warn("link resolver: proxy tls client init failed, direct only", "err", err)
+		}
 	}
 	return r
 }
@@ -178,29 +209,40 @@ func isYandexShort(raw string) bool {
 // авто-редиректов): /cc/… → ya.cc/m/… → канонический URL карточки/витрины.
 // Ранний выход, как только очередной Location перестал быть шортом — тяжёлую
 // конечную страницу (~2.5 МБ) не фетчим. Location на showcaptcha = антибот не
-// пустил: возвращаем исходник (пусть его честно отвергнет FindByURL), а не URL
-// капчи, который по хосту market.yandex.ru матчился бы карточным скрейпером.
+// пустил: один повтор хопа через прокси (если сконфигурён), иначе возвращаем
+// исходник (пусть его честно отвергнет FindByURL), а не URL капчи, который по
+// хосту market.yandex.ru матчился бы карточным скрейпером.
 func (r *LinkResolver) expandYandex(ctx context.Context, raw string) string {
 	if r.tls == nil {
 		return raw
 	}
 	cur := raw
 	for hop := 0; hop < resolverMaxRedirects; hop++ {
-		req, err := fhttp.NewRequestWithContext(ctx, fhttp.MethodGet, cur, nil)
+		status, loc, err := r.ymHop(ctx, r.tls, cur)
 		if err != nil {
+			r.log.Warn("link resolver: yandex short hop failed", "url", cur, "err", err)
 			return raw
 		}
-		req.Header = ymCardHeader() // тот же браузерный набор, что у YM-карточек
-		resp, err := r.tls.Do(req)
-		if err != nil {
-			return raw
+		// Антибот вместо редиректа → повтор того же хопа через прокси: он проходит
+		// SmartCaptcha и попутно кладёт куки в общий jar (дальше снова direct).
+		if ymHopCaptcha(status, loc) && r.tlsProxy != nil {
+			r.log.Info("link resolver: yandex short hit captcha on direct, retrying via proxy", "url", cur)
+			status, loc, err = r.ymHop(ctx, r.tlsProxy, cur)
+			if err != nil {
+				r.log.Warn("link resolver: yandex short proxy hop failed", "url", cur, "err", err)
+				return raw
+			}
 		}
-		resp.Body.Close()
-		if resp.StatusCode < 300 || resp.StatusCode > 399 {
-			return cur // конец цепочки (на hop 0 это исходный raw — редиректа нет)
+		if status < 300 || status > 399 {
+			if cur == raw {
+				// Редиректа не было вовсе — скорее всего страница капчи 200-м.
+				r.log.Warn("link resolver: yandex short did not redirect", "url", raw, "status", status)
+				return raw
+			}
+			return cur
 		}
-		loc := resp.Header.Get("Location")
 		if loc == "" || strings.Contains(strings.ToLower(loc), "showcaptcha") {
+			r.log.Warn("link resolver: yandex short blocked by captcha", "url", cur)
 			return raw
 		}
 		base, err := url.Parse(cur)
@@ -209,14 +251,42 @@ func (r *LinkResolver) expandYandex(ctx context.Context, raw string) string {
 		}
 		next, err := base.Parse(loc)
 		if err != nil {
+			r.log.Warn("link resolver: yandex short bad location", "url", cur, "location", loc, "err", err)
 			return raw
 		}
 		cur = next.String()
 		if !isShortLink(cur) {
+			r.log.Info("link resolver: yandex short expanded", "raw", raw, "url", cur, "hops", hop+1)
 			return cur
 		}
 	}
+	r.log.Warn("link resolver: yandex short redirect loop", "url", raw)
 	return raw
+}
+
+// ymHop — один GET без следования редиректам: статус и Location (пустой, если
+// ответ не 3xx). Тело не читаем и сразу закрываем.
+func (r *LinkResolver) ymHop(ctx context.Context, c tlsDoer, cur string) (int, string, error) {
+	req, err := fhttp.NewRequestWithContext(ctx, fhttp.MethodGet, cur, nil)
+	if err != nil {
+		return 0, "", err
+	}
+	req.Header = ymCardHeader() // тот же браузерный набор, что у YM-карточек
+	resp, err := c.Do(req)
+	if err != nil {
+		return 0, "", err
+	}
+	resp.Body.Close()
+	return resp.StatusCode, resp.Header.Get("Location"), nil
+}
+
+// ymHopCaptcha — хоп упёрся в SmartCaptcha: 3xx на showcaptcha либо не-3xx на
+// самом шорте (антибот отдаёт страницу капчи и 200-м без Location).
+func ymHopCaptcha(status int, loc string) bool {
+	if status >= 300 && status <= 399 {
+		return strings.Contains(strings.ToLower(loc), "showcaptcha")
+	}
+	return true // шорт обязан редиректить; не-3xx = что-то встало на пути
 }
 
 // isShortLink сообщает, относится ли URL к известным хостам-редиректорам.
