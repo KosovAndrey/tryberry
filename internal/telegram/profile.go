@@ -131,19 +131,25 @@ func (b *Bot) profileLinkVK(ctx context.Context, chatID int64, messageID int, us
 	}
 
 	ttlMin := int(domain.LinkCodeTTL.Minutes())
+	// С ref-кнопкой (?ref=link_<код>) VK отдаст код боту сам при первом сообщении
+	// («Начать»); ручной ввод — фолбэк (и единственный путь без VK_BOT_URL).
+	steps := "1. Открой нашего бота во ВКонтакте\n2. Отправь ему сообщение:"
+	if b.vkBotURL != "" {
+		steps = "Нажми «Привязать в VK» и отправь боту «Начать» — код передастся автоматически.\n" +
+			"Если не сработало — отправь боту вручную:"
+	}
 	text := fmt.Sprintf(
 		"🔗 <b>Привязка VK</b>\n\n"+
-			"1. Открой нашего бота во ВКонтакте\n"+
-			"2. Отправь ему сообщение:\n\n"+
+			"%s\n\n"+
 			"<code>привязать %s</code>\n\n"+
 			"Код действует <b>%d минут</b> и работает один раз. "+
 			"Никому его не пересылай — это ключ к твоему аккаунту.",
-		code, ttlMin)
+		steps, code, ttlMin)
 
 	var rows [][]tgbotapi.InlineKeyboardButton
 	if b.vkBotURL != "" {
 		rows = append(rows, tgbotapi.NewInlineKeyboardRow(
-			tgbotapi.NewInlineKeyboardButtonURL("Открыть бота в VK", b.vkBotURL),
+			tgbotapi.NewInlineKeyboardButtonURL("🔗 Привязать в VK", domain.VKRefLink(b.vkBotURL, "link_"+code)),
 		))
 	}
 	rows = append(rows, tgbotapi.NewInlineKeyboardRow(

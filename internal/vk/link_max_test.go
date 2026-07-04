@@ -1,6 +1,7 @@
 package vk
 
 import (
+	"encoding/json"
 	"strings"
 	"testing"
 
@@ -42,5 +43,18 @@ func TestVKNotifyCycle(t *testing.T) {
 		if got := strings.Join(vkNotifyCycle(&c.u), ","); got != c.want {
 			t.Errorf("%s: vkNotifyCycle = %q, want %q", c.name, got, c.want)
 		}
+	}
+}
+
+// Разбор ref из message_new: поле кладёт VK при переходе по vk.me/...?ref=…
+// (кнопка «Привязать VK» в TG передаёт в нём link_<код>).
+func TestMessageNewParsesRef(t *testing.T) {
+	raw := `{"message":{"from_id":42,"peer_id":42,"text":"Начать","payload":"","ref":"link_ABCD2345"}}`
+	var m messageNew
+	if err := json.Unmarshal([]byte(raw), &m); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if m.Message.Ref != "link_ABCD2345" {
+		t.Errorf("Ref = %q, want %q", m.Message.Ref, "link_ABCD2345")
 	}
 }
