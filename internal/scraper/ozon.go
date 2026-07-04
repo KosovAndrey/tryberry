@@ -21,6 +21,8 @@ import (
 	tls_client "github.com/bogdanfinn/tls-client"
 	"github.com/bogdanfinn/tls-client/profiles"
 	"golang.org/x/time/rate"
+
+	"gitlab.com/KosovAndrey/tryberrybot/internal/metrics"
 )
 
 // Режимы запроса к Ozon. mobile = api.ozon.ru/composer-api.bx + okhttp-TLS +
@@ -224,8 +226,10 @@ func (s *OzonScraper) Scrape(ctx context.Context, url string) (*Result, error) {
 			// Авторизованной дорожки нет / retry не удался → отдаём исходный 18+
 			// (то же поведение, что и раньше, а не мутный sidecar-error).
 			s.log.Warn("ozon: authed retry for age-gated item failed", "id", id, "err", err2)
+			metrics.OzonAgeGateRetries.WithLabelValues("failed").Inc()
 			return nil, ErrAgeRestricted
 		}
+		metrics.OzonAgeGateRetries.WithLabelValues("success").Inc()
 		return res2, nil
 	}
 	return res, err

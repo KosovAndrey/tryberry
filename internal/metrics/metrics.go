@@ -222,6 +222,17 @@ var (
 		[]string{"marketplace", "status"}, // success | not_found | blocked | proxy | auth | disabled | parse_error | error
 	)
 
+	// OzonAgeGateRetries считает ретраи age-gate (anon→authed) у Ozon:
+	// outcome = success | failed. Сумма по outcome = объём 18+ товаров.
+	OzonAgeGateRetries = promauto.NewCounterVec(
+		prometheus.CounterOpts{
+			Namespace: namespace,
+			Name:      "ozon_age_gate_retries_total",
+			Help:      "Ozon age-gate retries via authed lane by outcome (success|failed)",
+		},
+		[]string{"outcome"},
+	)
+
 	// WBBasketResolve — как резолвился basket-шард WB для товара. Формула
 	// wbBasketNumber мажет для новых vol, поэтому пробуем соседние шарды и кэшируем.
 	// outcome: cache (из кэша) | formula (кандидат точен) | probe (сосед ±4) |
