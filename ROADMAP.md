@@ -7,6 +7,33 @@
 
 ---
 
+## Журнал (2026-07-04) — хардинг после взлома: полный комплект в git
+
+P0 после инцидента 2026-07-03 проверен на проде: наружу только nginx 80/443,
+Redis master + `REPLICAOF`=unknown, бэкдора в PG нет. Дальше в ветке
+`security/server-hardening` собран весь хардинг (применить по раннбуку в
+`docs/SECURITY-HARDENING.md`):
+- **Redis:** `--requirepass` (+`REDIS_URL` с паролем везде, `REDISCLI_AUTH` для
+  healthcheck, пароль у redis-exporter), отключены `FLUSHALL/FLUSHDB/DEBUG`.
+- **Postgres:** приложение → не-суперюзер `tryberry_app` (только DML), экспортер →
+  `tryberry_monitor` (pg_monitor); `scripts/pg-create-roles.sh`. Суперюзер `user`
+  остаётся только миграциям/бэкапу.
+- **Grafana:** safe-by-default в базовом compose (пароль обязателен, anonymous off) —
+  регресс «деплой без оверрайда = admin/admin» невозможен.
+- **Деплой:** `make deploy` с guard'ом от «грязного шелла» (экспортированные
+  DATABASE_URL и пр. перебивают `.env`) и авто-`check-ports` после.
+- **Хост:** `scripts/server-harden.sh` — UFW + `DOCKER-USER` DROP (Docker обходит
+  UFW; теперь даже опубликованный по ошибке порт снаружи закрыт), SSH только по
+  ключам, fail2ban, unattended-upgrades.
+- **Детект:** Prometheus-алерты (`rules/security.yml`: Redis стал репликой/появились
+  реплики, лишний суперюзер/login-роль в PG — метрики из
+  `postgres-exporter/queries.yaml`) + независимый cron `scripts/security-selfcheck.sh`
+  с алертом в Telegram.
+
+**Осталось руками:** прогнать раннбук на сервере (новые секреты в `.env` → роли →
+`make deploy` → `server-harden.sh` → cron), ротация внешних секретов (BotFather,
+VK, платёжки, S3), тест restore бэкапа. Чек-лист — `docs/SECURITY-HARDENING.md`.
+
 ## Журнал (2026-06-28) — MAX-мессенджер: третий канал (паритет VK=TG)
 
 Добавлен MAX (max.ru) наравне с Telegram и VK — ветка `feat/max-messenger`.
