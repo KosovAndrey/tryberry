@@ -19,6 +19,10 @@
 #   CRON
 set -uo pipefail
 
+# Под cron PATH урезан до /usr/bin:/bin — ufw/iptables из /usr/sbin не находятся
+# и проверка фаервола ложно алертит «UFW не активен».
+export PATH="/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+
 PROJECT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 ENV_FILE="$PROJECT_DIR/.env"
 
