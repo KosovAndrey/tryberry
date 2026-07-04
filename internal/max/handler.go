@@ -91,6 +91,7 @@ type Bot struct {
 	promoRepo       *postgres.PromoRepo
 	referralRepo    *postgres.ReferralRepo
 	registry        *scraper.Registry
+	resolver        *scraper.LinkResolver // короткие ссылки приложений (ozon.ru/t/…, market.yandex.ru/cc/…) — паритет с TG
 	linkCodes       *redisrepo.LinkCodeStore
 	rdb             *redis.Client
 	botURL          string // ссылка на MAX-бота для приглашений
@@ -140,6 +141,7 @@ func NewBot(
 		promoRepo:       promoRepo,
 		referralRepo:    referralRepo,
 		registry:        registry,
+		resolver:        scraper.NewLinkResolver(0),
 		linkCodes:       linkCodes,
 		rdb:             rdb,
 		botURL:          botURL,
@@ -255,6 +257,10 @@ func (b *Bot) handleMessage(ctx context.Context, maxID int64, text, payload stri
 		return
 	}
 	kb := menuKeyboard(user)
+
+	// Короткие ссылки приложений (ozon.ru/t/…, market.yandex.ru/cc/…) → канонический
+	// URL до любого разбора текста; без "://" в тексте — no-op без сети. Паритет с TG.
+	text = b.resolver.ExpandInText(ctx, text)
 
 	if strings.HasPrefix(text, "/") && b.handleSlashCommand(ctx, maxID, user, text) {
 		return

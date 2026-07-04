@@ -7,6 +7,8 @@ import (
 	"net/http"
 	"strings"
 	"testing"
+
+	fhttp "github.com/bogdanfinn/fhttp"
 )
 
 func TestIsShortLink(t *testing.T) {
@@ -24,6 +26,9 @@ func TestIsShortLink(t *testing.T) {
 		{"https://aliexpress.ru/item/123.html", false}, // полный URL
 		{"https://www.wildberries.ru/catalog/123/detail.aspx", false},
 		{"https://market.yandex.ru/product--x/123", false},
+		{"https://market.yandex.ru/cc/7i6LVS", true}, // шэр карточки/витрины YM
+		{"https://ya.cc/m/7i6LVS", true},             // промежуточный хоп /cc/
+		{"https://market.yandex.ru/business--shop/924412", false}, // полный URL витрины
 		{"not a url", false},
 		{"", false},
 	}
@@ -117,6 +122,74 @@ func TestExpandInText_ReplacesOnlyShortLinks(t *testing.T) {
 	}
 	if !strings.HasPrefix(out, "глянь ") || !strings.HasSuffix(out, " плиз") {
 		t.Fatalf("ExpandInText lost surrounding text: %q", out)
+	}
+}
+
+// fakeTLS — in-memory tlsDoer: 3xx-цепочка для яндексовых шортов без сокетов.
+// expandYandex шагает по хопам сам (клиент без авто-редиректов), поэтому фейк
+// отдаёт ровно один ответ на URL: 302+Location из hops либо 200.
+type fakeTLS struct {
+	hops map[string]string
+	err  error
+}
+
+func (f fakeTLS) Do(req *fhttp.Request) (*fhttp.Response, error) {
+	if f.err != nil {
+		return nil, f.err
+	}
+	h := fhttp.Header{}
+	status := fhttp.StatusOK
+	if loc, ok := f.hops[req.URL.String()]; ok {
+		h.Set("Location", loc)
+		status = fhttp.StatusFound
+	}
+	return &fhttp.Response{
+		StatusCode: status,
+		Header:     h,
+		Body:       io.NopCloser(strings.NewReader("")),
+		Request:    req,
+	}, nil
+}
+
+func TestExpandYandex_CCChainToStorefront(t *testing.T) {
+	r := NewLinkResolver(0)
+	r.tls = fakeTLS{hops: map[string]string{
+		"https://market.yandex.ru/cc/7i6LVS": "https://ya.cc/m/7i6LVS",
+		"https://ya.cc/m/7i6LVS":             "https://market.yandex.ru/business--shop/924412?utm_medium=sharing",
+	}}
+	got := r.Expand(context.Background(), "https://market.yandex.ru/cc/7i6LVS")
+	want := "https://market.yandex.ru/business--shop/924412?utm_medium=sharing"
+	if got != want {
+		t.Fatalf("Expand = %q, want %q", got, want)
+	}
+}
+
+func TestExpandYandex_ShowcaptchaKeepsOriginal(t *testing.T) {
+	r := NewLinkResolver(0)
+	r.tls = fakeTLS{hops: map[string]string{
+		"https://market.yandex.ru/cc/x": "https://market.yandex.ru/showcaptcha?cc=1&retpath=...",
+	}}
+	in := "https://market.yandex.ru/cc/x"
+	if got := r.Expand(context.Background(), in); got != in {
+		t.Fatalf("on showcaptcha Expand = %q, want original %q", got, in)
+	}
+}
+
+func TestExpandYandex_NoTLSClientKeepsOriginal(t *testing.T) {
+	r := NewLinkResolver(0)
+	r.tls = nil
+	in := "https://market.yandex.ru/cc/x"
+	if got := r.Expand(context.Background(), in); got != in {
+		t.Fatalf("without tls client Expand = %q, want original %q", got, in)
+	}
+}
+
+func TestExpandYandex_NetworkErrorKeepsOriginal(t *testing.T) {
+	r := NewLinkResolver(0)
+	r.tls = fakeTLS{err: errors.New("boom")}
+	in := "https://ya.cc/m/dead"
+	if got := r.Expand(context.Background(), in); got != in {
+		t.Fatalf("on network error Expand = %q, want original %q", got, in)
 	}
 }
 
