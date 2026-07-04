@@ -121,7 +121,7 @@ func (b *Bot) sendMyPlan(ctx context.Context, maxID int64, user *domain.User) {
 	fmt.Fprintf(&sb, "ℹ️ Твой тариф: %s\n\n", plan.Title)
 	fmt.Fprintf(&sb, "📦 Товары: %d из %d\n", prod, plan.MaxProduct)
 	fmt.Fprintf(&sb, "🔎 Поиски: %d из %d\n", srch, plan.MaxSearch)
-	fmt.Fprintf(&sb, "⏱ Интервал проверки: %d мин\n", int(plan.Interval.Minutes()))
+	fmt.Fprintf(&sb, "🕒 Интервал проверки: %d мин\n", int(plan.Interval.Minutes()))
 	if plan.PriceRub > 0 {
 		fmt.Fprintf(&sb, "💳 Цена: %d ₽/мес\n", plan.PriceRub)
 	}

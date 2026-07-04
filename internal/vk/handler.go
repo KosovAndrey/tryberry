@@ -49,7 +49,8 @@ const (
 	cmdUnlinkTG    = "unlinktg"  // отвязать Telegram (k=confirm — подтверждено)
 	cmdLinkMax     = "linkmax"   // привязать MAX (выдать код vk2max)
 	cmdUnlinkMax   = "unlinkmax" // отвязать MAX (k=confirm — подтверждено)
-	cmdNotify      = "notify"    // цикл канала уведомлений по привязанным идентичностям
+	cmdNotify      = "notify"    // экран выбора канала уведомлений
+	cmdNotifySet   = "notifyset" // сохранить канал (k=tg|vk|max|all)
 	cmdEmail       = "email"    // сменить email для чека 54-ФЗ
 	cmdHelp        = "help"
 	cmdAdd         = "add"
@@ -86,6 +87,11 @@ type payloadData struct {
 
 func buttonPayload(cmd string) string {
 	return fmt.Sprintf(`{"cmd":%q}`, cmd)
+}
+
+// buttonPayloadKind — payload c параметром k (например, канал у notifyset).
+func buttonPayloadKind(cmd, kind string) string {
+	return fmt.Sprintf(`{"cmd":%q,"k":%q}`, cmd, kind)
 }
 
 // parsePayload — payload кнопки (zero value — не кнопка/не наш формат).
@@ -427,7 +433,9 @@ func (b *Bot) handleMessage(ctx context.Context, vkID int64, text, payload strin
 	case cmdProfile:
 		b.sendProfile(ctx, vkID, user)
 	case cmdNotify:
-		b.toggleNotify(ctx, vkID, user)
+		b.sendNotifyPicker(ctx, vkID, user)
+	case cmdNotifySet:
+		b.setNotify(ctx, vkID, user, p.Kind)
 	case cmdLink:
 		b.issueLinkCode(ctx, vkID, user)
 	case cmdUnlinkTG:
@@ -629,31 +637,49 @@ func vkIdentityCount(u *domain.User) int {
 	return n
 }
 
-// toggleNotify — циклически переключить канал уведомлений по доступным
-// идентичностям (при ≥2 привязках): vk → tg → max → all → vk, где присутствуют
-// только привязанные каналы. Легаси-both трактуем как начало цикла.
-func (b *Bot) toggleNotify(ctx context.Context, vkID int64, u *domain.User) {
+// sendNotifyPicker — экран выбора канала уведомлений (радио-список вместо
+// слепого цикла): ● отмечает текущий, нажатие сохраняет сразу и присылает
+// обновлённый экран, «Профиль» возвращает назад. Доступно при ≥2 привязках.
+func (b *Bot) sendNotifyPicker(ctx context.Context, vkID int64, u *domain.User) {
 	if vkIdentityCount(u) < 2 {
 		b.sendProfile(ctx, vkID, u)
 		return
 	}
-	cycle := vkNotifyCycle(u)
+	text := "🔔 Куда присылать уведомления?\n\n" +
+		"Пуши о ценах, дайджесты и сервисные сообщения пойдут в выбранный канал. " +
+		"Нажми вариант — сохранится сразу."
+	var rows [][]Button
+	for _, ch := range vkNotifyCycle(u) {
+		mark := "○"
+		if ch == u.NotifyChannel {
+			mark = "●"
+		}
+		rows = append(rows, []Button{TextButton(mark+" "+domain.NotifyChannelTitle(ch),
+			buttonPayloadKind(cmdNotifySet, ch), ColorSecondary)})
+	}
+	rows = append(rows, []Button{TextButton("👤 Профиль", buttonPayload(cmdProfile), ColorSecondary)})
+	b.send(ctx, vkID, text, &Keyboard{Inline: true, Buttons: rows})
+}
 
-	cur := 0
-	for i, c := range cycle {
-		if c == u.NotifyChannel {
-			cur = i
+// setNotify — сохранить выбранный канал (только из доступных) и показать
+// обновлённый экран выбора.
+func (b *Bot) setNotify(ctx context.Context, vkID int64, u *domain.User, ch string) {
+	valid := false
+	for _, c := range vkNotifyCycle(u) {
+		if c == ch {
+			valid = true
 			break
 		}
 	}
-	next := cycle[(cur+1)%len(cycle)]
-	if err := b.userRepo.SetNotifyChannel(ctx, u.ID, next); err != nil {
-		b.log.Error("vk: set notify channel", "err", err)
-		b.send(ctx, vkID, "Произошла ошибка, попробуй позже.", nil)
-		return
+	if valid && ch != u.NotifyChannel {
+		if err := b.userRepo.SetNotifyChannel(ctx, u.ID, ch); err != nil {
+			b.log.Error("vk: set notify channel", "err", err)
+			b.send(ctx, vkID, "Произошла ошибка, попробуй позже.", nil)
+			return
+		}
+		u.NotifyChannel = ch
 	}
-	u.NotifyChannel = next
-	b.sendProfile(ctx, vkID, u)
+	b.sendNotifyPicker(ctx, vkID, u)
 }
 
 // issueLinkCode — выдать код привязки Telegram (направление vk2tg: код выдан

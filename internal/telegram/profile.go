@@ -287,31 +287,50 @@ func (b *Bot) handleLinkCode(ctx context.Context, chatID int64, user *domain.Use
 		"Подписки и тариф теперь общие с VK. Куда слать уведомления — настраивается в Профиле (/profile).")
 }
 
-// profileToggleNotify — циклически переключить канал уведомлений по доступным
-// идентичностям (доступно при ≥2 привязках): tg → vk → max → all → tg, где
-// присутствуют только привязанные каналы. Легаси-both трактуем как начало цикла.
-func (b *Bot) profileToggleNotify(ctx context.Context, chatID int64, messageID int, user *domain.User) {
+// profileNotifyView — экран выбора канала уведомлений (радио-список вместо
+// слепого цикла): ● отмечает текущий, нажатие сохраняет сразу и перерисовывает
+// этот же экран, «Назад» возвращает в профиль. Доступно при ≥2 привязках.
+func (b *Bot) profileNotifyView(ctx context.Context, chatID int64, messageID int, user *domain.User) {
 	if tgIdentityCount(user) < 2 {
 		b.handleProfile(ctx, chatID, messageID, user)
 		return
 	}
+	text := "🔔 <b>Куда присылать уведомления?</b>\n\n" +
+		"Пуши о ценах, дайджесты и сервисные сообщения пойдут в выбранный канал. " +
+		"Нажми вариант — сохранится сразу."
+	var rows [][]tgbotapi.InlineKeyboardButton
+	for _, ch := range tgNotifyCycle(user) {
+		mark := "○"
+		if ch == user.NotifyChannel {
+			mark = "●"
+		}
+		rows = append(rows, tgbotapi.NewInlineKeyboardRow(
+			tgbotapi.NewInlineKeyboardButtonData(mark+" "+domain.NotifyChannelTitle(ch), "notify:set:"+ch),
+		))
+	}
+	rows = append(rows, tgbotapi.NewInlineKeyboardRow(
+		tgbotapi.NewInlineKeyboardButtonData("◀️ Назад в профиль", "menu:profile"),
+	))
+	b.showView(chatID, messageID, text, tgbotapi.NewInlineKeyboardMarkup(rows...))
+}
 
-	cycle := tgNotifyCycle(user)
-
-	cur := 0
-	for i, c := range cycle {
-		if c == user.NotifyChannel {
-			cur = i
+// profileSetNotify — сохранить выбранный канал (только из доступных юзеру) и
+// перерисовать экран выбора с новой ● отметкой.
+func (b *Bot) profileSetNotify(ctx context.Context, chatID int64, messageID int, user *domain.User, ch string) {
+	valid := false
+	for _, c := range tgNotifyCycle(user) {
+		if c == ch {
+			valid = true
 			break
 		}
 	}
-	next := cycle[(cur+1)%len(cycle)]
-
-	if err := b.userRepo.SetNotifyChannel(ctx, user.ID, next); err != nil {
-		b.log.Error("set notify channel", "err", err)
-		b.reply(chatID, "Произошла ошибка, попробуй позже.")
-		return
+	if valid && ch != user.NotifyChannel {
+		if err := b.userRepo.SetNotifyChannel(ctx, user.ID, ch); err != nil {
+			b.log.Error("set notify channel", "err", err)
+			b.reply(chatID, "Произошла ошибка, попробуй позже.")
+			return
+		}
+		user.NotifyChannel = ch
 	}
-	user.NotifyChannel = next
-	b.handleProfile(ctx, chatID, messageID, user)
+	b.profileNotifyView(ctx, chatID, messageID, user)
 }
