@@ -118,8 +118,10 @@ services:
       KAFKA_BROKERS: "kafka:29092"
       KAFKA_GROUP_ID: "price-tracker"
       TELEGRAM_BOT_TOKEN: "${TELEGRAM_BOT_TOKEN}"
-      TELEGRAM_WEBHOOK_URL: "${TELEGRAM_WEBHOOK_URL}"
-      TELEGRAM_WEBHOOK_SECRET: "${TELEGRAM_WEBHOOK_SECRET}"
+      # Пустые дефолты: в polling-режиме (прод) вебхук выключен, этих переменных
+      # в .env нет — без дефолта compose сыпал warning на каждый up.
+      TELEGRAM_WEBHOOK_URL: "${TELEGRAM_WEBHOOK_URL:-}"
+      TELEGRAM_WEBHOOK_SECRET: "${TELEGRAM_WEBHOOK_SECRET:-}"
       WEBHOOK_ENABLED: "${WEBHOOK_ENABLED:-false}"
       OTLP_ENDPOINT: "jaeger:4317"
       PORT: "8081"
