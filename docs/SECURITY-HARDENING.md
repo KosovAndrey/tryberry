@@ -189,11 +189,16 @@ nmap -Pn <IP>
 - [x] **Периодический self-check** (`scripts/security-selfcheck.sh` + cron):
       порты, Redis-роль, PG-роли, UFW/DOCKER-USER → алерт в Telegram. Работает
       независимо от Prometheus-стека (если мониторинг положили — cron останется).
-- [ ] **Бэкапы:** проверить, что `postgres-backup` + `backup-s3-sync` реально
-      кладут дампы (локально и в S3): `ls -lh backups/daily | tail`, размер > 0.
-- [ ] **Протестировать restore** на пустой БД:
-      `zcat backups/daily/<свежий>.sql.gz | docker run --rm -i --network tryberrybot_default -e PGPASSWORD=... postgres:16 psql -h postgres -U user -d tryberrybot_restore_test`
-      (создать/дропнуть тестовую базу). Бэкап без теста restore — не бэкап.
+- [x] **Бэкапы:** проверено 2026-07-04 — дампы кладутся локально (`backups/daily`,
+      ротация 7d/4w/6m) и синкаются в S3 (бакет `tryberry-db-backups`, та же
+      ротация + `last/`).
+- [x] **Restore протестирован** 2026-07-04: свежий дамп → база `restore_test` в
+      том же контейнере, ноль ошибок; users/subscriptions/payments совпали 1:1,
+      products/price_history меньше на дневной прирост (дамп ночной — норма).
+      Рецепт: `docker exec pt_postgres psql -U user -d postgres -c "CREATE DATABASE restore_test;"`
+      → `zcat backups/daily/tryberrybot-latest.sql.gz | docker exec -i pt_postgres psql -U user -d restore_test -q`
+      → сверить count(*) → `DROP DATABASE restore_test;`. Повторять хотя бы раз
+      в квартал / после крупных миграций.
 - [ ] **docker.sock у promtail** смонтирован read-only — это осознанный риск
       (нужен для сбора логов). Не добавлять socket другим контейнерам. При
       желании убрать совсем — перейти на журнал file-driver.
