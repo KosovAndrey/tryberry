@@ -111,6 +111,7 @@ type Bot struct {
 	promoRepo       *postgres.PromoRepo
 	referralRepo    *postgres.ReferralRepo
 	registry        *scraper.Registry
+	resolver        *scraper.LinkResolver // короткие ссылки приложений (ozon.ru/t/…, market.yandex.ru/cc/…) — паритет с TG
 	linkCodes       *redisrepo.LinkCodeStore
 	rdb             *redis.Client // FSM ввода порога (может быть nil)
 	botURL          string        // ссылка на VK-бота для приглашений ("" — не показывать)
@@ -170,6 +171,7 @@ func NewBot(
 		promoRepo:       promoRepo,
 		referralRepo:    referralRepo,
 		registry:        registry,
+		resolver:        scraper.NewLinkResolver(0),
 		linkCodes:       linkCodes,
 		rdb:             rdb,
 		botURL:          botURL,
@@ -270,6 +272,10 @@ func (b *Bot) handleMessage(ctx context.Context, vkID int64, text, payload strin
 		return
 	}
 	kb := menuKeyboard(user.TelegramID != 0)
+
+	// Короткие ссылки приложений (ozon.ru/t/…, market.yandex.ru/cc/…) → канонический
+	// URL до любого разбора текста; без "://" в тексте — no-op без сети. Паритет с TG.
+	text = b.resolver.ExpandInText(ctx, text)
 
 	// Слэш-команды (admin + /myplan + алиасы команд TG) — паритет с TG. Прерывают
 	// любой незавершённый ввод; кнопки (payload) сюда не попадают.
