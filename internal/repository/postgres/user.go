@@ -386,19 +386,19 @@ func (r *UserRepo) MergeAccounts(ctx context.Context, keptID, absorbedID int64, 
 
 	// Лочим обе строки в порядке id (анти-deadlock при встречных слияниях).
 	type row struct {
-		tgID, vkID    *int64
-		username      *string
-		plan          string
-		planExpiresAt *time.Time
-		trialUsed     bool
-		referredBy    *int64
+		tgID, vkID, maxID *int64
+		username          *string
+		plan              string
+		planExpiresAt     *time.Time
+		trialUsed         bool
+		referredBy        *int64
 	}
 	read := func(id int64) (row, error) {
 		var x row
 		err := tx.QueryRow(ctx, `
-			SELECT telegram_id, vk_id, username, plan, plan_expires_at, trial_used, referred_by
+			SELECT telegram_id, vk_id, max_id, username, plan, plan_expires_at, trial_used, referred_by
 			FROM users WHERE id = $1 FOR UPDATE`, id).
-			Scan(&x.tgID, &x.vkID, &x.username, &x.plan, &x.planExpiresAt, &x.trialUsed, &x.referredBy)
+			Scan(&x.tgID, &x.vkID, &x.maxID, &x.username, &x.plan, &x.planExpiresAt, &x.trialUsed, &x.referredBy)
 		return x, err
 	}
 	var kept, absorbed row
@@ -476,6 +476,72 @@ func (r *UserRepo) MergeAccounts(ctx context.Context, keptID, absorbedID int64, 
 		return err
 	}
 
+	// Платёжная история и лог согласий absorbed — на kept ДО удаления строки:
+	// у обеих таблиц FK ON DELETE CASCADE, без переноса DELETE молча снёс бы
+	// платежи (учёт НПД, возвраты) и юридический след согласия на автосписание.
+	if _, err := tx.Exec(ctx,
+		`UPDATE payments SET user_id = $1 WHERE user_id = $2`, keptID, absorbedID); err != nil {
+		return err
+	}
+	if _, err := tx.Exec(ctx,
+		`UPDATE subscription_consents SET user_id = $1 WHERE user_id = $2`, keptID, absorbedID); err != nil {
+		return err
+	}
+
+	// Биллинг-подписки: история переезжает целиком, но активной может остаться
+	// только одна (uq_billing_sub_active). Если активны обе — гасим ту, чей план
+	// не совпал с выбранным итоговым (при прочих равных — absorbed): двойное
+	// автосписание хуже лишней отмены.
+	type activeSub struct {
+		id   int64
+		plan string
+	}
+	readActive := func(userID int64) (*activeSub, error) {
+		var s activeSub
+		err := tx.QueryRow(ctx,
+			`SELECT id, plan FROM billing_subscriptions WHERE user_id = $1 AND status = 'active'`,
+			userID).Scan(&s.id, &s.plan)
+		if errors.Is(err, pgx.ErrNoRows) {
+			return nil, nil
+		}
+		if err != nil {
+			return nil, err
+		}
+		return &s, nil
+	}
+	keptSub, err := readActive(keptID)
+	if err != nil {
+		return err
+	}
+	absorbedSub, err := readActive(absorbedID)
+	if err != nil {
+		return err
+	}
+	if keptSub != nil && absorbedSub != nil {
+		loserID := absorbedSub.id
+		if keptSub.plan != plan && absorbedSub.plan == plan {
+			loserID = keptSub.id
+		}
+		if _, err := tx.Exec(ctx, `
+			UPDATE billing_subscriptions
+			SET status = 'canceled', canceled_at = NOW(), updated_at = NOW()
+			WHERE id = $1`, loserID); err != nil {
+			return err
+		}
+	}
+	if _, err := tx.Exec(ctx,
+		`UPDATE billing_subscriptions SET user_id = $1, updated_at = NOW() WHERE user_id = $2`,
+		keptID, absorbedID); err != nil {
+		return err
+	}
+
+	// Недоставленные алерты absorbed (outbox без FK) — иначе останутся висеть
+	// на несуществующем user_id и флашер будет их молча скипать.
+	if _, err := tx.Exec(ctx,
+		`UPDATE pending_alerts SET user_id = $1 WHERE user_id = $2`, keptID, absorbedID); err != nil {
+		return err
+	}
+
 	// Аудит — до удаления absorbed, чтобы зафиксировать исходное состояние.
 	if _, err := tx.Exec(ctx, `
 		INSERT INTO account_merges
@@ -500,16 +566,22 @@ func (r *UserRepo) MergeAccounts(ctx context.Context, keptID, absorbedID int64, 
 	if newVK == nil {
 		newVK = absorbed.vkID
 	}
+	// max_id так же, как vk_id: без переноса MAX-идентичность absorbed пропадала
+	// вместе с удалённой строкой — «Аккаунты объединены», а MAX не привязан.
+	newMax := kept.maxID
+	if newMax == nil {
+		newMax = absorbed.maxID
+	}
 	newRef := kept.referredBy
 	if newRef == nil && absorbed.referredBy != nil && *absorbed.referredBy != keptID {
 		newRef = absorbed.referredBy
 	}
 	if _, err := tx.Exec(ctx, `
-		UPDATE users SET telegram_id = $2, username = $3, vk_id = $4,
-		       plan = $5, plan_expires_at = $6, plan_reminded_at = NULL,
-		       trial_used = $7, referred_by = $8
+		UPDATE users SET telegram_id = $2, username = $3, vk_id = $4, max_id = $5,
+		       plan = $6, plan_expires_at = $7, plan_reminded_at = NULL,
+		       trial_used = $8, referred_by = $9
 		WHERE id = $1`,
-		keptID, newTG, newUsername, newVK, plan, expiresAt,
+		keptID, newTG, newUsername, newVK, newMax, plan, expiresAt,
 		kept.trialUsed || absorbed.trialUsed, newRef); err != nil {
 		return err
 	}
