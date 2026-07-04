@@ -36,7 +36,7 @@ func (b *Bot) sendPlans(ctx context.Context, maxID int64, user *domain.User) {
 			btnPrice = fmt.Sprintf("%s ₽/мес", discountedRub(p.PriceRub, pct))
 		}
 		fmt.Fprintf(&sb, "▫️ %s — %s · %s\n", p.Title, priceStr, sp.Tagline)
-		fmt.Fprintf(&sb, "    📦 %d товаров · 🔎 %d поисков · ⏱ %s\n\n",
+		fmt.Fprintf(&sb, "    📦 %d товаров · 🔎 %d поисков · 🕒 %s\n\n",
 			p.MaxProduct, p.MaxSearch, domain.IntervalPhrase(p.Interval))
 		rows = append(rows, []Button{TextButton(
 			fmt.Sprintf("%s — %s", p.Title, btnPrice),
@@ -72,7 +72,7 @@ func (b *Bot) sendPlanCard(ctx context.Context, maxID int64, user *domain.User, 
 	sb.WriteString("\nЧто входит:\n")
 	fmt.Fprintf(&sb, "📦 До %d отслеживаемых товаров\n", p.MaxProduct)
 	fmt.Fprintf(&sb, "🔎 До %d поиск-подписок (слежу за всей поисковой выдачей)\n", p.MaxSearch)
-	fmt.Fprintf(&sb, "⏱ Проверка цен %s\n", domain.IntervalPhrase(p.Interval))
+	fmt.Fprintf(&sb, "🕒 Проверка цен %s\n", domain.IntervalPhrase(p.Interval))
 	sb.WriteString("🔔 Уведомления о снижении цены в Telegram, VK и MAX\n\n")
 	sb.WriteString("Доступ действует 30 дней с момента оплаты.")
 	if pct > 0 {

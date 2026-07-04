@@ -28,7 +28,8 @@ const (
 	cmdLinkVK      = "linkvk"   // привязать VK (выдать код max2vk)
 	cmdUnlinkTG    = "unlinktg" // отвязать Telegram (k=confirm)
 	cmdUnlinkVK    = "unlinkvk" // отвязать VK (k=confirm)
-	cmdNotify      = "notify"   // цикл канала уведомлений
+	cmdNotify      = "notify"    // экран выбора канала уведомлений
+	cmdNotifySet   = "notifyset" // сохранить канал (k=tg|vk|max|all)
 	cmdEmail       = "email"
 	cmdHelp        = "help"
 	cmdAdd         = "add"
@@ -65,6 +66,11 @@ type payloadData struct {
 
 func buttonPayload(cmd string) string {
 	return fmt.Sprintf(`{"cmd":%q}`, cmd)
+}
+
+// buttonPayloadKind — payload c параметром k (например, канал у notifyset).
+func buttonPayloadKind(cmd, kind string) string {
+	return fmt.Sprintf(`{"cmd":%q,"k":%q}`, cmd, kind)
 }
 
 func parsePayload(payload string) payloadData {
@@ -380,7 +386,9 @@ func (b *Bot) handleMessage(ctx context.Context, maxID int64, text, payload stri
 	case cmdProfile:
 		b.sendProfile(ctx, maxID, user)
 	case cmdNotify:
-		b.toggleNotify(ctx, maxID, user)
+		b.sendNotifyPicker(ctx, maxID, user)
+	case cmdNotifySet:
+		b.setNotify(ctx, maxID, user, p.Kind)
 	case cmdLinkTG:
 		b.issueLinkCode(ctx, maxID, user, domain.LinkDirMax2TG)
 	case cmdLinkVK:
@@ -560,13 +568,8 @@ func identityCount(u *domain.User) int {
 	return n
 }
 
-// toggleNotify — цикл канала уведомлений по доступным идентичностям + «везде».
-func (b *Bot) toggleNotify(ctx context.Context, maxID int64, u *domain.User) {
-	if identityCount(u) < 2 {
-		b.sendProfile(ctx, maxID, u)
-		return
-	}
-	// Строим цикл из доступных каналов + all.
+// maxNotifyCycle — доступные каналы уведомлений: MAX + привязанные + «везде».
+func maxNotifyCycle(u *domain.User) []string {
 	cycle := []string{domain.NotifyMax}
 	if u.TelegramID != 0 {
 		cycle = append(cycle, domain.NotifyTG)
@@ -574,24 +577,52 @@ func (b *Bot) toggleNotify(ctx context.Context, maxID int64, u *domain.User) {
 	if u.VKID != nil {
 		cycle = append(cycle, domain.NotifyVK)
 	}
-	cycle = append(cycle, domain.NotifyAll)
+	return append(cycle, domain.NotifyAll)
+}
 
-	// Текущая позиция (auto/both трактуем как начало).
-	cur := 0
-	for i, c := range cycle {
-		if c == u.NotifyChannel {
-			cur = i
+// sendNotifyPicker — экран выбора канала уведомлений (радио-список вместо
+// слепого цикла): ● отмечает текущий, нажатие сохраняет сразу и присылает
+// обновлённый экран, «Профиль» возвращает назад. Доступно при ≥2 привязках.
+func (b *Bot) sendNotifyPicker(ctx context.Context, maxID int64, u *domain.User) {
+	if identityCount(u) < 2 {
+		b.sendProfile(ctx, maxID, u)
+		return
+	}
+	text := "🔔 Куда присылать уведомления?\n\n" +
+		"Пуши о ценах, дайджесты и сервисные сообщения пойдут в выбранный канал. " +
+		"Нажми вариант — сохранится сразу."
+	var rows [][]Button
+	for _, ch := range maxNotifyCycle(u) {
+		mark := "○"
+		if ch == u.NotifyChannel {
+			mark = "●"
+		}
+		rows = append(rows, []Button{TextButton(mark+" "+domain.NotifyChannelTitle(ch),
+			buttonPayloadKind(cmdNotifySet, ch), ColorSecondary)})
+	}
+	rows = append(rows, []Button{TextButton("👤 Профиль", buttonPayload(cmdProfile), ColorSecondary)})
+	b.send(ctx, maxID, text, &Keyboard{Buttons: rows})
+}
+
+// setNotify — сохранить выбранный канал (только из доступных) и показать
+// обновлённый экран выбора.
+func (b *Bot) setNotify(ctx context.Context, maxID int64, u *domain.User, ch string) {
+	valid := false
+	for _, c := range maxNotifyCycle(u) {
+		if c == ch {
+			valid = true
 			break
 		}
 	}
-	next := cycle[(cur+1)%len(cycle)]
-	if err := b.userRepo.SetNotifyChannel(ctx, u.ID, next); err != nil {
-		b.log.Error("max: set notify channel", "err", err)
-		b.send(ctx, maxID, "Произошла ошибка, попробуй позже.", nil)
-		return
+	if valid && ch != u.NotifyChannel {
+		if err := b.userRepo.SetNotifyChannel(ctx, u.ID, ch); err != nil {
+			b.log.Error("max: set notify channel", "err", err)
+			b.send(ctx, maxID, "Произошла ошибка, попробуй позже.", nil)
+			return
+		}
+		u.NotifyChannel = ch
 	}
-	u.NotifyChannel = next
-	b.sendProfile(ctx, maxID, u)
+	b.sendNotifyPicker(ctx, maxID, u)
 }
 
 // issueLinkCode — выдать код привязки (направление max2tg / max2vk).

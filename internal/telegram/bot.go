@@ -532,7 +532,15 @@ func (b *Bot) handleCallback(ctx context.Context, cb *tgbotapi.CallbackQuery) {
 			b.answerCallback(cb.ID, "Ошибка")
 			return
 		}
-		b.profileToggleNotify(ctx, chatID, messageID, user)
+		b.profileNotifyView(ctx, chatID, messageID, user)
+
+	case strings.HasPrefix(cb.Data, "notify:set:"):
+		user, err := b.userRepo.GetByTelegramID(ctx, cb.From.ID)
+		if err != nil {
+			b.answerCallback(cb.ID, "Ошибка")
+			return
+		}
+		b.profileSetNotify(ctx, chatID, messageID, user, strings.TrimPrefix(cb.Data, "notify:set:"))
 
 	case cb.Data == "profile:email":
 		b.promptChangeEmail(ctx, cb.From.ID, chatID, messageID)
