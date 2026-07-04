@@ -99,6 +99,8 @@ bantime.maxtime   = 1w
 EOF
 systemctl enable --now fail2ban
 systemctl restart fail2ban
+# демону нужна пара секунд на создание сокета — иначе status ложно пугает ошибкой
+for i in 1 2 3 4 5; do sleep 1; fail2ban-client ping >/dev/null 2>&1 && break; done
 fail2ban-client status sshd || true
 
 echo
