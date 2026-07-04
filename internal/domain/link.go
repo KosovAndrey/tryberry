@@ -97,3 +97,14 @@ func NewLinkCode() (string, error) {
 	}
 	return string(buf), nil
 }
+
+// MaxStartLink — deep-link на MAX-бота с start-payload: официальный формат
+// https://max.ru/<bot>?start=<payload> (payload ≤128 символов, наш link_<код>
+// = 13). MAX отдаёт payload в BotStartedUpdate.Payload → handleStart редимит
+// link_/ref_ без ручного ввода кода. "" если ссылка на бота не задана.
+func MaxStartLink(botURL, payload string) string {
+	if botURL == "" || payload == "" {
+		return ""
+	}
+	return botURL + "?start=" + payload
+}

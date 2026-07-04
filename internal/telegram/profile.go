@@ -183,19 +183,25 @@ func (b *Bot) profileLinkMax(ctx context.Context, chatID int64, messageID int, u
 	}
 
 	ttlMin := int(domain.LinkCodeTTL.Minutes())
+	// С deep-link кнопкой (?start=link_<код>) MAX отдаст код боту сам; ручной
+	// ввод оставляем как фолбэк (и единственный путь, если MAX_BOT_URL не задан).
+	steps := "Открой нашего бота в MAX и отправь ему сообщение:"
+	if b.maxBotURL != "" {
+		steps = "Нажми «Привязать в MAX» — код передастся автоматически.\n" +
+			"Если не сработало — отправь боту вручную:"
+	}
 	text := fmt.Sprintf(
 		"🔗 <b>Привязка MAX</b>\n\n"+
-			"1. Открой нашего бота в MAX\n"+
-			"2. Отправь ему сообщение:\n\n"+
+			"%s\n\n"+
 			"<code>привязать %s</code>\n\n"+
 			"Код действует <b>%d минут</b> и работает один раз. "+
 			"Никому его не пересылай — это ключ к твоему аккаунту.",
-		code, ttlMin)
+		steps, code, ttlMin)
 
 	var rows [][]tgbotapi.InlineKeyboardButton
 	if b.maxBotURL != "" {
 		rows = append(rows, tgbotapi.NewInlineKeyboardRow(
-			tgbotapi.NewInlineKeyboardButtonURL("Открыть бота в MAX", b.maxBotURL),
+			tgbotapi.NewInlineKeyboardButtonURL("🔗 Привязать в MAX", domain.MaxStartLink(b.maxBotURL, "link_"+code)),
 		))
 	}
 	rows = append(rows, tgbotapi.NewInlineKeyboardRow(

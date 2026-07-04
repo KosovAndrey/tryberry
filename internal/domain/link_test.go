@@ -34,3 +34,17 @@ func TestResolveNotifyTargets(t *testing.T) {
 		}
 	}
 }
+
+func TestMaxStartLink(t *testing.T) {
+	got := MaxStartLink("https://max.ru/se13426918_bot", "link_ABCD2345")
+	want := "https://max.ru/se13426918_bot?start=link_ABCD2345"
+	if got != want {
+		t.Errorf("MaxStartLink = %q, want %q", got, want)
+	}
+	if MaxStartLink("", "link_x") != "" {
+		t.Error("empty botURL must give empty link")
+	}
+	if MaxStartLink("https://max.ru/bot", "") != "" {
+		t.Error("empty payload must give empty link")
+	}
+}
