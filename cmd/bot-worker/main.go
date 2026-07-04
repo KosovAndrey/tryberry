@@ -138,8 +138,8 @@ func run(log *slog.Logger) error {
 		Logger:   log,
 	})
 	// AliExpress: только карточка (поиска нет) — добавляем как обычный скрейпер.
-	// Прокси нужен для рефреша cookie (с датацентра cold-сессия = капча); дальше
-	// запросы идут напрямую. Фолбэк на OZON_PROXY_URL, как у Я.Маркета.
+	// Ходит direct; ALI_PROXY_URL — опциональный фолбэк на рефреш cookie, если
+	// X5SEC начнёт рубить cold-сессии с датацентра (сигнал: ErrMarketplaceBlocked).
 	aliexpressCard := scraper.NewAliexpressScraper(scraper.AliexpressOptions{
 		ProxyURL: getEnv("ALI_PROXY_URL", getEnv("OZON_PROXY_URL", "")),
 		RPS:      1,

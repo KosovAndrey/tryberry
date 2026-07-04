@@ -179,9 +179,9 @@ func run(log *slog.Logger) error {
 		}),
 		scraper.NewAliexpressScraper(scraper.AliexpressOptions{
 			// aliexpress.ru: внутренний JSON-API (aer-jsonapi productData), без
-			// браузера. X5SEC решает РЕПУТАЦИЯ IP → нужен RU-резидентский/мобильный
-			// прокси (датацентр = капча). Дефолтом делим прокси Ozon — при росте
-			// нагрузки задать отдельный ALI_PROXY_URL (см. yandex выше про выгорание).
+			// браузера. Ходит direct с датацентр-IP; ALI_PROXY_URL — опциональный
+			// RU-прокси-фолбэк на рефреш cookie, задать если X5SEC начнёт рубить
+			// cold-сессии (сигнал: рост ErrMarketplaceBlocked по aliexpress).
 			ProxyURL: getEnv("ALI_PROXY_URL", getEnv("OZON_PROXY_URL", "")),
 			RPS:      rpsAli,
 			Logger:   log,

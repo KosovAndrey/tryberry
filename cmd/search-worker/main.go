@@ -143,8 +143,7 @@ func run(log *slog.Logger) error {
 	// выдачи переиспользуется.
 	ozonSeller := scraper.NewOzonSellerScraper(ozonBrowser, getEnvInt("SEARCH_MAX_ITEMS_OZON", 60))
 	// AliExpress-поиск: JSON-API /aer-webapi/v1/search через тот же транспорт, что
-	// у карточки (direct + proxy-fallback). Без ALI_PROXY_URL/OZON_PROXY_URL
-	// карточный скрейпер не сконфигурён → ScrapeSearch вернёт ErrNotImplemented.
+	// у карточки (direct; ALI_PROXY_URL — опциональный фолбэк на рефреш cookie).
 	aliSearch := scraper.NewAliexpressSearchScraper(
 		scraper.NewAliexpressScraper(scraper.AliexpressOptions{
 			ProxyURL: getEnv("ALI_PROXY_URL", getEnv("OZON_PROXY_URL", "")),

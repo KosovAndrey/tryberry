@@ -43,13 +43,14 @@ type AliexpressScraper struct {
 	configured bool
 }
 
-// AliexpressOptions — конфигурация скрейпера. Нулевое значение даёт «облегчённый»
-// скрейпер: Matches работает (нужно боту/api для разбора URL), а Scrape вернёт
-// ErrNotImplemented. Реальный скрейп включается, ТОЛЬКО когда задан ProxyURL:
-// прокси нужен, чтобы добыть/обновить сессионную cookie (с датацентра X5SEC
-// сначала отдаёт капчу — но это только для cold-сессии, не на каждый запрос).
+// AliexpressOptions — конфигурация скрейпера. Пустой ProxyURL даёт direct-only
+// режим (после отмены мобильного прокси 2026-07-04): основной путь и так direct,
+// прокси был только фолбэком на рефреш cookie. Если X5SEC зарубит cold-сессию
+// с датацентра, Scrape вернёт ErrMarketplaceBlocked (виден в метриках) — тогда
+// задать ALI_PROXY_URL (дешёвый резидентский по ГБ, трафик рефреша копеечный).
+// «Облегчённый» скрейпер только под Matches — нулевой &AliexpressScraper{}.
 type AliexpressOptions struct {
-	ProxyURL string  // http://user:pass@host:port RU-резидентского/мобильного прокси (для рефреша cookie)
+	ProxyURL string  // (опц.) http://user:pass@host:port RU-прокси — фолбэк для рефреша cookie
 	RPS      float64 // лимит запросов к Ali (один IP → держим низким), 0 → 1
 	Logger   *slog.Logger
 }
@@ -69,12 +70,6 @@ func NewAliexpressScraper(opts AliexpressOptions) *AliexpressScraper {
 		log:     log,
 	}
 
-	if opts.ProxyURL == "" {
-		// Без RU-прокси не добыть сессионную cookie (с датацентра cold-сессия =
-		// капча) → не поднимаем клиенты, Scrape отдаст ErrNotImplemented.
-		log.Warn("aliexpress: ALI_PROXY_URL пуст — скрейпер disabled (прокси нужен для рефреша cookie)")
-		return s
-	}
 	direct, proxy, err := newAliexpressClients(opts.ProxyURL)
 	if err != nil {
 		log.Error("aliexpress: tls-client init failed, scraper disabled", "err", err)
@@ -83,15 +78,20 @@ func NewAliexpressScraper(opts AliexpressOptions) *AliexpressScraper {
 	s.direct = direct
 	s.proxy = proxy
 	s.configured = true
-	log.Info("aliexpress scraper configured", "transport", "direct+proxy-refresh")
+	transport := "direct+proxy-refresh"
+	if proxy == nil {
+		transport = "direct-only"
+	}
+	log.Info("aliexpress scraper configured", "transport", transport)
 	return s
 }
 
-// newAliexpressClients строит два tls-client'а (Chrome-JA3) с ОБЩИМ cookie-jar:
-// direct (без прокси) и proxy (через RU-прокси для рефреша). Общий jar — ключ
-// схемы: cookie, добытые proxy-клиентом, сразу видны direct-клиенту. Редиректы
-// tls-client следует по умолчанию (это проводит cookie-sync). В jar заранее
-// кладём locale-cookie aep_usuc_f (рынок RU / валюта RUB), как делает сайт.
+// newAliexpressClients строит tls-client'ы (Chrome-JA3) с ОБЩИМ cookie-jar:
+// direct (без прокси) и — если задан proxyURL — proxy (RU-прокси для рефреша,
+// иначе proxy=nil → direct-only). Общий jar — ключ схемы: cookie, добытые
+// proxy-клиентом, сразу видны direct-клиенту. Редиректы tls-client следует
+// по умолчанию (это проводит cookie-sync). В jar заранее кладём locale-cookie
+// aep_usuc_f (рынок RU / валюта RUB), как делает сайт.
 func newAliexpressClients(proxyURL string) (direct, proxy tls_client.HttpClient, err error) {
 	jar := tls_client.NewCookieJar()
 	base := func() []tls_client.HttpClientOption {
@@ -105,9 +105,11 @@ func newAliexpressClients(proxyURL string) (direct, proxy tls_client.HttpClient,
 	if err != nil {
 		return nil, nil, err
 	}
-	proxy, err = tls_client.NewHttpClient(tls_client.NewNoopLogger(), append(base(), tls_client.WithProxyUrl(proxyURL))...)
-	if err != nil {
-		return nil, nil, err
+	if proxyURL != "" {
+		proxy, err = tls_client.NewHttpClient(tls_client.NewNoopLogger(), append(base(), tls_client.WithProxyUrl(proxyURL))...)
+		if err != nil {
+			return nil, nil, err
+		}
 	}
 	u, _ := url.Parse(aliBaseURL)
 	direct.SetCookies(u, []*fhttp.Cookie{{
@@ -141,7 +143,7 @@ func ExtractAliexpressID(productURL string) (string, error) {
 
 func (s *AliexpressScraper) Scrape(ctx context.Context, productURL string) (*Result, error) {
 	if !s.configured {
-		return nil, fmt.Errorf("%w: aliexpress scraper not configured (no proxy)", ErrNotImplemented)
+		return nil, fmt.Errorf("%w: aliexpress scraper not configured (lightweight instance or tls-client init failed)", ErrNotImplemented)
 	}
 	id, err := ExtractAliexpressID(productURL)
 	if err != nil {
@@ -162,7 +164,9 @@ func (s *AliexpressScraper) Scrape(ctx context.Context, productURL string) (*Res
 	// Сессия cold/протухла (cookie-sync не сошёлся / X5SEC) → один запрос через
 	// прокси: он проходит X5SEC, обновляет aer-cookie в ОБЩЕМ jar и сразу отдаёт
 	// данные. Дальше снова direct, пока cookie живы. Прокси платим только тут.
-	if status != 200 || isAliBlocked(body) {
+	// В direct-only режиме (proxy=nil) фолбэка нет — блок дойдёт до
+	// ErrMarketplaceBlocked ниже и будет виден в метриках.
+	if (status != 200 || isAliBlocked(body)) && s.proxy != nil {
 		source = "proxy"
 		status, body, err = s.fetchProductData(ctx, s.proxy, id, itemURL)
 		if err != nil {
