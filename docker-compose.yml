@@ -113,8 +113,8 @@ services:
     ports:
       - "127.0.0.1:8081:8081"
     environment:
-      DATABASE_URL: "postgres://user:${POSTGRES_PASSWORD}@postgres:5432/tryberrybot?sslmode=disable"
-      REDIS_URL: "redis://redis:6379"
+      DATABASE_URL: "postgres://tryberry_app:${APP_DB_PASSWORD:?APP_DB_PASSWORD must be set in .env}@postgres:5432/tryberrybot?sslmode=disable"
+      REDIS_URL: "redis://:${REDIS_PASSWORD}@redis:6379"
       KAFKA_BROKERS: "kafka:29092"
       KAFKA_GROUP_ID: "price-tracker"
       TELEGRAM_BOT_TOKEN: "${TELEGRAM_BOT_TOKEN}"
@@ -174,8 +174,8 @@ services:
         SERVICE: bot-worker
     container_name: pt_bot_worker
     environment:
-      DATABASE_URL: "postgres://user:${POSTGRES_PASSWORD}@postgres:5432/tryberrybot?sslmode=disable"
-      REDIS_URL: "redis://redis:6379"
+      DATABASE_URL: "postgres://tryberry_app:${APP_DB_PASSWORD:?APP_DB_PASSWORD must be set in .env}@postgres:5432/tryberrybot?sslmode=disable"
+      REDIS_URL: "redis://:${REDIS_PASSWORD}@redis:6379"
       KAFKA_BROKERS: "kafka:29092"
       KAFKA_GROUP_ID: "bot-workers"
       TELEGRAM_BOT_TOKEN: "${TELEGRAM_BOT_TOKEN}"
@@ -265,8 +265,8 @@ services:
     ports:
       - "127.0.0.1:8090:8090"
     environment:
-      DATABASE_URL: "postgres://user:${POSTGRES_PASSWORD}@postgres:5432/tryberrybot?sslmode=disable"
-      REDIS_URL: "redis://redis:6379"
+      DATABASE_URL: "postgres://tryberry_app:${APP_DB_PASSWORD:?APP_DB_PASSWORD must be set in .env}@postgres:5432/tryberrybot?sslmode=disable"
+      REDIS_URL: "redis://:${REDIS_PASSWORD}@redis:6379"
       KAFKA_BROKERS: "kafka:29092"
       KAFKA_GROUP_ID: "price-tracker"
       TELEGRAM_BOT_TOKEN: "${TELEGRAM_BOT_TOKEN}"
@@ -322,8 +322,8 @@ services:
         SERVICE: search-worker
     container_name: pt_search_worker
     environment:
-      DATABASE_URL: "postgres://user:${POSTGRES_PASSWORD}@postgres:5432/tryberrybot?sslmode=disable"
-      REDIS_URL: "redis://redis:6379"
+      DATABASE_URL: "postgres://tryberry_app:${APP_DB_PASSWORD:?APP_DB_PASSWORD must be set in .env}@postgres:5432/tryberrybot?sslmode=disable"
+      REDIS_URL: "redis://:${REDIS_PASSWORD}@redis:6379"
       KAFKA_BROKERS: "kafka:29092"
       KAFKA_GROUP_ID: "search-workers"
       SEARCH_TASKS_TOPIC: "search-tasks"
@@ -370,8 +370,8 @@ services:
       args:
         SERVICE: search-worker
     environment:
-      DATABASE_URL: "postgres://user:${POSTGRES_PASSWORD}@postgres:5432/tryberrybot?sslmode=disable"
-      REDIS_URL: "redis://redis:6379"
+      DATABASE_URL: "postgres://tryberry_app:${APP_DB_PASSWORD:?APP_DB_PASSWORD must be set in .env}@postgres:5432/tryberrybot?sslmode=disable"
+      REDIS_URL: "redis://:${REDIS_PASSWORD}@redis:6379"
       KAFKA_BROKERS: "kafka:29092"
       KAFKA_GROUP_ID: "reseller-workers"
       SEARCH_TASKS_TOPIC: "reseller-tasks"
@@ -419,8 +419,8 @@ services:
     ports:
       - "127.0.0.1:8091:8091"
     environment:
-      DATABASE_URL: "postgres://user:${POSTGRES_PASSWORD}@postgres:5432/tryberrybot?sslmode=disable"
-      REDIS_URL: "redis://redis:6379"
+      DATABASE_URL: "postgres://tryberry_app:${APP_DB_PASSWORD:?APP_DB_PASSWORD must be set in .env}@postgres:5432/tryberrybot?sslmode=disable"
+      REDIS_URL: "redis://:${REDIS_PASSWORD}@redis:6379"
       KAFKA_BROKERS: "kafka:29092"
       KAFKA_GROUP_ID: "price-tracker"
       TELEGRAM_BOT_TOKEN: "${TELEGRAM_BOT_TOKEN}"
@@ -472,7 +472,7 @@ services:
       container_name: pt_token_miner
       init: true
       environment:
-        REDIS_URL: "redis://redis:6379"
+        REDIS_URL: "redis://:${REDIS_PASSWORD}@redis:6379"
         WB_TOKEN_POOL_SIZE: "5"
         WB_SEARCH_QUERY: "телефон"
         MINE_INTERVAL_HOURS: "12"
@@ -507,7 +507,7 @@ services:
       container_name: pt_token_miner_reseller
       init: true
       environment:
-        REDIS_URL: "redis://redis:6379"
+        REDIS_URL: "redis://:${REDIS_PASSWORD}@redis:6379"
         WB_TOKEN_POOL_PREFIX: "wb:reseller:"
         WB_DISABLE_LEGACY_MIRROR: "true"
         WB_TOKEN_POOL_SIZE: "5"
@@ -577,7 +577,7 @@ services:
           SERVICE: scheduler
       container_name: pt_scheduler
       environment:
-        DATABASE_URL: "postgres://user:${POSTGRES_PASSWORD}@postgres:5432/tryberrybot?sslmode=disable"
+        DATABASE_URL: "postgres://tryberry_app:${APP_DB_PASSWORD:?APP_DB_PASSWORD must be set in .env}@postgres:5432/tryberrybot?sslmode=disable"
         KAFKA_BROKERS: "kafka:29092"
         SCRAPE_INTERVAL_MINUTES: "15"
         OZON_MIN_INTERVAL_MINUTES: "${OZON_MIN_INTERVAL_MINUTES:-20}"
@@ -672,6 +672,25 @@ services:
       - --rename-command
       - MODULE
       - ""
+      # Ещё векторы, которые код не использует: массовое удаление и отладка.
+      # CONFIG оставлен — его дёргает redis-exporter (maxmemory-метрики).
+      - --rename-command
+      - FLUSHALL
+      - ""
+      - --rename-command
+      - FLUSHDB
+      - ""
+      - --rename-command
+      - DEBUG
+      - ""
+      # Пароль (defense-in-depth поверх закрытого порта): даже если порт снова
+      # окажется опубликован или атакующий попадёт в docker-сеть — без пароля
+      # Redis нем. Клиенты берут его из REDIS_URL (redis://:pass@redis:6379).
+      - --requirepass
+      - "${REDIS_PASSWORD:?REDIS_PASSWORD must be set in .env}"
+    environment:
+      # redis-cli в healthcheck авторизуется через этот env (не светится в ps).
+      REDISCLI_AUTH: "${REDIS_PASSWORD}"
     volumes:
       - redis_data:/data
     ports:
@@ -768,7 +787,14 @@ services:
     ports:
       - "127.0.0.1:9187:9187"
     environment:
-      DATA_SOURCE_NAME: "postgresql://user:${POSTGRES_PASSWORD}@postgres:5432/tryberrybot?sslmode=disable"
+      # Отдельная роль только с pg_monitor (см. scripts/pg-create-roles.sh) —
+      # экспортеру не нужен суперюзер, а его DSN — лишняя копия админ-пароля.
+      DATA_SOURCE_NAME: "postgresql://tryberry_monitor:${MONITOR_DB_PASSWORD:?MONITOR_DB_PASSWORD must be set in .env}@postgres:5432/tryberrybot?sslmode=disable"
+      # Кастомные security-метрики: число суперюзеров/ролей (алерт на бэкдор
+      # вроде pgg_superadmins из инцидента 2026-07-03).
+      PG_EXPORTER_EXTEND_QUERY_PATH: "/etc/postgres-exporter/queries.yaml"
+    volumes:
+      - ./monitoring/postgres-exporter/queries.yaml:/etc/postgres-exporter/queries.yaml:ro
     depends_on:
       postgres:
         condition: service_healthy
@@ -778,6 +804,9 @@ services:
     container_name: pt_redis_exporter
     ports:
       - "127.0.0.1:9121:9121"
+    environment:
+      # Пароль Redis (requirepass) — exporter читает его из env.
+      REDIS_PASSWORD: "${REDIS_PASSWORD}"
     command:
       - '--redis.addr=redis://redis:6379'
       - '--check-single-keys=wb:search:token:mined_at,wb:search:token:exp,wb:search:pool:healthy,wb:search:pool:oldest_mined_at,wb:search:pool:mined_total,wb:search:pool:mine_failed_total,wb:reseller:pool:healthy,wb:reseller:pool:oldest_mined_at,wb:reseller:pool:mined_total,wb:reseller:pool:mine_failed_total'
@@ -835,10 +864,13 @@ services:
       - grafana_data:/var/lib/grafana
     environment:
       GF_SECURITY_ADMIN_USER: admin
-      GF_SECURITY_ADMIN_PASSWORD: admin
+      # Safe-by-default после инцидента 2026-07-03: деплой без прод-оверрайда
+      # оставлял admin/admin + анонимный доступ на открытом :3000. Теперь и в
+      # базовом файле пароль из .env, анонимный доступ выключен (в dev при
+      # желании включить локально: GF_AUTH_ANONYMOUS_ENABLED=true).
+      GF_SECURITY_ADMIN_PASSWORD: "${GRAFANA_ADMIN_PASSWORD:?GRAFANA_ADMIN_PASSWORD must be set in .env}"
       GF_USERS_ALLOW_SIGN_UP: "false"
-      # Анонимный доступ для удобства разработки (на проде отключим)
-      GF_AUTH_ANONYMOUS_ENABLED: "true"
+      GF_AUTH_ANONYMOUS_ENABLED: "${GF_AUTH_ANONYMOUS_ENABLED:-false}"
       GF_AUTH_ANONYMOUS_ORG_ROLE: Viewer
     depends_on:
       - prometheus

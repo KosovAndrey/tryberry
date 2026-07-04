@@ -1,0 +1,55 @@
+# Алерты на признаки компрометации — после инцидента 2026-07-03
+# (rogue-replica у Redis + бэкдор-суперюзер pgg_superadmins в Postgres).
+# Дублируются скриптом scripts/security-selfcheck.sh (cron на хосте) — тот
+# ловит ещё и открытые docker-порты, чего Prometheus изнутри не видит.
+
+groups:
+  - name: tryberrybot_security
+    interval: 30s
+    rules:
+      # Redis перестал быть мастером = кто-то сделал REPLICAOF на чужой хост
+      # (rogue-replica attack — ровно так нас заслейвили 2026-07-03).
+      - alert: RedisHijackedAsReplica
+        expr: redis_instance_info{role!="master"} == 1
+        for: 1m
+        labels:
+          severity: critical
+        annotations:
+          summary: "⚠️ ВЗЛОМ? Redis работает как реплика ({{ $labels.role }})"
+          description: >-
+            Redis не master — вероятна rogue-replica атака (REPLICAOF на хост
+            атакующего). Проверить redis-cli info replication, порты наружу
+            (docker ps), и docs/SECURITY-HARDENING.md.
+
+      # К нашему Redis кто-то подключился как реплика (мы никому не мастер).
+      - alert: RedisUnexpectedSlaves
+        expr: redis_connected_slaves > 0
+        for: 1m
+        labels:
+          severity: critical
+        annotations:
+          summary: "⚠️ ВЗЛОМ? У Redis появились реплики ({{ $value }})"
+          description: "Никто не должен реплицироваться с нашего Redis — чужая реплика тянет все данные."
+
+      # В Postgres появился второй суперюзер (маркер ботнета PG_MEM/pgg —
+      # ровно так выглядел бэкдор pgg_superadmins).
+      - alert: PostgresUnexpectedSuperuser
+        expr: pg_security_superusers > 1
+        for: 1m
+        labels:
+          severity: critical
+        annotations:
+          summary: "⚠️ ВЗЛОМ? В Postgres {{ $value }} суперюзера (ожидается 1)"
+          description: >-
+            Появилась лишняя суперюзер-роль — проверить \du, дропнуть бэкдор,
+            ротировать пароли. См. память об инциденте 2026-07-03.
+
+      # Лишняя login-роль (ожидаются: user, tryberry_app, tryberry_monitor).
+      - alert: PostgresUnexpectedLoginRole
+        expr: pg_security_login_roles != 3
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "В Postgres {{ $value }} login-ролей (ожидается 3)"
+          description: "Ожидаются user, tryberry_app, tryberry_monitor. Проверить \\du — лишняя роль может быть бэкдором."

@@ -1,0 +1,21 @@
+# Кастомные метрики postgres-exporter (PG_EXPORTER_EXTEND_QUERY_PATH).
+#
+# Security-метрики после инцидента 2026-07-03: атакующий завёл суперюзер-роль
+# pgg_superadmins через открытый порт. Считаем роли — Prometheus алертит, если
+# суперюзеров стало больше одного или появилась неожиданная login-роль
+# (правила: monitoring/prometheus/rules/security.yml).
+pg_security:
+  query: |
+    SELECT
+      count(*) FILTER (WHERE rolsuper)    AS superusers,
+      count(*) FILTER (WHERE rolcanlogin) AS login_roles
+    FROM pg_roles
+    WHERE rolname NOT LIKE 'pg\_%'
+  master: true
+  metrics:
+    - superusers:
+        usage: "GAUGE"
+        description: "Суперюзер-ролей в кластере (ожидается ровно 1 — 'user')"
+    - login_roles:
+        usage: "GAUGE"
+        description: "Login-ролей (ожидается 3: user, tryberry_app, tryberry_monitor)"
