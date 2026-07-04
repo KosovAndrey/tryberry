@@ -51,7 +51,10 @@ func ApplyPurchase(u *User, plan string, days int, now time.Time) time.Time {
 	return now.Add(d)
 }
 
-// DiscountedKopecks — цена со скидкой pct% (округление вниз, в пользу юзера).
+// DiscountedKopecks — цена со скидкой pct%, округлённая вниз до целого рубля
+// (в пользу юзера). До рубля, а не до копейки: базовые цены целые, копейки
+// появляются только от скидки, а СБП-канал Робокассы на суммах с копейками
+// отказывает мутным «Check your data on the form» (карты/SberPay — нет).
 func DiscountedKopecks(kopecks int64, pct int) int64 {
 	if pct <= 0 {
 		return kopecks
@@ -59,7 +62,8 @@ func DiscountedKopecks(kopecks int64, pct int) int64 {
 	if pct >= 100 {
 		return 0
 	}
-	return kopecks * int64(100-pct) / 100
+	d := kopecks * int64(100-pct) / 100
+	return d - d%100
 }
 
 // KopecksToRubString — копейки → "199.00" для поля amount.value ЮKassa.
