@@ -26,33 +26,46 @@ echo "внешний интерфейс: $EXT_IF"
 
 echo
 echo "── 1/6 UFW ──────────────────────────────────────────────────────────────"
-apt-get install -y -qq ufw >/dev/null
+# ⚠️ НЕ ставить рядом iptables-persistent: он КОНФЛИКТУЕТ с ufw — apt при его
+# установке молча удаляет ufw (наступили 2026-07-04: шаг 2 первой версии этого
+# скрипта снёс ufw из шага 1). Персистентность DOCKER-USER — через after.rules
+# самого ufw (шаг 2), сторонний механизм не нужен.
+DEBIAN_FRONTEND=noninteractive apt-get purge -y -qq iptables-persistent netfilter-persistent >/dev/null 2>&1 || true
+DEBIAN_FRONTEND=noninteractive apt-get install -y -qq ufw >/dev/null
 ufw default deny incoming
 ufw default allow outgoing
 ufw allow 22/tcp
 ufw allow 80/tcp
 ufw allow 443/tcp
-ufw --force enable
-ufw status verbose
 
 echo
-echo "── 2/6 iptables DOCKER-USER (Docker обходит UFW) ────────────────────────"
-# Пересобираем цепочку целиком — идемпотентно. Схема:
+echo "── 2/6 DOCKER-USER через ufw after.rules (Docker обходит UFW) ───────────"
+# Docker публикует порты мимо UFW (цепочка DOCKER-USER в FORWARD). Схема:
 #   ответный трафик (established) — пропустить;
 #   новые соединения снаружи на 80/443 — пропустить (nginx);
 #   всё остальное новое снаружи к контейнерам — DROP;
 #   не с внешнего интерфейса (docker-сети между собой) — RETURN (не трогаем).
-iptables -N DOCKER-USER 2>/dev/null || true
-iptables -F DOCKER-USER
-iptables -A DOCKER-USER -i "$EXT_IF" -m conntrack --ctstate RELATED,ESTABLISHED -j RETURN
-iptables -A DOCKER-USER -i "$EXT_IF" -p tcp --dport 80  -j RETURN
-iptables -A DOCKER-USER -i "$EXT_IF" -p tcp --dport 443 -j RETURN
-iptables -A DOCKER-USER -i "$EXT_IF" -j DROP
-iptables -A DOCKER-USER -j RETURN
-# Persistent через netfilter-persistent (переживает ребут; Docker свою цепочку
-# DOCKER-USER не флашит, только создаёт при отсутствии).
-DEBIAN_FRONTEND=noninteractive apt-get install -y -qq iptables-persistent >/dev/null
-netfilter-persistent save
+# Блок живёт в /etc/ufw/after.rules → ufw применяет его при каждом старте и
+# reload — переживает ребут без iptables-persistent (см. конфликт выше).
+AFTER_RULES=/etc/ufw/after.rules
+# идемпотентно: вырезать старый блок, дописать свежий (EXT_IF мог смениться)
+sed -i '/# BEGIN TRYBERRY DOCKER-USER/,/# END TRYBERRY DOCKER-USER/d' "$AFTER_RULES"
+cat >> "$AFTER_RULES" <<EOF
+# BEGIN TRYBERRY DOCKER-USER
+*filter
+:DOCKER-USER - [0:0]
+-F DOCKER-USER
+-A DOCKER-USER -i $EXT_IF -m conntrack --ctstate RELATED,ESTABLISHED -j RETURN
+-A DOCKER-USER -i $EXT_IF -p tcp --dport 80 -j RETURN
+-A DOCKER-USER -i $EXT_IF -p tcp --dport 443 -j RETURN
+-A DOCKER-USER -i $EXT_IF -j DROP
+-A DOCKER-USER -j RETURN
+COMMIT
+# END TRYBERRY DOCKER-USER
+EOF
+ufw --force enable
+ufw reload
+ufw status verbose
 iptables -L DOCKER-USER -n --line-numbers
 
 echo
