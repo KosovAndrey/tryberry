@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"log/slog"
 	"math"
+	"os"
+	"strconv"
 	"strings"
 
 	"gitlab.com/KosovAndrey/tryberrybot/internal/domain"
@@ -28,15 +30,81 @@ type deliverer struct {
 	mx           *max.Client
 	users        *postgres.UserRepo
 	chartBaseURL string // PUBLIC_BASE_URL для ссылки «📈 График цены» в VK/MAX-пуше; "" — без неё
+
+	// synth — редирект доставки синтетических юзеров нагрузочного теста на
+	// реальные тест-аккаунты (nil = выключен, синтетики дропаются). См.
+	// docs/LOAD-TEST-SYNTHETIC.md.
+	synth *synthRedirect
+}
+
+// synthRedirect — конфиг доставки синтетических юзеров: их фейковые идентичности
+// заменяются на реальные тест-аккаунты. Чтобы 1000 синтетиков не залили 3-5 чатов
+// (в жизни алерты размазаны по 1000 чатов, у TG лимит ~1 msg/s на чат), форвардится
+// только каждый sampleN-й юзер (по users.id — детерминированно, один и тот же
+// синтетик всегда попадает в один и тот же тест-чат). Остальные — synthetic drop
+// с метрикой, путь «решение→pending_alerts→флашер» они всё равно прогружают.
+type synthRedirect struct {
+	tg, vk, max []int64
+	sampleN     int64 // 1 из N юзеров форвардится; <=1 — форвардить всех
+}
+
+// parseSynthRedirect — конфиг из env: SYNTH_REDIRECT_TG_IDS / _VK_IDS / _MAX_IDS
+// (CSV chat_id тест-аккаунтов) + SYNTH_REDIRECT_SAMPLE_N (дефолт 10). nil, если
+// ни один список не задан (штатный прод-режим).
+func parseSynthRedirect() *synthRedirect {
+	parse := func(key string) []int64 {
+		var out []int64
+		for _, p := range strings.Split(os.Getenv(key), ",") {
+			if p = strings.TrimSpace(p); p == "" {
+				continue
+			}
+			if id, err := strconv.ParseInt(p, 10, 64); err == nil && id != 0 {
+				out = append(out, id)
+			}
+		}
+		return out
+	}
+	s := &synthRedirect{
+		tg:      parse("SYNTH_REDIRECT_TG_IDS"),
+		vk:      parse("SYNTH_REDIRECT_VK_IDS"),
+		max:     parse("SYNTH_REDIRECT_MAX_IDS"),
+		sampleN: 10,
+	}
+	if len(s.tg) == 0 && len(s.vk) == 0 && len(s.max) == 0 {
+		return nil
+	}
+	if v, err := strconv.ParseInt(os.Getenv("SYNTH_REDIRECT_SAMPLE_N"), 10, 64); err == nil && v > 0 {
+		s.sampleN = v
+	}
+	return s
+}
+
+// route — куда слать алерт синтетика. Канальность синтетика сохраняем: фейковый
+// TG-id → тест-TG-чат, фейковый VK → тест-VK и т.д. dropped=true — sampled out.
+func (s *synthRedirect) route(u *domain.User) (tgChat, vkPeer, maxUser int64, dropped bool) {
+	if s.sampleN > 1 && u.ID%s.sampleN != 0 {
+		return 0, 0, 0, true
+	}
+	if u.TelegramID != 0 && len(s.tg) > 0 {
+		tgChat = s.tg[int(u.ID)%len(s.tg)]
+	}
+	if u.VKID != nil && len(s.vk) > 0 {
+		vkPeer = s.vk[int(u.ID)%len(s.vk)]
+	}
+	if u.MaxID != nil && len(s.max) > 0 {
+		maxUser = s.max[int(u.ID)%len(s.max)]
+	}
+	return tgChat, vkPeer, maxUser, false
 }
 
 // targets — куда слать. userID — основной ключ (users.id), telegramID — фолбэк
-// для старых kafka-событий без user_id. Возвращает (слать в TG, peer VK или 0,
-// user MAX или 0).
-func (d *deliverer) targets(ctx context.Context, userID, telegramID int64) (sendTG bool, vkPeer, maxUser int64) {
-	if d.vk == nil && d.mx == nil && telegramID != 0 {
-		// Доп. каналы выключены, TG-чат известен — без лишнего запроса к БД.
-		return true, 0, 0
+// для старых kafka-событий без user_id. Возвращает конкретные адресаты каналов
+// (0 = не слать): TG-чат, peer VK, user MAX. sampledOut=true — синтетик, срезанный
+// сэмплированием (дропнуть тихо, без warn «no channel»).
+func (d *deliverer) targets(ctx context.Context, userID, telegramID int64) (tgChat, vkPeer, maxUser int64, sampledOut bool) {
+	if d.synth == nil && d.vk == nil && d.mx == nil && telegramID != 0 {
+		// Доп. каналы и synth-режим выключены, TG-чат известен — без запроса к БД.
+		return telegramID, 0, 0, false
 	}
 	var u *domain.User
 	var err error
@@ -47,29 +115,46 @@ func (d *deliverer) targets(ctx context.Context, userID, telegramID int64) (send
 	}
 	if err != nil {
 		// Не нашли/ошибка — ведём себя как раньше (в TG), уведомление важнее роутинга.
-		return telegramID != 0, 0, 0
+		return telegramID, 0, 0, false
+	}
+	if u.IsSynthetic {
+		if d.synth == nil {
+			// Нагрузочный тест без редиректа: на фейковые id не шлём вообще.
+			return 0, 0, 0, true
+		}
+		return d.synth.route(u)
 	}
 	if d.vk == nil && d.mx == nil {
-		return u.TelegramID != 0, 0, 0
+		return u.TelegramID, 0, 0, false
 	}
 	hasVK := u.VKID != nil
 	hasMax := u.MaxID != nil
 	tg, vkOn, mxOn := domain.ResolveNotifyTargets(u.NotifyChannel, u.TelegramID != 0, hasVK, hasMax)
+	if tg {
+		tgChat = u.TelegramID
+	}
 	if vkOn && hasVK && d.vk != nil {
 		vkPeer = *u.VKID
 	}
 	if mxOn && hasMax && d.mx != nil {
 		maxUser = *u.MaxID
 	}
-	return tg, vkPeer, maxUser
+	return tgChat, vkPeer, maxUser, false
 }
 
 // deliver — общий хвост: TG и/или VK и/или MAX, успех при любой доставке.
+// sendTG получает конкретный chat_id (может быть переопределён synth-редиректом).
 // imageURL — фото для VK (пусто → без картинки; MAX рендерит превью ссылки).
-func (d *deliverer) deliver(ctx context.Context, userID, telegramID int64, sendTG func(context.Context) error, vkText, vkImageURL string) error {
-	tg, vkPeer, maxUser := d.targets(ctx, userID, telegramID)
+func (d *deliverer) deliver(ctx context.Context, userID, telegramID int64, sendTG func(context.Context, int64) error, vkText, vkImageURL string) error {
+	tgChat, vkPeer, maxUser, sampledOut := d.targets(ctx, userID, telegramID)
 
-	if !tg && vkPeer == 0 && maxUser == 0 {
+	if sampledOut {
+		// Синтетик нагрузочного теста, срезанный сэмплированием/без редиректа:
+		// путь до доставки прогружен, сам send намеренно не выполняем.
+		metrics.NotificationsDelivered.WithLabelValues("synth", "skipped").Inc()
+		return nil
+	}
+	if tgChat == 0 && vkPeer == 0 && maxUser == 0 {
 		// Некуда доставлять. Возвращаем nil: retry не поможет, кафку зацикливать нельзя.
 		d.log.Warn("deliver: no channel available", "user_id", userID, "telegram_id", telegramID)
 		metrics.NotificationsDelivered.WithLabelValues("none", "skipped").Inc()
@@ -79,8 +164,8 @@ func (d *deliverer) deliver(ctx context.Context, userID, telegramID int64, sendT
 	var tgErr, vkErr, mxErr error
 	delivered := false
 
-	if tg {
-		if tgErr = sendTG(ctx); tgErr == nil {
+	if tgChat != 0 {
+		if tgErr = sendTG(ctx, tgChat); tgErr == nil {
 			delivered = true
 		}
 		metrics.NotificationsDelivered.WithLabelValues("tg", statusLabel(tgErr)).Inc()
@@ -142,13 +227,21 @@ func statusLabel(err error) string {
 
 func (d *deliverer) SendPriceAlert(ctx context.Context, a telegram.PriceAlert) error {
 	return d.deliver(ctx, a.UserID, a.ChatID,
-		func(ctx context.Context) error { return d.tg.SendPriceAlert(ctx, a) },
+		func(ctx context.Context, chat int64) error {
+			a := a
+			a.ChatID = chat
+			return d.tg.SendPriceAlert(ctx, a)
+		},
 		vkPriceText(a, d.chartBaseURL), a.ImageURL)
 }
 
 func (d *deliverer) SendSearchAlert(ctx context.Context, a telegram.SearchAlert) error {
 	return d.deliver(ctx, a.UserID, a.ChatID,
-		func(ctx context.Context) error { return d.tg.SendSearchAlert(ctx, a) },
+		func(ctx context.Context, chat int64) error {
+			a := a
+			a.ChatID = chat
+			return d.tg.SendSearchAlert(ctx, a)
+		},
 		vkSearchText(a), "")
 }
 
@@ -156,7 +249,11 @@ func (d *deliverer) SendSearchAlert(ctx context.Context, a telegram.SearchAlert)
 // фото: несколько картинок в один текст не вложить). Роутинг TG/VK как обычно.
 func (d *deliverer) SendBundledAlert(ctx context.Context, a telegram.BundledAlert) error {
 	return d.deliver(ctx, a.UserID, a.ChatID,
-		func(ctx context.Context) error { return d.tg.SendBundledAlert(ctx, a) },
+		func(ctx context.Context, chat int64) error {
+			a := a
+			a.ChatID = chat
+			return d.tg.SendBundledAlert(ctx, a)
+		},
 		vkBundledText(a), "")
 }
 
@@ -165,7 +262,7 @@ func (d *deliverer) SendBundledAlert(ctx context.Context, a telegram.BundledAler
 // игнорирует/не критично).
 func (d *deliverer) SendDigest(ctx context.Context, userID, telegramID int64, text string) error {
 	return d.deliver(ctx, userID, telegramID,
-		func(ctx context.Context) error { return d.tg.SendDigest(ctx, telegramID, text) },
+		func(ctx context.Context, chat int64) error { return d.tg.SendDigest(ctx, chat, text) },
 		text, "")
 }
 
@@ -173,12 +270,8 @@ func (d *deliverer) SendDigest(ctx context.Context, userID, telegramID int64, te
 
 func (d *deliverer) SendPlanPausedNotice(ctx context.Context, userID int64) error {
 	return d.deliver(ctx, userID, 0,
-		func(ctx context.Context) error {
-			u, err := d.users.GetByID(ctx, userID)
-			if err != nil {
-				return err
-			}
-			return d.tg.SendPlanPausedNotice(ctx, u.TelegramID)
+		func(ctx context.Context, chat int64) error {
+			return d.tg.SendPlanPausedNotice(ctx, chat)
 		},
 		"⏳ Тариф закончился\n\n"+
 			"Часть твоих подписок приостановлена (вышли за лимит бесплатного тарифа). "+
@@ -188,12 +281,8 @@ func (d *deliverer) SendPlanPausedNotice(ctx context.Context, userID int64) erro
 
 func (d *deliverer) SendPlanExpiringReminder(ctx context.Context, userID int64) error {
 	return d.deliver(ctx, userID, 0,
-		func(ctx context.Context) error {
-			u, err := d.users.GetByID(ctx, userID)
-			if err != nil {
-				return err
-			}
-			return d.tg.SendPlanExpiringReminder(ctx, u.TelegramID)
+		func(ctx context.Context, chat int64) error {
+			return d.tg.SendPlanExpiringReminder(ctx, chat)
 		},
 		"⏳ Тариф скоро закончится\n\n"+
 			"Завтра истекает срок твоего тарифа. Продли, чтобы не потерять подписки и лимиты — "+
@@ -212,12 +301,8 @@ func (d *deliverer) SendReferralRewardNotice(ctx context.Context, userID int64, 
 		vkText += "Награда записана — спасибо, что зовёшь друзей!"
 	}
 	return d.deliver(ctx, userID, 0,
-		func(ctx context.Context) error {
-			u, err := d.users.GetByID(ctx, userID)
-			if err != nil {
-				return err
-			}
-			return d.tg.SendReferralRewardNotice(ctx, u.TelegramID, friendName, days, granted)
+		func(ctx context.Context, chat int64) error {
+			return d.tg.SendReferralRewardNotice(ctx, chat, friendName, days, granted)
 		},
 		vkText, "")
 }

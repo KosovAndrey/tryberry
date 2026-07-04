@@ -76,3 +76,4 @@ render/iphone/assets/
 *.blend1
 *.glb
 *.fbx
+/seed-loadtest

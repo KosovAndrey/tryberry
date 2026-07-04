@@ -27,6 +27,11 @@ type User struct {
 
 	// Рефералка
 	ReferredBy *int64 // users.id пригласившего (nil = пришёл сам)
+
+	// Синтетический юзер нагрузочного теста (cmd/seed-loadtest): идентичности
+	// фейковые, доставку уведомлений notifier редиректит на тест-аккаунты
+	// или дропает. Реальные юзеры — всегда false.
+	IsSynthetic bool
 }
 
 type Product struct {
