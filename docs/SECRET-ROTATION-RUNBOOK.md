@@ -71,10 +71,11 @@ alias dcp='docker compose -f docker-compose.yml -f docker-compose.prod.yml'
 3. Проверка: убедиться, что webhook-подписка перерегистрировалась (лог api
    при старте) и бот в MAX отвечает.
 
-### 6. TELEGRAM_WEBHOOK_SECRET
-Бот в polling (`WEBHOOK_ENABLED=false`), секрет не используется, но переменная
-должна быть непустой (WARN при `up`). Просто сгенерить и вписать; подхватится
-при ближайшем пересоздании api (можно вместе с шагом 7).
+### 6. TELEGRAM_WEBHOOK_SECRET — ротация не нужна
+Бот в polling (`WEBHOOK_ENABLED=false` жёстко в docker-compose.prod.yml),
+секрет не используется и в `.env` отсутствует — ротировать нечего. WARN при
+`up` убран пустым дефолтом в docker-compose.yml. Если когда-нибудь включим
+webhook (хостинг вне РФ) — сгенерить свежий `openssl rand -hex 32` на месте.
 
 ### 7. ROBOKASSA_PASSWORD1 / ROBOKASSA_PASSWORD2
 1. ЛК Робокассы → настройки магазина → сменить оба пароля. Применяются сразу,

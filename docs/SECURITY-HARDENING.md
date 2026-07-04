@@ -140,7 +140,9 @@ nmap -Pn <IP>
       - [ ] `GRAFANA_ADMIN_PASSWORD` (+ сменить пароль в самой Grafana, если
             логинился с ним: hash лежит в grafana_data)
       - [x] `POSTGRES_PASSWORD` (сменён в ходе инцидента)
-      - [ ] `TELEGRAM_WEBHOOK_SECRET`, `VK_CALLBACK_SECRET`, `MAX_CALLBACK_SECRET`
+      - [ ] `VK_CALLBACK_SECRET`, `MAX_CALLBACK_SECRET`
+      - [x] `TELEGRAM_WEBHOOK_SECRET` — n/a: в polling-режиме не используется и
+            в `.env` не задан, ротировать нечего (см. ранбук, шаг 6)
       - [ ] ключи/пароли в `xray/config.json` и `wireguard/*` (если провайдер
             VPN/VLESS позволяет — перевыпустить)
 - [ ] `chmod 600 .env` (входит в `server-harden.sh`).
