@@ -23,8 +23,9 @@
 set -u
 
 # Под cron PATH урезан до /usr/bin:/bin — ufw/iptables из /usr/sbin не находятся
-# и проверка фаервола ложно алертит «UFW не активен».
-export PATH="/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+# и проверка фаервола ложно алертит «UFW не активен». /snap/bin — на этом
+# сервере ufw живёт там (snap), в /usr/sbin его нет.
+export PATH="/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:/snap/bin"
 # Парсим вывод ufw по английской локали («Status: active»).
 export LC_ALL=C
 
@@ -66,7 +67,13 @@ else
 fi
 
 # ── 4. фаервол ───────────────────────────────────────────────────────────────
-ufw status 2>/dev/null | grep -q 'Status: active' || fail "UFW не активен"
+if command -v ufw >/dev/null 2>&1; then
+  ufw status 2>/dev/null | grep -q 'Status: active' || fail "UFW не активен"
+else
+  # ufw CLI не нашёлся ни в одном из известных мест — проверяем по факту:
+  # при активном UFW в iptables есть его цепочка ufw-user-input.
+  iptables -nL ufw-user-input >/dev/null 2>&1 || fail "UFW не активен (нет ни ufw CLI, ни цепочки ufw-user-input)"
+fi
 iptables -L DOCKER-USER -n 2>/dev/null | grep -q 'DROP' || fail "в DOCKER-USER нет DROP-правила (docker-порты не прикрыты)"
 
 # ── итог ─────────────────────────────────────────────────────────────────────
