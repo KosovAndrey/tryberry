@@ -75,7 +75,7 @@ func withTestShortHost(t *testing.T, host, path string) {
 
 func TestExpand_FollowsRedirectChainToCanonical(t *testing.T) {
 	withTestShortHost(t, "sh.test", "/t/")
-	r := NewLinkResolver(0)
+	r := NewLinkResolver(0, nil)
 	r.client.Transport = fakeRT{hops: map[string]string{
 		"https://sh.test/t/abc": "https://hop.test/r",
 		"https://hop.test/r":    "https://aliexpress.ru/item/123.html?from=app",
@@ -89,7 +89,7 @@ func TestExpand_FollowsRedirectChainToCanonical(t *testing.T) {
 }
 
 func TestExpand_NonShortLinkUntouchedNoNetwork(t *testing.T) {
-	r := NewLinkResolver(0)
+	r := NewLinkResolver(0, nil)
 	// Транспорт, который падает при любом вызове — доказывает, что для не-шортнера
 	// сеть не трогается вообще.
 	r.client.Transport = fakeRT{err: errors.New("network must not be called")}
@@ -101,7 +101,7 @@ func TestExpand_NonShortLinkUntouchedNoNetwork(t *testing.T) {
 
 func TestExpand_NetworkErrorKeepsOriginal(t *testing.T) {
 	withTestShortHost(t, "sh.test", "/t/")
-	r := NewLinkResolver(0)
+	r := NewLinkResolver(0, nil)
 	r.client.Transport = fakeRT{err: errors.New("boom")}
 	in := "https://sh.test/t/dead"
 	if got := r.Expand(context.Background(), in); got != in {
@@ -111,7 +111,7 @@ func TestExpand_NetworkErrorKeepsOriginal(t *testing.T) {
 
 func TestExpandInText_ReplacesOnlyShortLinks(t *testing.T) {
 	withTestShortHost(t, "sh.test", "/t/")
-	r := NewLinkResolver(0)
+	r := NewLinkResolver(0, nil)
 	r.client.Transport = fakeRT{hops: map[string]string{
 		"https://sh.test/t/x": "https://ozon.ru/product/name-777/",
 	}}
@@ -152,7 +152,7 @@ func (f fakeTLS) Do(req *fhttp.Request) (*fhttp.Response, error) {
 }
 
 func TestExpandYandex_CCChainToStorefront(t *testing.T) {
-	r := NewLinkResolver(0)
+	r := NewLinkResolver(0, nil)
 	r.tls = fakeTLS{hops: map[string]string{
 		"https://market.yandex.ru/cc/7i6LVS": "https://ya.cc/m/7i6LVS",
 		"https://ya.cc/m/7i6LVS":             "https://market.yandex.ru/business--shop/924412?utm_medium=sharing",
@@ -165,18 +165,49 @@ func TestExpandYandex_CCChainToStorefront(t *testing.T) {
 }
 
 func TestExpandYandex_ShowcaptchaKeepsOriginal(t *testing.T) {
-	r := NewLinkResolver(0)
+	r := NewLinkResolver(0, nil)
 	r.tls = fakeTLS{hops: map[string]string{
 		"https://market.yandex.ru/cc/x": "https://market.yandex.ru/showcaptcha?cc=1&retpath=...",
 	}}
+	r.tlsProxy = nil // без прокси капча = отдаём исходник
 	in := "https://market.yandex.ru/cc/x"
 	if got := r.Expand(context.Background(), in); got != in {
 		t.Fatalf("on showcaptcha Expand = %q, want original %q", got, in)
 	}
 }
 
+func TestExpandYandex_CaptchaFallsBackToProxy(t *testing.T) {
+	r := NewLinkResolver(0, nil)
+	// Direct упирается в showcaptcha, прокси-хоп отдаёт настоящий редирект.
+	r.tls = fakeTLS{hops: map[string]string{
+		"https://market.yandex.ru/cc/x": "https://market.yandex.ru/showcaptcha?cc=1",
+	}}
+	r.tlsProxy = fakeTLS{hops: map[string]string{
+		"https://market.yandex.ru/cc/x": "https://market.yandex.ru/business--shop/1",
+	}}
+	got := r.Expand(context.Background(), "https://market.yandex.ru/cc/x")
+	want := "https://market.yandex.ru/business--shop/1"
+	if got != want {
+		t.Fatalf("Expand = %q, want %q", got, want)
+	}
+}
+
+func TestExpandYandex_Captcha200FallsBackToProxy(t *testing.T) {
+	r := NewLinkResolver(0, nil)
+	// Антибот отдал страницу капчи 200-м без Location (нет записи в hops = 200).
+	r.tls = fakeTLS{hops: map[string]string{}}
+	r.tlsProxy = fakeTLS{hops: map[string]string{
+		"https://ya.cc/m/x": "https://market.yandex.ru/card/tovar-100/500",
+	}}
+	got := r.Expand(context.Background(), "https://ya.cc/m/x")
+	want := "https://market.yandex.ru/card/tovar-100/500"
+	if got != want {
+		t.Fatalf("Expand = %q, want %q", got, want)
+	}
+}
+
 func TestExpandYandex_NoTLSClientKeepsOriginal(t *testing.T) {
-	r := NewLinkResolver(0)
+	r := NewLinkResolver(0, nil)
 	r.tls = nil
 	in := "https://market.yandex.ru/cc/x"
 	if got := r.Expand(context.Background(), in); got != in {
@@ -185,7 +216,7 @@ func TestExpandYandex_NoTLSClientKeepsOriginal(t *testing.T) {
 }
 
 func TestExpandYandex_NetworkErrorKeepsOriginal(t *testing.T) {
-	r := NewLinkResolver(0)
+	r := NewLinkResolver(0, nil)
 	r.tls = fakeTLS{err: errors.New("boom")}
 	in := "https://ya.cc/m/dead"
 	if got := r.Expand(context.Background(), in); got != in {
@@ -194,7 +225,7 @@ func TestExpandYandex_NetworkErrorKeepsOriginal(t *testing.T) {
 }
 
 func TestExpandInText_NoURLNoChange(t *testing.T) {
-	r := NewLinkResolver(0)
+	r := NewLinkResolver(0, nil)
 	r.client.Transport = fakeRT{err: errors.New("network must not be called")}
 	in := "просто текст без ссылок"
 	if got := r.ExpandInText(context.Background(), in); got != in {

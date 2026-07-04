@@ -129,7 +129,7 @@ func NewBot(
 		prodRepo:        prodRepo,
 		priceRepo:       priceRepo,
 		registry:        registry,
-		resolver:        scraper.NewLinkResolver(0),
+		resolver:        scraper.NewLinkResolver(0, log),
 		searchQueryRepo: searchQueryRepo,
 		searchSubRepo:   searchSubRepo,
 		promoRepo:       promoRepo,

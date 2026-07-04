@@ -171,7 +171,7 @@ func NewBot(
 		promoRepo:       promoRepo,
 		referralRepo:    referralRepo,
 		registry:        registry,
-		resolver:        scraper.NewLinkResolver(0),
+		resolver:        scraper.NewLinkResolver(0, log),
 		linkCodes:       linkCodes,
 		rdb:             rdb,
 		botURL:          botURL,
