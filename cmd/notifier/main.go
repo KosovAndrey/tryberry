@@ -121,6 +121,13 @@ func run(log *slog.Logger) error {
 			log.Info("max delivery enabled")
 		}
 	}
+	// Нагрузочный тест: редирект доставки синтетических юзеров на тест-аккаунты
+	// (docs/LOAD-TEST-SYNTHETIC.md). Без этих env синтетики просто дропаются.
+	if s := parseSynthRedirect(); s != nil {
+		sender.synth = s
+		log.Info("synthetic redirect enabled",
+			"tg", len(s.tg), "vk", len(s.vk), "max", len(s.max), "sample_n", s.sampleN)
+	}
 
 	// ── Kafka ────────────────────────────────────────────────────────────────
 	// Товарный путь: price-events.

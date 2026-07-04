@@ -452,6 +452,13 @@ services:
       # DIGEST_MIN_AGE_DAYS=0 — снять 7-дн. гейт (свежие товары попадут). В проде не задавать.
       DIGEST_TEST_TG_IDS: "${DIGEST_TEST_TG_IDS:-}"
       DIGEST_MIN_AGE_DAYS: "${DIGEST_MIN_AGE_DAYS:--1}"
+      # Нагрузочный тест (docs/LOAD-TEST-SYNTHETIC.md): алерты синтетических
+      # юзеров редиректятся на тест-аккаунты (CSV chat_id). Пусто = синтетики
+      # дропаются на доставке; на реальных юзеров не влияет никак.
+      SYNTH_REDIRECT_TG_IDS: "${SYNTH_REDIRECT_TG_IDS:-}"
+      SYNTH_REDIRECT_VK_IDS: "${SYNTH_REDIRECT_VK_IDS:-}"
+      SYNTH_REDIRECT_MAX_IDS: "${SYNTH_REDIRECT_MAX_IDS:-}"
+      SYNTH_REDIRECT_SAMPLE_N: "${SYNTH_REDIRECT_SAMPLE_N:-10}"
     depends_on:
       postgres:
         condition: service_healthy

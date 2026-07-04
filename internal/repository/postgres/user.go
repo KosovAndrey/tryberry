@@ -99,13 +99,13 @@ func (r *UserRepo) Upsert(ctx context.Context, telegramID int64, username string
 func (r *UserRepo) GetByTelegramID(ctx context.Context, telegramID int64) (*domain.User, error) {
 	const q = `
 		SELECT id, telegram_id, username, created_at, plan, plan_expires_at, trial_used, referred_by,
-		       vk_id, max_id, notify_channel, pd_consent_at
+		       vk_id, max_id, notify_channel, pd_consent_at, is_synthetic
 		FROM users WHERE telegram_id = $1`
 
 	u := &domain.User{}
 	err := r.db.QueryRow(ctx, q, telegramID).
 		Scan(&u.ID, &u.TelegramID, &u.Username, &u.CreatedAt, &u.Plan, &u.PlanExpiresAt, &u.TrialUsed, &u.ReferredBy,
-			&u.VKID, &u.MaxID, &u.NotifyChannel, &u.PDConsentAt)
+			&u.VKID, &u.MaxID, &u.NotifyChannel, &u.PDConsentAt, &u.IsSynthetic)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, domain.ErrNotFound
 	}
@@ -119,13 +119,13 @@ func (r *UserRepo) GetByTelegramID(ctx context.Context, telegramID int64) (*doma
 func (r *UserRepo) GetByID(ctx context.Context, id int64) (*domain.User, error) {
 	const q = `
 		SELECT id, COALESCE(telegram_id, 0), COALESCE(username, ''), created_at, plan, plan_expires_at,
-		       trial_used, referred_by, vk_id, max_id, notify_channel
+		       trial_used, referred_by, vk_id, max_id, notify_channel, is_synthetic
 		FROM users WHERE id = $1`
 
 	u := &domain.User{}
 	err := r.db.QueryRow(ctx, q, id).
 		Scan(&u.ID, &u.TelegramID, &u.Username, &u.CreatedAt, &u.Plan, &u.PlanExpiresAt, &u.TrialUsed, &u.ReferredBy,
-			&u.VKID, &u.MaxID, &u.NotifyChannel)
+			&u.VKID, &u.MaxID, &u.NotifyChannel, &u.IsSynthetic)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, domain.ErrNotFound
 	}
@@ -140,13 +140,13 @@ func (r *UserRepo) GetByID(ctx context.Context, id int64) (*domain.User, error) 
 func (r *UserRepo) GetByVKID(ctx context.Context, vkID int64) (*domain.User, error) {
 	const q = `
 		SELECT id, COALESCE(telegram_id, 0), COALESCE(username, ''), created_at, plan, plan_expires_at,
-		       trial_used, referred_by, vk_id, max_id, notify_channel
+		       trial_used, referred_by, vk_id, max_id, notify_channel, is_synthetic
 		FROM users WHERE vk_id = $1`
 
 	u := &domain.User{}
 	err := r.db.QueryRow(ctx, q, vkID).
 		Scan(&u.ID, &u.TelegramID, &u.Username, &u.CreatedAt, &u.Plan, &u.PlanExpiresAt, &u.TrialUsed, &u.ReferredBy,
-			&u.VKID, &u.MaxID, &u.NotifyChannel)
+			&u.VKID, &u.MaxID, &u.NotifyChannel, &u.IsSynthetic)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, domain.ErrNotFound
 	}
@@ -237,13 +237,13 @@ func (r *UserRepo) UnlinkVK(ctx context.Context, userID int64) error {
 func (r *UserRepo) GetByMaxID(ctx context.Context, maxID int64) (*domain.User, error) {
 	const q = `
 		SELECT id, COALESCE(telegram_id, 0), COALESCE(username, ''), created_at, plan, plan_expires_at,
-		       trial_used, referred_by, vk_id, max_id, notify_channel
+		       trial_used, referred_by, vk_id, max_id, notify_channel, is_synthetic
 		FROM users WHERE max_id = $1`
 
 	u := &domain.User{}
 	err := r.db.QueryRow(ctx, q, maxID).
 		Scan(&u.ID, &u.TelegramID, &u.Username, &u.CreatedAt, &u.Plan, &u.PlanExpiresAt, &u.TrialUsed, &u.ReferredBy,
-			&u.VKID, &u.MaxID, &u.NotifyChannel)
+			&u.VKID, &u.MaxID, &u.NotifyChannel, &u.IsSynthetic)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, domain.ErrNotFound
 	}
