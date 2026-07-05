@@ -183,9 +183,12 @@ func runSeed(log *slog.Logger, args []string) error {
 			}
 			chosen[pi] = true
 			prod := products[pi]
+			// first_seen_price обязателен: any_drop в первой фазе сравнивает цену
+			// именно с ним (searchsub.Decide), дефолтный 0 = триггер никогда не
+			// сработает и алертов не будет вовсе.
 			subBatch.Queue(`
-				INSERT INTO subscriptions (user_id, product_id, baseline_price, active)
-				VALUES ($1, $2, $3, TRUE)
+				INSERT INTO subscriptions (user_id, product_id, baseline_price, first_seen_price, active)
+				VALUES ($1, $2, $3, $3, TRUE)
 				ON CONFLICT (user_id, product_id) DO NOTHING`,
 				userID, idByURL[prod.URL], float64(prod.PriceKopecks)/100)
 		}
