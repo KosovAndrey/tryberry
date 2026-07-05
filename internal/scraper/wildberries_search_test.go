@@ -47,6 +47,7 @@ func TestScrapeSearchFallbackToBrowser(t *testing.T) {
 		maxPages:           1,
 		browserURL:         "http://wb-search-miner:8081",
 		browserClient:      sidecarClient,
+		browserMaxPages:    1,
 	}
 
 	set, err := s.ScrapeSearch(context.Background(),

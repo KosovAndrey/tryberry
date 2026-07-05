@@ -51,6 +51,10 @@ type WildberriesSearchScraper struct {
 	// Ozon (FAB). Пусто → фолбэка нет, 403 уходит наверх как ErrMarketplaceBlocked.
 	browserURL    string
 	browserClient *http.Client
+	// browserMaxPages — сколько страниц тянуть через сайдкар (навигация-перехват
+	// нативного ответа фронта). Дорого (навигация на страницу), поэтому по
+	// умолчанию 1 (топ-100 — для горячих запросов достаточно). <=0 → 1.
+	browserMaxPages int
 }
 
 // NewWildberriesSearchScraper.
@@ -89,9 +93,14 @@ var _ SearchScraper = (*WildberriesSearchScraper)(nil)
 
 // SetBrowserSidecar подключает сайдкар wb-search-miner как 403-фолбэк: на 403
 // direct запрос уходит в прогретый браузер (GET /search?query=&sort=&page=).
-// Пустой URL — фолбэка нет (403 остаётся ошибкой). См. поле browserURL.
-func (s *WildberriesSearchScraper) SetBrowserSidecar(baseURL string) {
+// maxPages — сколько страниц тянуть через сайдкар (<=0 → 1). Пустой URL —
+// фолбэка нет (403 остаётся ошибкой). См. поля browserURL/browserMaxPages.
+func (s *WildberriesSearchScraper) SetBrowserSidecar(baseURL string, maxPages int) {
 	baseURL = strings.TrimRight(strings.TrimSpace(baseURL), "/")
+	if maxPages <= 0 {
+		maxPages = 1
+	}
+	s.browserMaxPages = maxPages
 	if baseURL == "" {
 		return
 	}
@@ -137,9 +146,10 @@ func (s *WildberriesSearchScraper) ScrapeSearch(ctx context.Context, rawURL stri
 	position := 0
 
 	// preferBrowser залипает на весь запрос: как только страница упёрлась в 403
-	// direct и её спас браузер-сайдкар, остальные страницы идут сразу в сайдкар —
-	// не тратим по заведомому 403 на страницу.
+	// direct и её спас браузер-сайдкар, остальные страницы идут сразу в сайдкар.
+	// browserUsed ограничивает число браузер-страниц (навигация дорогая).
 	var preferBrowser bool
+	browserUsed := 0
 
 	for page := 1; page <= s.maxPages; page++ {
 		if page > 1 {
@@ -148,15 +158,20 @@ func (s *WildberriesSearchScraper) ScrapeSearch(ctx context.Context, rawURL stri
 
 		var body []byte
 		if preferBrowser {
+			if browserUsed >= s.browserMaxPages {
+				break // лимит браузер-страниц исчерпан — партиал (топ-N) достаточно
+			}
 			body, err = s.fetchViaBrowser(ctx, query, sortMode, page)
+			browserUsed++
 		} else {
 			body, err = s.fetchPage(ctx, buildSearchAPIURL(query, sortMode, page), referer)
 			// direct заблокирован (обычно 403 на горячем) → уводим в браузер и
 			// залипаем на нём до конца запроса.
-			if err != nil && s.browserURL != "" {
+			if err != nil && s.browserURL != "" && browserUsed < s.browserMaxPages {
 				if bbody, berr := s.fetchViaBrowser(ctx, query, sortMode, page); berr == nil {
 					body, err = bbody, nil
 					preferBrowser = true
+					browserUsed++
 				}
 			}
 		}
@@ -298,10 +313,10 @@ func (s *WildberriesSearchScraper) fetchPage(ctx context.Context, apiURL, refere
 }
 
 // fetchViaBrowser — 403-фолбэк: одна страница выдачи из прогретого браузера
-// сайдкара wb-search-miner (GET /search?query=&sort=&page=). Сайдкар делает
-// in-page fetch к тому же u-search из доверенного контекста и отдаёт СЫРОЙ JSON
-// той же формы (wbSearchResponse), зеркаля upstream-статус (403 при стойком
-// челлендже). Токен тут не нужен — cookie живёт в самом браузере.
+// сайдкара wb-search-miner (GET /search?query=&sort=&page=). Сайдкар навигирует
+// браузер на страницу запроса и ПЕРЕХВАТЫВАЕТ нативный ответ u-search фронта
+// (ручной fetch wbaas отвергает 403) — отдаёт СЫРОЙ JSON той же формы
+// (wbSearchResponse), зеркаля upstream-статус. Токен тут не нужен — cookie в браузере.
 func (s *WildberriesSearchScraper) fetchViaBrowser(ctx context.Context, query, sortMode string, page int) ([]byte, error) {
 	if s.browserURL == "" || s.browserClient == nil {
 		return nil, fmt.Errorf("%w: browser sidecar not configured", ErrMarketplaceBlocked)

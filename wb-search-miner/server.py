@@ -102,32 +102,18 @@ def _is_dead(exc) -> bool:
 def _first_line(exc) -> str:
     return (str(exc).splitlines() or [""])[0]
 
-# ── In-page fetch к u-search ──────────────────────────────────────────────────
-_FETCH_JS = """
-async (path) => {
-  try {
-    const r = await fetch(path, {
-      headers: {'accept': '*/*', 'x-requested-with': 'XMLHttpRequest'},
-      credentials: 'include',
-    });
-    const body = await r.text();
-    return {status: r.status, body: body};
-  } catch (e) { return {status: -1, body: '', error: String(e)}; }
-}
-"""
-
-
-def _usearch_path(query: str, sort: str, page: int) -> str:
-    """Относительный u-search path (same-origin). Параметры — тот же семантически
-    нейтральный минимум, что в Go buildSearchAPIURL; порядок не важен."""
-    q = {
-        "appType": "1", "curr": "rub", "dest": WB_DEST,
-        "inheritFilters": "false", "lang": "ru", "locale": "ru",
-        "page": str(page), "query": query, "resultset": "catalog",
-        "sort": sort or "popular", "spp": WB_SPP, "suppressSpellcheck": "false",
-    }
-    qs = "&".join(f"{k}={quote(str(v), safe='')}" for k, v in q.items())
-    return f"{USEARCH_PATH}?{qs}"
+def _search_page_url(query: str, sort: str, page: int) -> str:
+    """URL страницы поиска для навигации (фронт сам дёрнет u-search). sort/page —
+    штатные query-параметры каталога WB."""
+    url = SEARCH_PAGE_URL.format(query=quote(query))
+    extra = []
+    if sort and sort != "popular":
+        extra.append("sort=" + quote(sort))
+    if page and page > 1:
+        extra.append("page=" + str(page))
+    if extra:
+        url += "&" + "&".join(extra)
+    return url
 
 
 def _parse_proxy(url: str):
@@ -141,16 +127,6 @@ def _parse_proxy(url: str):
     if u.password:
         proxy["password"] = unquote(u.password)
     return proxy
-
-
-def _looks_ok(status: int, body: str) -> bool:
-    """200 и тело похоже на JSON выдачи (есть products/data), а не на стену."""
-    if status != 200 or not body:
-        return False
-    head = body[:400].lower()
-    if any(m in head for m in WALL_MARKERS):
-        return False
-    return '"products"' in body[:2000] or '"data"' in body[:2000] or body.lstrip().startswith("{")
 
 
 # ── Дорожка ───────────────────────────────────────────────────────────────────
@@ -224,14 +200,6 @@ class Lane:
         except Exception:  # noqa: BLE001
             pass
 
-    async def _inpage_fetch(self, path: str):
-        try:
-            res = await asyncio.wait_for(self._page.evaluate(_FETCH_JS, path), timeout=FETCH_TIMEOUT_S)
-        except Exception as e:  # noqa: BLE001
-            log.warning("дорожка %d: in-page fetch упал: %s", self.idx, str(e).splitlines()[0] if str(e) else e)
-            return 0, ""
-        return int(res.get("status") or 0), (res.get("body") or "")
-
     async def warm(self):
         """Прогрев как в token-miner: навигация на страницу поиска, СЛУШАЕМ
         ответы — ждём 200 на СОБСТВЕННОМ u-search XHR страницы (= wbaas-стена
@@ -281,18 +249,16 @@ class Lane:
             except Exception:  # noqa: BLE001
                 pass
 
-        # Стена пройдена страницей → убеждаемся, что и наш in-page fetch отдаёт 200.
+        # Стена пройдена, когда САМА страница получила 200 на своём u-search XHR
+        # (cookie x_wbaas_token выставлен). Обслуживаем перехватом нативного ответа
+        # (ручной fetch к u-search wbaas отвергает 403 — фронт кладёт что-то своё).
         if seen["ok"]:
-            status, body = await self._inpage_fetch(_usearch_path(WARM_QUERY, "popular", 1))
-            if _looks_ok(status, body):
-                self.healthy = True
-                self._warm_fails = 0
-                self._next_warm = 0.0
-                self._last_warm = time.monotonic()
-                log.info("дорожка %d прогрета: u-search 200 (wbaas пройден)", self.idx)
-                return
-            log.warning("дорожка %d: страница прошла стену, но in-page fetch дал status=%s",
-                        self.idx, status)
+            self.healthy = True
+            self._warm_fails = 0
+            self._next_warm = 0.0
+            self._last_warm = time.monotonic()
+            log.info("дорожка %d прогрета: u-search 200 (wbaas пройден)", self.idx)
+            return
 
         self.healthy = False
         self._warm_fails += 1
@@ -332,36 +298,67 @@ class Lane:
             log.warning("диагностика упала: %s", _first_line(e))
 
     async def fetch_search(self, query: str, sort: str, page: int):
-        """In-page fetch страницы выдачи. Возвращает (status, body_bytes).
-        Стойкая стена (403/тело-стена) НЕ лечится ретраем в пределах вызова —
-        метим дорожку нездоровой (перепрогрев сделает maintenance_loop)."""
-        path = _usearch_path(query, sort, page)
+        """Навигируем прогретый браузер на страницу запроса и ПЕРЕХВАТЫВАЕМ ответ
+        u-search, который фронт делает сам (нативно, со всеми нужными заголовками —
+        ручной fetch wbaas отвергает 403). Возвращает (status, body_bytes)."""
+        nav_url = _search_page_url(query, sort, page)
         async with self.lock:
             t0 = time.monotonic()
             spacing = max(0.1, LANE_MIN_INTERVAL_S * (1.0 + LANE_JITTER * (2 * random.random() - 1)))
             wait = spacing - (t0 - self._last_at)
             if wait > 0:
                 await asyncio.sleep(wait)
-            status, body = 0, ""
-            for attempt in range(1, FETCH_RETRIES + 1):
-                self._last_at = time.monotonic()
-                status, body = await self._inpage_fetch(path)
-                if _looks_ok(status, body):
-                    log.info("дорожка %d: search %r p%d ок (%d симв., попыток %d)",
-                             self.idx, query[:40], page, len(body), attempt)
-                    return 200, body.encode("utf-8")
-                if status == 403 or any(m in (body[:400].lower()) for m in WALL_MARKERS):
-                    break  # стена — ретрай бесполезен
-                if attempt < FETCH_RETRIES:
-                    await self._nudge()
-                    try:
-                        await self._page.wait_for_timeout(RETRY_PAUSE_MS)
-                    except Exception:  # noqa: BLE001
-                        await asyncio.sleep(RETRY_PAUSE_MS / 1000)
-            self.healthy = False
-            log.warning("дорожка %d: стена на search %r p%d (status=%s) — нездорова",
-                        self.idx, query[:40], page, status)
-            return 403, (body or "").encode("utf-8")
+            self._last_at = time.monotonic()
+
+            loop = asyncio.get_event_loop()
+            fut: asyncio.Future = loop.create_future()
+
+            def on_resp(resp):
+                try:
+                    if USEARCH_MARKER in resp.url and not fut.done():
+                        fut.set_result(resp)
+                except Exception:  # noqa: BLE001
+                    pass
+
+            self._page.on("response", on_resp)
+            try:
+                try:
+                    await self._page.goto(nav_url, wait_until="commit",
+                                          timeout=int(NAV_TIMEOUT_S * 1000))
+                except Exception as e:  # noqa: BLE001
+                    # u-search часто прилетает ещё до полной загрузки — навигационную
+                    # ошибку не считаем фаталом, ждём ответ ниже.
+                    if _is_dead(e):
+                        self.healthy = False
+                        return 502, b""
+                # лёгкий нудж — иногда выдача подгружается после взаимодействия
+                await self._nudge()
+                try:
+                    resp = await asyncio.wait_for(fut, timeout=FETCH_TIMEOUT_S)
+                except asyncio.TimeoutError:
+                    self.healthy = False
+                    log.warning("дорожка %d: u-search не прилетел на %r p%d — нездорова",
+                                self.idx, query[:40], page)
+                    return 403, b""
+                status = resp.status
+                try:
+                    body = await resp.body()
+                except Exception as e:  # noqa: BLE001
+                    log.warning("дорожка %d: чтение тела u-search упало: %s", self.idx, _first_line(e))
+                    return 502, b""
+                if status == 200:
+                    log.info("дорожка %d: search %r p%d ок (%d байт)",
+                             self.idx, query[:40], page, len(body))
+                    return 200, body
+                self.healthy = False
+                log.warning("дорожка %d: u-search status=%s на %r p%d — нездорова",
+                            self.idx, status, query[:40], page)
+                return status, body
+            finally:
+                try:
+                    self._page.remove_listener("response", on_resp)
+                except Exception:  # noqa: BLE001
+                    pass
 
     def due_keepalive(self, now: float) -> bool:
         return self.healthy and WARM_KEEPALIVE_S > 0 and (now - self._last_warm) >= WARM_KEEPALIVE_S

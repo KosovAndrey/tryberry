@@ -34,18 +34,26 @@ plain-HTTP). Прокси-подход отброшен (и прокси в пр
 **Сайдкар `wb-search-miner/`** (по образцу `ozon-miner`, движок patchright
 Chromium в Xvfb — тот же, что уже проходит wbaas в token-miner):
 - держит прогретые дорожки: навигация на страницу поиска нейтрального запроса
-  (проходит wbaas-стену) → healthy, когда in-page fetch к u-search даёт 200;
-- `GET /search?query=&sort=&page=` → in-page fetch к тому же u-search из
-  доверенного контекста, отдаёт **сырой JSON** формы `wbSearchResponse`, зеркаля
-  статус (403 при стойкой стене);
+  (проходит wbaas-стену) → healthy, когда САМА страница получает 200 на своём
+  u-search XHR;
+- `GET /search?query=&sort=&page=` → навигирует браузер на страницу запроса и
+  **перехватывает нативный ответ u-search фронта** (ручной in-page fetch к
+  u-search wbaas отвергает 403 — фронт кладёт что-то своё), отдаёт **сырой JSON**
+  формы `wbSearchResponse`, зеркаля статус;
 - `/healthz`, `/metrics`; maintenance-цикл: перепрогрев нездоровых с backoff,
   keepalive живых. Прокси не нужен.
 
 **Go `WildberriesSearchScraper`** (`WB_SEARCH_BROWSER_URL`):
 - **direct-with-token first** (холодные запросы дёшевы, идут напрямую);
 - на 403 direct → фолбэк в сайдкар (`fetchViaBrowser`), с **залипанием**
-  `preferBrowser` на остальные страницы запроса (не тратим по 403 на страницу);
+  `preferBrowser`; браузер-страницы ограничены `WB_SEARCH_BROWSER_MAX_PAGES`
+  (дефолт 1 — навигация дорогая, топ-100 для горячих достаточно);
 - парсинг общий (сайдкар отдаёт ту же форму JSON).
+
+**Важно (ручной fetch не работает):** in-page `fetch()` к u-search в браузере
+wbaas отвергает **403**, хотя СОБСТВЕННЫЙ XHR фронта отдаёт 200 — фронт кладёт в
+запрос что-то, что ручной fetch не воспроизводит. Поэтому сайдкар навигирует и
+перехватывает нативный ответ, а не реплеит запрос.
 
 **Метрика** `pt_wb_search_fetch_total{transport,result}` (direct|browser ×
 ok|forbidden|429|other|error): видно долю 403 direct и спасает ли браузер.

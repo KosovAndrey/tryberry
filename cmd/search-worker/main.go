@@ -115,7 +115,8 @@ func run(log *slog.Logger) error {
 	)
 	// 403-фолбэк WB-поиска в браузер-сайдкар wb-search-miner: wbaas режет горячие
 	// запросы direct (различие в транспорте, не в токене). Пусто → фолбэка нет.
-	wbSearch.SetBrowserSidecar(getEnv("WB_SEARCH_BROWSER_URL", ""))
+	// Браузер-страницы дороги (навигация) → по умолчанию 1 (топ-100).
+	wbSearch.SetBrowserSidecar(getEnv("WB_SEARCH_BROWSER_URL", ""), getEnvInt("WB_SEARCH_BROWSER_MAX_PAGES", 1))
 	// WB-витрина продавца (/seller/{id}): открытый каталог-API, без токена/прокси.
 	// Тот же товарный базовый скрейпер, что у поиска. SELLER_MAX_PAGES = CAP×100.
 	wbSeller := scraper.NewWildberriesSellerScraper(
