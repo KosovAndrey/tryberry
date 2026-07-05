@@ -55,8 +55,17 @@
 ## Запуск (прод)
 
 ```bash
-# 0) Смержить ветку, накатить миграцию 025 (goose прогонит деплой), задеплоить
-#    notifier с SYNTH_REDIRECT_* в .env:
+# 0) Смержить ветку, накатить миграцию 025 ДО деплоя (новый notifier читает
+#    колонку is_synthetic). PG-порт после хардинга наружу не торчит, а образ
+#    goose с ghcr не тянется (denied) — простые миграции катим руками psql
+#    от владельца базы (user, не tryberry_app: нужен ALTER TABLE) + строка
+#    в goose_db_version, чтобы учёт версий не разъехался:
+docker compose exec postgres psql -U user -d tryberrybot \
+  -c "ALTER TABLE users ADD COLUMN IF NOT EXISTS is_synthetic BOOLEAN NOT NULL DEFAULT FALSE;" \
+  -c "CREATE INDEX IF NOT EXISTS idx_users_synthetic ON users (id) WHERE is_synthetic;" \
+  -c "INSERT INTO goose_db_version (version_id, is_applied) VALUES (25, true);"
+
+#    Затем деплой notifier с SYNTH_REDIRECT_* в .env:
 #    SYNTH_REDIRECT_TG_IDS=<tg_id_1>,<tg_id_2>
 #    SYNTH_REDIRECT_VK_IDS=<vk_id_1>,<vk_id_2>
 #    SYNTH_REDIRECT_MAX_IDS=<max_id_1>
@@ -67,22 +76,31 @@ docker build --build-arg SERVICE=seed-loadtest -t tryberry-seed .
 
 # 2) Собрать товары (WB+YM+Ali direct; Ozon добавится, если передать OZON_BROWSER_URL).
 #    Сеть — как у остальных сервисов (проверить: docker network ls | grep tryberry).
+#    --user: образ работает от юзера app, иначе permission denied на ./loadtest.
+#    REDIS_URL: в .env только REDIS_PASSWORD (URL собирает compose) — без него
+#    NOAUTH и пустой пул WB-токенов, весь WB выпадет из сбора.
 mkdir -p loadtest
 docker run --rm --network tryberrybot_default --env-file .env \
+  --user "$(id -u):$(id -g)" \
+  -e REDIS_URL="redis://:$(grep '^REDIS_PASSWORD=' .env | cut -d= -f2-)@redis:6379" \
   -e OZON_BROWSER_URL=http://ozon-miner:8095 \
   -v "$PWD/loadtest:/data" tryberry-seed \
   collect -out /data/products.jsonl
 # ~45 запросов × 4 МП, резюмируемо (повторный запуск докачивает пропущенное)
 
-# 3) Засеять (сначала dry-run без -yes — покажет объёмы)
+# 3) Засеять (сначала dry-run без -yes — покажет объёмы; на первый прогон
+#    рекомендуется -users 50, убедиться в доставке, cleanup, потом 1000)
 docker run --rm --network tryberrybot_default --env-file .env \
+  --user "$(id -u):$(id -g)" \
   -e DATABASE_URL="postgres://tryberry_app:<APP_DB_PASSWORD>@postgres:5432/tryberrybot?sslmode=disable" \
   -v "$PWD/loadtest:/data" tryberry-seed \
   seed -in /data/products.jsonl -users 1000 -yes
 ```
 
 `DATABASE_URL` в .env отсутствует (собирается в compose из APP_DB_PASSWORD) —
-для one-off контейнера передать явно, как выше.
+для one-off контейнера передать явно, как выше. Аналогично можно подставить
+из .env без ручного копирования:
+`-e DATABASE_URL="postgres://tryberry_app:$(grep '^APP_DB_PASSWORD=' .env | cut -d= -f2-)@postgres:5432/tryberrybot?sslmode=disable"`.
 
 ## Что смотреть (1–2 недели, Grafana)
 
@@ -100,7 +118,7 @@ docker run --rm --network tryberrybot_default --env-file .env \
 
 ```bash
 docker run --rm --network tryberrybot_default \
-  -e DATABASE_URL="postgres://tryberry_app:<APP_DB_PASSWORD>@postgres:5432/tryberrybot?sslmode=disable" \
+  -e DATABASE_URL="postgres://tryberry_app:$(grep '^APP_DB_PASSWORD=' .env | cut -d= -f2-)@postgres:5432/tryberrybot?sslmode=disable" \
   tryberry-seed cleanup -yes
 ```
 
