@@ -113,6 +113,11 @@ func run(log *slog.Logger) error {
 		getEnvInt("SEARCH_MAX_PAGES", 5),
 		time.Duration(getEnvInt("SEARCH_PAGE_DELAY_MS", 700))*time.Millisecond,
 	)
+	// Фолбэк на резидентный прокси при 403 (wbaas режет горячие запросы по IP с
+	// датацентр-egress; токен при этом валиден). Обычно = прокси майнера токенов.
+	if err := wbSearch.SetFallbackProxy(getEnv("WB_SEARCH_FALLBACK_PROXY_URL", "")); err != nil {
+		log.Warn("bad WB_SEARCH_FALLBACK_PROXY_URL, 403 fallback disabled", "err", err)
+	}
 	// WB-витрина продавца (/seller/{id}): открытый каталог-API, без токена/прокси.
 	// Тот же товарный базовый скрейпер, что у поиска. SELLER_MAX_PAGES = CAP×100.
 	wbSeller := scraper.NewWildberriesSellerScraper(

@@ -10,6 +10,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"gitlab.com/KosovAndrey/tryberrybot/internal/metrics"
 )
 
 const (
@@ -40,6 +42,14 @@ type WildberriesSearchScraper struct {
 	tokens    TokenProvider
 	maxPages  int
 	pageDelay time.Duration
+
+	// fallbackClient — HTTP-клиент через резидентный прокси, на который переходим
+	// при 403. Голый search direct с датацентр-RU-IP wbaas режет на ПОПУЛЯРНЫХ
+	// запросах (iphone 17 → 403, капибара → ок), хотя токен валиден: это IP-
+	// репутационная проверка, не токен. Тот же приём, что у u-card (SetUCardProxy).
+	// nil → фолбэка нет, 403 уходит наверх как ErrMarketplaceBlocked (старое
+	// поведение).
+	fallbackClient *http.Client
 }
 
 // NewWildberriesSearchScraper.
@@ -76,6 +86,24 @@ func NewWildberriesSearchScraper(base *WildberriesScraper, pool *ProxyPool, toke
 
 var _ SearchScraper = (*WildberriesSearchScraper)(nil)
 
+// SetFallbackProxy направляет 403-фолбэк WB-поиска через прокси (обычно тот же
+// резидентный, через который майнер выписывает токены). Пустой URL — фолбэка нет
+// (403 остаётся ошибкой, как раньше). См. поле fallbackClient.
+func (s *WildberriesSearchScraper) SetFallbackProxy(proxyURL string) error {
+	if strings.TrimSpace(proxyURL) == "" {
+		return nil
+	}
+	u, err := url.Parse(proxyURL)
+	if err != nil {
+		return fmt.Errorf("wb search fallback proxy url: %w", err)
+	}
+	s.fallbackClient = &http.Client{
+		Timeout:   12 * time.Second,
+		Transport: &http.Transport{Proxy: http.ProxyURL(u)},
+	}
+	return nil
+}
+
 // MatchesSearch — WB-ссылка с текстовым поиском (?search=...).
 func (s *WildberriesSearchScraper) MatchesSearch(rawURL string) bool {
 	u, err := url.Parse(rawURL)
@@ -111,12 +139,17 @@ func (s *WildberriesSearchScraper) ScrapeSearch(ctx context.Context, rawURL stri
 	out := &SearchResultSet{}
 	position := 0
 
+	// preferFallback шарится между страницами одного запроса: как только страница
+	// упёрлась в 403 direct и спаслась прокси, остальные страницы идут сразу через
+	// прокси — не тратим по одному заведомому 403 на страницу.
+	var preferFallback bool
+
 	for page := 1; page <= s.maxPages; page++ {
 		if page > 1 {
 			s.sleep(ctx, s.pageDelay)
 		}
 
-		body, err := s.fetchPage(ctx, buildSearchAPIURL(query, sortMode, page), referer)
+		body, err := s.fetchPage(ctx, buildSearchAPIURL(query, sortMode, page), referer, &preferFallback)
 		if err != nil {
 			if out.PagesRead > 0 {
 				break // частичный результат лучше, чем ошибка на всё
@@ -159,7 +192,7 @@ func (s *WildberriesSearchScraper) ScrapeSearch(ctx context.Context, rawURL stri
 
 // ── HTTP с токеном, ротацией прокси и backoff ────────────────────────────────
 
-func (s *WildberriesSearchScraper) fetchPage(ctx context.Context, apiURL, referer string) ([]byte, error) {
+func (s *WildberriesSearchScraper) fetchPage(ctx context.Context, apiURL, referer string, preferFallback *bool) ([]byte, error) {
 	maxAttempts := s.pool.Size() + 2
 	if tp, ok := s.tokens.(interface{ PoolSize() int }); ok {
 		if n := tp.PoolSize() + 2; n > maxAttempts {
@@ -197,16 +230,23 @@ func (s *WildberriesSearchScraper) fetchPage(ctx context.Context, apiURL, refere
 			ua = defaultSearchUA
 		}
 
+		// Транспорт: обычно direct (дёшево, холодные запросы проходят). Если запрос
+		// уже ловил 403 (горячий) и есть резидентный фолбэк — сразу через прокси.
 		pc := s.pool.next()
+		client, label, transport := pc.client, pc.label, "direct"
+		if preferFallback != nil && *preferFallback && s.fallbackClient != nil {
+			client, label, transport = s.fallbackClient, "fallback-proxy", "proxy"
+		}
+
 		req, err := http.NewRequestWithContext(ctx, http.MethodGet, apiURL, nil)
 		if err != nil {
 			return nil, err
 		}
 		s.setHeaders(req, referer, tok.Cookie, ua)
 
-		resp, err := pc.client.Do(req)
+		resp, err := client.Do(req)
 		if err != nil {
-			lastErr = fmt.Errorf("request via %s: %w", pc.label, err)
+			lastErr = fmt.Errorf("request via %s: %w", label, err)
 			s.sleep(ctx, delay)
 			delay = bumpDelay(delay)
 			continue
@@ -218,20 +258,39 @@ func (s *WildberriesSearchScraper) fetchPage(ctx context.Context, apiURL, refere
 		switch {
 		case resp.StatusCode == http.StatusOK && readErr == nil:
 			s.tokens.MarkGood(ctx, tok.Slot)
+			metrics.WBSearchFetch.WithLabelValues(transport, "ok").Inc()
 			return body, nil
+		case resp.StatusCode == http.StatusForbidden:
+			// wbaas режет горячий запрос по IP-репутации (не по токену): токен тот же
+			// проходит на редких запросах. На direct переключаемся на резидентный
+			// прокси и ретраим тем же токеном; если 403 и на прокси — прокси не
+			// спас (нужен браузерный сайдкар, см. docs/WB-SEARCH-STATUS.md).
+			metrics.WBSearchFetch.WithLabelValues(transport, "forbidden").Inc()
+			if transport == "direct" && s.fallbackClient != nil {
+				if preferFallback != nil {
+					*preferFallback = true
+				}
+				lastErr = fmt.Errorf("%w: 403 direct (%s) — пробую резидентный прокси", ErrMarketplaceBlocked, label)
+				continue // без backoff: сразу другой транспорт
+			}
+			lastErr = fmt.Errorf("%w: 403 via %s", ErrMarketplaceBlocked, label)
+			s.sleep(ctx, delay)
+			delay = bumpDelay(delay)
 		case resp.StatusCode == http.StatusTooManyRequests:
 			// 429 + server: wbaas — токен протух/невалиден. После 2 подряд 429 на
 			// слоте провайдер выводит его из ротации; следующая попытка (round-robin)
 			// берёт другой токен из пула.
 			s.tokens.MarkBad(ctx, tok.Slot)
-			lastErr = fmt.Errorf("%w: 429 via %s (slot %d, возможно протух токен)", ErrMarketplaceBlocked, pc.label, tok.Slot)
+			metrics.WBSearchFetch.WithLabelValues(transport, "429").Inc()
+			lastErr = fmt.Errorf("%w: 429 via %s (slot %d, возможно протух токен)", ErrMarketplaceBlocked, label, tok.Slot)
 			s.sleep(ctx, delay)
 			delay = bumpDelay(delay)
 		default:
+			metrics.WBSearchFetch.WithLabelValues(transport, "other").Inc()
 			if readErr != nil {
-				lastErr = fmt.Errorf("read body (status %d) via %s: %w", resp.StatusCode, pc.label, readErr)
+				lastErr = fmt.Errorf("read body (status %d) via %s: %w", resp.StatusCode, label, readErr)
 			} else {
-				lastErr = fmt.Errorf("status %d via %s", resp.StatusCode, pc.label)
+				lastErr = fmt.Errorf("status %d via %s", resp.StatusCode, label)
 			}
 			s.sleep(ctx, delay)
 			delay = bumpDelay(delay)

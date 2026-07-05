@@ -163,6 +163,19 @@ var (
 		[]string{"status"}, // success | empty | error
 	)
 
+	// WBSearchFetch — исходы HTTP-запросов страниц WB-поиска по транспорту и
+	// результату. transport: direct | proxy; result: ok | forbidden | 429 | other.
+	// proxy+ok = горячий запрос, спасённый фолбэком на резидентный прокси (см.
+	// wildberries_search.go). proxy+forbidden = прокси НЕ помог (нужен сайдкар).
+	WBSearchFetch = promauto.NewCounterVec(
+		prometheus.CounterOpts{
+			Namespace: namespace,
+			Name:      "wb_search_fetch_total",
+			Help:      "WB search page fetches by transport and result",
+		},
+		[]string{"transport", "result"},
+	)
+
 	// SearchNotificationsSent — отправленные батч-уведомления по поиск-подпискам,
 	// сгруппированные по типу триггера.
 	SearchNotificationsSent = promauto.NewCounterVec(

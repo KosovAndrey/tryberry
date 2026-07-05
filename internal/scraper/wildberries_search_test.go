@@ -1,11 +1,79 @@
 package scraper
 
 import (
+	"bytes"
+	"context"
 	"encoding/json"
+	"io"
+	"net/http"
 	"strings"
 	"testing"
 	"time"
 )
+
+// rtFunc — RoundTripper из функции (канонические ответы без сети).
+type rtFunc func(*http.Request) *http.Response
+
+func (f rtFunc) RoundTrip(r *http.Request) (*http.Response, error) { return f(r), nil }
+
+func stubResp(status int, body string) *http.Response {
+	return &http.Response{
+		StatusCode: status,
+		Body:       io.NopCloser(bytes.NewBufferString(body)),
+		Header:     make(http.Header),
+	}
+}
+
+// TestScrapeSearchFallbackOn403 — direct отдаёт 403 (горячий запрос), фолбэк-прокси
+// отдаёт 200: выдача должна собраться через прокси, direct не должен ронять запрос.
+func TestScrapeSearchFallbackOn403(t *testing.T) {
+	var directHits, proxyHits int
+	directClient := &http.Client{Transport: rtFunc(func(*http.Request) *http.Response {
+		directHits++
+		return stubResp(http.StatusForbidden, "blocked")
+	})}
+	proxyCl := &http.Client{Transport: rtFunc(func(*http.Request) *http.Response {
+		proxyHits++
+		return stubResp(http.StatusOK, sampleSearchJSON)
+	})}
+
+	s := &WildberriesSearchScraper{
+		WildberriesScraper: NewWildberriesScraper(5),
+		pool:               &ProxyPool{clients: []proxyClient{{label: "direct", client: directClient}}},
+		tokens:             StaticTokenProvider{T: SearchToken{Cookie: "x_wbaas_token=abc", Slot: -1}},
+		maxPages:           1,
+		fallbackClient:     proxyCl,
+	}
+
+	set, err := s.ScrapeSearch(context.Background(),
+		"https://www.wildberries.ru/catalog/0/search.aspx?search=iphone")
+	if err != nil {
+		t.Fatalf("ScrapeSearch с рабочим фолбэком вернул ошибку: %v", err)
+	}
+	if len(set.Items) != 2 {
+		t.Fatalf("собрано %d товаров, want 2 (через прокси-фолбэк)", len(set.Items))
+	}
+	if directHits == 0 || proxyHits == 0 {
+		t.Errorf("ожидались обращения и к direct (403), и к прокси (200): direct=%d proxy=%d", directHits, proxyHits)
+	}
+}
+
+// TestScrapeSearchNoFallbackReturnsBlocked — без фолбэка 403 остаётся ошибкой.
+func TestScrapeSearchNoFallbackReturnsBlocked(t *testing.T) {
+	directClient := &http.Client{Transport: rtFunc(func(*http.Request) *http.Response {
+		return stubResp(http.StatusForbidden, "blocked")
+	})}
+	s := &WildberriesSearchScraper{
+		WildberriesScraper: NewWildberriesScraper(5),
+		pool:               &ProxyPool{clients: []proxyClient{{label: "direct", client: directClient}}},
+		tokens:             StaticTokenProvider{T: SearchToken{Cookie: "x_wbaas_token=abc", Slot: -1}},
+		maxPages:           1,
+	}
+	if _, err := s.ScrapeSearch(context.Background(),
+		"https://www.wildberries.ru/catalog/0/search.aspx?search=iphone"); err == nil {
+		t.Fatal("ожидалась ошибка (403 без фолбэка), получили nil")
+	}
+}
 
 func newTestSearchScraper() *WildberriesSearchScraper {
 	return NewWildberriesSearchScraper(nil, nil, nil, 5, 0)

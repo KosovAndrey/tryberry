@@ -331,6 +331,10 @@ services:
       SEARCH_TASKS_TOPIC: "search-tasks"
       WB_TOKEN_POOL_PREFIX: "wb:search:"
       WB_TOKEN_POOL_SIZE: "5"
+      # Фолбэк WB-поиска на 403: wbaas режет ГОРЯЧИЕ запросы по IP-репутации
+      # (датацентр-egress), хотя токен валиден. Ретрай тем же токеном через
+      # резидентный прокси — обычно тот же, через который майнятся токены.
+      WB_SEARCH_FALLBACK_PROXY_URL: "${WB_SEARCH_FALLBACK_PROXY_URL:-${WB_TOKEN_PROXY_URL:-}}"
       SEARCH_SCRAPE_INTERVAL_MINUTES: "20"
       SEARCH_MAX_PAGES: "5"
       SEARCH_PAGE_DELAY_MS: "700"
@@ -379,6 +383,9 @@ services:
       SEARCH_TASKS_TOPIC: "reseller-tasks"
       WB_TOKEN_POOL_PREFIX: "wb:reseller:"
       WB_TOKEN_POOL_SIZE: "5"
+      # 403-фолбэк перекуп-дорожки через свой резидентный прокси (тот же, что
+      # майнит reseller-токены). См. WB_SEARCH_FALLBACK_PROXY_URL у search-worker.
+      WB_SEARCH_FALLBACK_PROXY_URL: "${RESELLER_SEARCH_FALLBACK_PROXY_URL:-${RESELLER_TOKEN_PROXY_URL:-}}"
       SEARCH_SCRAPE_INTERVAL_MINUTES: "20"
       # Reseller — премиум-тариф: даём WB-поиску покрытие 3 стр (300) против 2 у
       # бесплатной дорожки. WB-каталог дёшев, поэтому +1 страница ничего не стоит.
