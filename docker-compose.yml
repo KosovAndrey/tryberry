@@ -263,7 +263,10 @@ services:
       dockerfile: Dockerfile
       args:
         SERVICE: scraper
-    container_name: pt_scraper
+    # Без container_name — чтобы масштабировать в consumer-group (scrape-tasks =
+    # 10 партиций). В prod ports сбрасываются оверлеем (!reset []), коллизии нет.
+    # Реплики безопасны: consumer-group делит партиции, а partition.Manager
+    # (партиции price_history) идемпотентен под advisory-lock.
     ports:
       - "127.0.0.1:8090:8090"
     environment:
