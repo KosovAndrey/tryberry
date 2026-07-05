@@ -76,6 +76,19 @@ $COMPOSE exec -T wb-search-miner sh -c 'wget -qO- "localhost:8081/search?query=i
 В Grafana/Prometheus: `pt_wb_search_fetch_total{transport="browser",result="ok"}`
 растёт на горячих; `wb_search_miner_healthy_lanes == 1`.
 
+## Грабли прод-запуска (2026-07-05)
+
+- **Дорожка не проходила wbaas-стену** (`create-token 498`, «Подозрительная
+  активность»), хотя token-miner тем же движком минтит за 9с. Причина —
+  **дрейф версий patchright**: unpinned в обоих, старый образ token-miner =
+  `1.60.1`/chromium-1223 (проходит), свежесобранный сайдкар = `1.61.1`/
+  chromium-1228 (палится). Фикс — запинить оба на `patchright==1.60.1`. Диагноз
+  дал форс-майн на выброс-префиксе (`WB_TOKEN_POOL_PREFIX=wb:probe: MINE_ONCE=1`)
+  + дамп страницы на провале прогрева.
+- Прогрев определяем как в token-miner: слушаем ответы, ждём 200 на СОБСТВЕННОМ
+  u-search XHR страницы (не свой fetch до решения челленджа). Нудж — mouse.move
+  (steps) + wheel; НЕ блокировать шрифты (меняет font-fingerprint).
+
 ## Открытые хвосты
 
 - Одна дорожка (`WB_SEARCH_POOL_SIZE=1`) — если горячих запросов много, поднять
