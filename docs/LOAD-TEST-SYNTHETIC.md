@@ -83,7 +83,7 @@ mkdir -p loadtest
 docker run --rm --network tryberrybot_default --env-file .env \
   --user "$(id -u):$(id -g)" \
   -e REDIS_URL="redis://:$(grep '^REDIS_PASSWORD=' .env | cut -d= -f2-)@redis:6379" \
-  -e OZON_BROWSER_URL=http://ozon-miner:8095 \
+  -e OZON_BROWSER_URL=http://ozon-miner:8080 \
   -v "$PWD/loadtest:/data" tryberry-seed \
   collect -out /data/products.jsonl
 # ~45 запросов × 4 МП, резюмируемо (повторный запуск докачивает пропущенное)
