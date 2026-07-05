@@ -163,10 +163,11 @@ var (
 		[]string{"status"}, // success | empty | error
 	)
 
-	// WBSearchFetch — исходы HTTP-запросов страниц WB-поиска по транспорту и
-	// результату. transport: direct | proxy; result: ok | forbidden | 429 | other.
-	// proxy+ok = горячий запрос, спасённый фолбэком на резидентный прокси (см.
-	// wildberries_search.go). proxy+forbidden = прокси НЕ помог (нужен сайдкар).
+	// WBSearchFetch — исходы запросов страниц WB-поиска по транспорту и результату.
+	// transport: direct | browser; result: ok | forbidden | 429 | other | error.
+	// browser+ok = горячий запрос, спасённый браузер-сайдкаром wb-search-miner
+	// (см. wildberries_search.go). browser+forbidden = челлендж не пройден и в
+	// браузере. direct+forbidden = обычный 403 на горячем (уходит в сайдкар).
 	WBSearchFetch = promauto.NewCounterVec(
 		prometheus.CounterOpts{
 			Namespace: namespace,

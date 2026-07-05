@@ -1,7 +1,7 @@
-# WB-поиск: wbaas режет горячие запросы 403 (диагноз + план)
+# WB-поиск: wbaas режет горячие запросы 403 (диагноз + фикс)
 
-Статус: **диагностика + дешёвый рычаг зашит; настоящий фикс (браузерный
-сайдкар) ждёт одну прод-пробу.** Ветка `fix/wb-search-403-proxy-fallback`.
+Статус: **фикс реализован — браузерный сайдкар `wb-search-miner`.** Ветка
+`fix/wb-search-403-proxy-fallback`. Ждёт деплой + прод-проверку.
 
 ## Симптом
 
@@ -11,79 +11,76 @@
 
 ## Диагноз: причина — ТРАНСПОРТ, не IP
 
-Ключевые факты (проверены в этой сессии):
+Проверено в сессии 2026-07-05:
 
-1. **В проде НЕ задан ни один прокси-env** (`WB_TOKEN_PROXY_URL`,
-   `RESELLER_TOKEN_PROXY_URL`, `OZON_PROXY_URL`, `WB_UCARD_PROXY_URL`,
-   `SEARCH_PROXY_URLS` — все пустые). То есть токен-майнер минтит токены
-   **direct с датацентр-IP** и в браузере (patchright Chromium) **проходит
-   wbaas и ловит 200 на `/u-search/`**.
-2. Go-воркер (`search-worker`) ходит **с того же хоста = того же датацентр-IP**
-   тем же cookie-токеном и получает **403 на горячих**, **200 на холодных**.
+1. В проде **не задан ни один прокси-env** — token-miner минтит токены **direct
+   с датацентр-IP** и в браузере (patchright Chromium) **проходит wbaas, ловит
+   200 на `/u-search/`**.
+2. Go-воркер ходит **с того же хоста = того же датацентр-IP** тем же cookie и
+   получает **403 на горячих**, **200 на холодных**.
 
 IP держится константой (майнер и воркер на одном IP). Браузер проходит,
 `http.Client` — нет. Значит различие — **транспорт**: у браузера есть то, чего
 нет у голого HTTP (TLS/JA3-фингерпринт и/или JS-вычисляемый динамический
-заголовок/челлендж, который wbaas строже проверяет именно на коммерчески горячих
+заголовок/челлендж, который wbaas строже проверяет на коммерчески горячих
 запросах; на редких проверка мягче и cookie достаточно).
 
-Вывод: **резидентный прокси сам по себе, скорее всего, НЕ починит** — он меняет
-IP, но plain-HTTP остаётся plain-HTTP (тот же JA3). Настоящий фикс — увести
-сам запрос в браузер, как сделано для Ozon (FAB) через `ozon-miner`.
+Вывод: **резидентный прокси не решает** (меняет IP, но plain-HTTP остаётся
+plain-HTTP). Прокси-подход отброшен (и прокси в проде мы вообще отменили).
+Настоящий фикс — увести горячий запрос в браузер, как у Ozon с FAB.
 
-> Прецедент u-card (`SetUCardProxy`: датацентр-RU-IP 403 → зарубежный прокси) —
-> это про IP-репутацию u-card, ДРУГОЙ механизм. Здесь IP ни при чём (см. выше).
+## Фикс: браузер-как-транспорт (реализовано)
 
-## Что уже зашито в этой ветке (дешёвый рычаг + наблюдаемость)
+**Сайдкар `wb-search-miner/`** (по образцу `ozon-miner`, движок patchright
+Chromium в Xvfb — тот же, что уже проходит wbaas в token-miner):
+- держит прогретые дорожки: навигация на страницу поиска нейтрального запроса
+  (проходит wbaas-стену) → healthy, когда in-page fetch к u-search даёт 200;
+- `GET /search?query=&sort=&page=` → in-page fetch к тому же u-search из
+  доверенного контекста, отдаёт **сырой JSON** формы `wbSearchResponse`, зеркаля
+  статус (403 при стойкой стене);
+- `/healthz`, `/metrics`; maintenance-цикл: перепрогрев нездоровых с backoff,
+  keepalive живых. Прокси не нужен.
 
-1. **Прокси-фолбэк WB-поиска на 403** (`SetFallbackProxy` /
-   `WB_SEARCH_FALLBACK_PROXY_URL`). Логика: direct-first (холодные проходят
-   дёшево); на 403 — ретрай тем же токеном через прокси; флаг `preferFallback`
-   шарится между страницами (не тратим по 403 на страницу).
-   - По дефолту `WB_SEARCH_FALLBACK_PROXY_URL=${WB_TOKEN_PROXY_URL:-}` → в
-     текущем проде **пусто = no-op** (поведение не меняется). Включается, только
-     если задать резидентный прокси.
-   - Оставлен как опциональный рычаг: если проба покажет, что дело всё же в IP
-     (маловероятно), он уже готов.
-2. **Метрика `pt_wb_search_fetch_total{transport,result}`** (direct|proxy ×
-   ok|forbidden|429|other). Даёт в Grafana точную картину: доля 403 на direct,
-   спасло ли прокси. Полезна независимо от выбора фикса.
+**Go `WildberriesSearchScraper`** (`WB_SEARCH_BROWSER_URL`):
+- **direct-with-token first** (холодные запросы дёшевы, идут напрямую);
+- на 403 direct → фолбэк в сайдкар (`fetchViaBrowser`), с **залипанием**
+  `preferBrowser` на остальные страницы запроса (не тратим по 403 на страницу);
+- парсинг общий (сайдкар отдаёт ту же форму JSON).
 
-Тесты: `TestScrapeSearchFallbackOn403`, `TestScrapeSearchNoFallbackReturnsBlocked`.
+**Метрика** `pt_wb_search_fetch_total{transport,result}` (direct|browser ×
+ok|forbidden|429|other|error): видно долю 403 direct и спасает ли браузер.
 
-## Проба, которая решает стратегию (запустить на проде)
+Тесты: `TestScrapeSearchFallbackToBrowser`, `TestScrapeSearchNoSidecarReturnsBlocked`.
 
-Проверяем: **отдаёт ли браузер 200 на u-search для ГОРЯЧЕГО запроса с датацентр-IP**
-(без прокси). Если да → браузерный сайдкар чинит без прокси. Используем уже
-существующий майнер, только меняем запрос и режим one-shot:
+## Деплой
+
+Собрать сайдкар + перекатить воркеры (compose уже прописан, env с дефолтами):
 
 ```bash
-# на проде, из каталога проекта
-docker compose -f docker-compose.yml -f docker-compose.prod.yml run --rm \
-  -e MINE_ONCE=1 -e WB_SEARCH_QUERY="iphone 17" -e MINER_DEBUG_DUMP=true \
-  token-miner 2>&1 | grep -iE "u-search|попытк|прогрет|стена|200"
+COMPOSE="docker compose -f docker-compose.yml -f docker-compose.prod.yml"
+$COMPOSE build wb-search-miner search-worker reseller-worker
+$COMPOSE up -d wb-search-miner
+$COMPOSE up -d search-worker reseller-worker
+# перезагрузить prometheus-конфиг (добавлен скрейп wb-search-miner:8081)
+$COMPOSE restart prometheus
 ```
 
-Смотрим в логах статусы `/u-search/`:
-- **200 есть** → браузер с датацентр-IP проходит горячий запрос ⇒ строим сайдкар
-  (без прокси). Прокси-рычаг не нужен.
-- **только 403 / «стена wbaas»** → wbaas челленджит и браузер на горячих ⇒
-  нужен и браузер, И чистый/резидентный IP (вернуть прокси майнеру). Тяжелее.
+Проверка:
+```bash
+$COMPOSE logs -f --tail=80 wb-search-miner   # ждём «дорожка 0 прогрета: u-search 200»
+$COMPOSE exec -T wb-search-miner sh -c 'wget -qO- localhost:8081/healthz'
+# горячий запрос через сайдкар:
+$COMPOSE exec -T wb-search-miner sh -c 'wget -qO- "localhost:8081/search?query=iphone%2017&page=1" | head -c 300'
+```
 
-## План настоящего фикса (после подтверждения пробой)
+В Grafana/Prometheus: `pt_wb_search_fetch_total{transport="browser",result="ok"}`
+растёт на горячих; `wb_search_miner_healthy_lanes == 1`.
 
-Браузерная дорожка как у Ozon (`ozon-miner/server.py` — точный шаблон):
+## Открытые хвосты
 
-1. Долгоживущий сайдкар с прогретой WB-дорожкой (patchright Chromium — тот же
-   движок, что уже проходит wbaas в майнере), endpoint
-   `GET /search?query=&page=&sort=` → in-page fetch к тому же
-   `/__internal/u-search/...` из доверенного контекста (метод «друга»), отдаёт
-   сырой JSON, зеркаля статус. `/healthz`, `/metrics` — как у ozon-miner.
-2. Go `WildberriesSearchScraper`: direct-with-token first (холодные — дёшево);
-   на 403 → фолбэк в сайдкар (`WB_SEARCH_BROWSER_URL`) вместо/помимо прокси.
-3. Compose: сервис `wb-search-miner` (+ reseller-вариант при необходимости),
-   проброс `WB_SEARCH_BROWSER_URL` в search-worker/reseller-worker.
-
-Открытый вопрос дешевизны: держать браузер горячим только под горячие запросы
-(direct покрывает основную массу холодных бесплатно) — так нагрузка на дорожку
-минимальна, как и задумано у Ozon.
+- Одна дорожка (`WB_SEARCH_POOL_SIZE=1`) — если горячих запросов много, поднять
+  пул (+ опц. `WB_LANE_<i>_PROXY`), как у ozon-miner.
+- Алерт на `wb_search_miner_healthy_lanes == 0` (по образцу ozon-miner в
+  `monitoring/prometheus/rules/alerts.yml`) — добавить после подтверждения на проде.
+- Держать браузер горячим только под горячие запросы: direct покрывает холодную
+  массу бесплатно, нагрузка на дорожку минимальна (как задумано у Ozon).

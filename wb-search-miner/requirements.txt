@@ -1,0 +1,6 @@
+# Patchright — стелс-форк Playwright (только Chromium); тот же движок, что
+# проходит wbaas в token-miner. Браузер ставится в Dockerfile (`patchright
+# install chromium`), ревизия совпадает с пакетом — версию можно не пинить.
+# aiohttp — async HTTP-сервер сайдкара (GET /search, /healthz, /metrics).
+patchright
+aiohttp>=3,<4

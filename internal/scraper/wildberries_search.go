@@ -43,13 +43,14 @@ type WildberriesSearchScraper struct {
 	maxPages  int
 	pageDelay time.Duration
 
-	// fallbackClient — HTTP-клиент через резидентный прокси, на который переходим
-	// при 403. Голый search direct с датацентр-RU-IP wbaas режет на ПОПУЛЯРНЫХ
-	// запросах (iphone 17 → 403, капибара → ок), хотя токен валиден: это IP-
-	// репутационная проверка, не токен. Тот же приём, что у u-card (SetUCardProxy).
-	// nil → фолбэка нет, 403 уходит наверх как ErrMarketplaceBlocked (старое
-	// поведение).
-	fallbackClient *http.Client
+	// browserURL — база сайдкара wb-search-miner (браузер-как-транспорт). Голый
+	// direct с датацентр-IP wbaas режет 403 на ПОПУЛЯРНЫХ запросах (iphone 17 →
+	// 403, капибара → ок), хотя токен валиден: различие в ТРАНСПОРТЕ (браузер
+	// проходит челлендж/JA3, http.Client — нет), не в IP. На 403 уводим запрос в
+	// прогретый браузер сайдкара (in-page fetch к тому же u-search), как сделано у
+	// Ozon (FAB). Пусто → фолбэка нет, 403 уходит наверх как ErrMarketplaceBlocked.
+	browserURL    string
+	browserClient *http.Client
 }
 
 // NewWildberriesSearchScraper.
@@ -86,22 +87,18 @@ func NewWildberriesSearchScraper(base *WildberriesScraper, pool *ProxyPool, toke
 
 var _ SearchScraper = (*WildberriesSearchScraper)(nil)
 
-// SetFallbackProxy направляет 403-фолбэк WB-поиска через прокси (обычно тот же
-// резидентный, через который майнер выписывает токены). Пустой URL — фолбэка нет
-// (403 остаётся ошибкой, как раньше). См. поле fallbackClient.
-func (s *WildberriesSearchScraper) SetFallbackProxy(proxyURL string) error {
-	if strings.TrimSpace(proxyURL) == "" {
-		return nil
+// SetBrowserSidecar подключает сайдкар wb-search-miner как 403-фолбэк: на 403
+// direct запрос уходит в прогретый браузер (GET /search?query=&sort=&page=).
+// Пустой URL — фолбэка нет (403 остаётся ошибкой). См. поле browserURL.
+func (s *WildberriesSearchScraper) SetBrowserSidecar(baseURL string) {
+	baseURL = strings.TrimRight(strings.TrimSpace(baseURL), "/")
+	if baseURL == "" {
+		return
 	}
-	u, err := url.Parse(proxyURL)
-	if err != nil {
-		return fmt.Errorf("wb search fallback proxy url: %w", err)
-	}
-	s.fallbackClient = &http.Client{
-		Timeout:   12 * time.Second,
-		Transport: &http.Transport{Proxy: http.ProxyURL(u)},
-	}
-	return nil
+	s.browserURL = baseURL
+	// Сайдкар делает in-page fetch в браузере (навигация + челлендж) — щедрый
+	// таймаут, тяжёлая дорожка отвечает не мгновенно.
+	s.browserClient = &http.Client{Timeout: 45 * time.Second}
 }
 
 // MatchesSearch — WB-ссылка с текстовым поиском (?search=...).
@@ -139,17 +136,30 @@ func (s *WildberriesSearchScraper) ScrapeSearch(ctx context.Context, rawURL stri
 	out := &SearchResultSet{}
 	position := 0
 
-	// preferFallback шарится между страницами одного запроса: как только страница
-	// упёрлась в 403 direct и спаслась прокси, остальные страницы идут сразу через
-	// прокси — не тратим по одному заведомому 403 на страницу.
-	var preferFallback bool
+	// preferBrowser залипает на весь запрос: как только страница упёрлась в 403
+	// direct и её спас браузер-сайдкар, остальные страницы идут сразу в сайдкар —
+	// не тратим по заведомому 403 на страницу.
+	var preferBrowser bool
 
 	for page := 1; page <= s.maxPages; page++ {
 		if page > 1 {
 			s.sleep(ctx, s.pageDelay)
 		}
 
-		body, err := s.fetchPage(ctx, buildSearchAPIURL(query, sortMode, page), referer, &preferFallback)
+		var body []byte
+		if preferBrowser {
+			body, err = s.fetchViaBrowser(ctx, query, sortMode, page)
+		} else {
+			body, err = s.fetchPage(ctx, buildSearchAPIURL(query, sortMode, page), referer)
+			// direct заблокирован (обычно 403 на горячем) → уводим в браузер и
+			// залипаем на нём до конца запроса.
+			if err != nil && s.browserURL != "" {
+				if bbody, berr := s.fetchViaBrowser(ctx, query, sortMode, page); berr == nil {
+					body, err = bbody, nil
+					preferBrowser = true
+				}
+			}
+		}
 		if err != nil {
 			if out.PagesRead > 0 {
 				break // частичный результат лучше, чем ошибка на всё
@@ -192,7 +202,7 @@ func (s *WildberriesSearchScraper) ScrapeSearch(ctx context.Context, rawURL stri
 
 // ── HTTP с токеном, ротацией прокси и backoff ────────────────────────────────
 
-func (s *WildberriesSearchScraper) fetchPage(ctx context.Context, apiURL, referer string, preferFallback *bool) ([]byte, error) {
+func (s *WildberriesSearchScraper) fetchPage(ctx context.Context, apiURL, referer string) ([]byte, error) {
 	maxAttempts := s.pool.Size() + 2
 	if tp, ok := s.tokens.(interface{ PoolSize() int }); ok {
 		if n := tp.PoolSize() + 2; n > maxAttempts {
@@ -230,23 +240,16 @@ func (s *WildberriesSearchScraper) fetchPage(ctx context.Context, apiURL, refere
 			ua = defaultSearchUA
 		}
 
-		// Транспорт: обычно direct (дёшево, холодные запросы проходят). Если запрос
-		// уже ловил 403 (горячий) и есть резидентный фолбэк — сразу через прокси.
 		pc := s.pool.next()
-		client, label, transport := pc.client, pc.label, "direct"
-		if preferFallback != nil && *preferFallback && s.fallbackClient != nil {
-			client, label, transport = s.fallbackClient, "fallback-proxy", "proxy"
-		}
-
 		req, err := http.NewRequestWithContext(ctx, http.MethodGet, apiURL, nil)
 		if err != nil {
 			return nil, err
 		}
 		s.setHeaders(req, referer, tok.Cookie, ua)
 
-		resp, err := client.Do(req)
+		resp, err := pc.client.Do(req)
 		if err != nil {
-			lastErr = fmt.Errorf("request via %s: %w", label, err)
+			lastErr = fmt.Errorf("request via %s: %w", pc.label, err)
 			s.sleep(ctx, delay)
 			delay = bumpDelay(delay)
 			continue
@@ -258,39 +261,30 @@ func (s *WildberriesSearchScraper) fetchPage(ctx context.Context, apiURL, refere
 		switch {
 		case resp.StatusCode == http.StatusOK && readErr == nil:
 			s.tokens.MarkGood(ctx, tok.Slot)
-			metrics.WBSearchFetch.WithLabelValues(transport, "ok").Inc()
+			metrics.WBSearchFetch.WithLabelValues("direct", "ok").Inc()
 			return body, nil
 		case resp.StatusCode == http.StatusForbidden:
-			// wbaas режет горячий запрос по IP-репутации (не по токену): токен тот же
-			// проходит на редких запросах. На direct переключаемся на резидентный
-			// прокси и ретраим тем же токеном; если 403 и на прокси — прокси не
-			// спас (нужен браузерный сайдкар, см. docs/WB-SEARCH-STATUS.md).
-			metrics.WBSearchFetch.WithLabelValues(transport, "forbidden").Inc()
-			if transport == "direct" && s.fallbackClient != nil {
-				if preferFallback != nil {
-					*preferFallback = true
-				}
-				lastErr = fmt.Errorf("%w: 403 direct (%s) — пробую резидентный прокси", ErrMarketplaceBlocked, label)
-				continue // без backoff: сразу другой транспорт
-			}
-			lastErr = fmt.Errorf("%w: 403 via %s", ErrMarketplaceBlocked, label)
-			s.sleep(ctx, delay)
-			delay = bumpDelay(delay)
+			// wbaas режет горячий запрос: различие в транспорте (браузер vs
+			// http.Client), не в токене — тот же токен проходит на редких запросах.
+			// Ретраить direct бесполезно; выходим быстро, ScrapeSearch уводит в
+			// браузер-сайдкар (см. docs/WB-SEARCH-STATUS.md).
+			metrics.WBSearchFetch.WithLabelValues("direct", "forbidden").Inc()
+			return nil, fmt.Errorf("%w: 403 via %s", ErrMarketplaceBlocked, pc.label)
 		case resp.StatusCode == http.StatusTooManyRequests:
 			// 429 + server: wbaas — токен протух/невалиден. После 2 подряд 429 на
 			// слоте провайдер выводит его из ротации; следующая попытка (round-robin)
 			// берёт другой токен из пула.
 			s.tokens.MarkBad(ctx, tok.Slot)
-			metrics.WBSearchFetch.WithLabelValues(transport, "429").Inc()
-			lastErr = fmt.Errorf("%w: 429 via %s (slot %d, возможно протух токен)", ErrMarketplaceBlocked, label, tok.Slot)
+			metrics.WBSearchFetch.WithLabelValues("direct", "429").Inc()
+			lastErr = fmt.Errorf("%w: 429 via %s (slot %d, возможно протух токен)", ErrMarketplaceBlocked, pc.label, tok.Slot)
 			s.sleep(ctx, delay)
 			delay = bumpDelay(delay)
 		default:
-			metrics.WBSearchFetch.WithLabelValues(transport, "other").Inc()
+			metrics.WBSearchFetch.WithLabelValues("direct", "other").Inc()
 			if readErr != nil {
-				lastErr = fmt.Errorf("read body (status %d) via %s: %w", resp.StatusCode, label, readErr)
+				lastErr = fmt.Errorf("read body (status %d) via %s: %w", resp.StatusCode, pc.label, readErr)
 			} else {
-				lastErr = fmt.Errorf("status %d via %s", resp.StatusCode, label)
+				lastErr = fmt.Errorf("status %d via %s", resp.StatusCode, pc.label)
 			}
 			s.sleep(ctx, delay)
 			delay = bumpDelay(delay)
@@ -301,6 +295,47 @@ func (s *WildberriesSearchScraper) fetchPage(ctx context.Context, apiURL, refere
 		lastErr = ErrMarketplaceBlocked
 	}
 	return nil, lastErr
+}
+
+// fetchViaBrowser — 403-фолбэк: одна страница выдачи из прогретого браузера
+// сайдкара wb-search-miner (GET /search?query=&sort=&page=). Сайдкар делает
+// in-page fetch к тому же u-search из доверенного контекста и отдаёт СЫРОЙ JSON
+// той же формы (wbSearchResponse), зеркаля upstream-статус (403 при стойком
+// челлендже). Токен тут не нужен — cookie живёт в самом браузере.
+func (s *WildberriesSearchScraper) fetchViaBrowser(ctx context.Context, query, sortMode string, page int) ([]byte, error) {
+	if s.browserURL == "" || s.browserClient == nil {
+		return nil, fmt.Errorf("%w: browser sidecar not configured", ErrMarketplaceBlocked)
+	}
+	q := url.Values{}
+	q.Set("query", query)
+	q.Set("sort", sortMode)
+	q.Set("page", strconv.Itoa(page))
+	api := s.browserURL + "/search?" + q.Encode()
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, api, nil)
+	if err != nil {
+		return nil, err
+	}
+	resp, err := s.browserClient.Do(req)
+	if err != nil {
+		metrics.WBSearchFetch.WithLabelValues("browser", "error").Inc()
+		return nil, fmt.Errorf("%w: wb search sidecar: %v", ErrMarketplaceBlocked, err)
+	}
+	defer resp.Body.Close()
+	body, _ := io.ReadAll(io.LimitReader(resp.Body, maxSearchBodyBytes))
+
+	switch resp.StatusCode {
+	case http.StatusOK:
+		metrics.WBSearchFetch.WithLabelValues("browser", "ok").Inc()
+		return body, nil
+	case http.StatusForbidden:
+		metrics.WBSearchFetch.WithLabelValues("browser", "forbidden").Inc()
+		return nil, fmt.Errorf("%w: 403 via sidecar (челлендж не пройден и в браузере)", ErrMarketplaceBlocked)
+	default:
+		// 502/503 — дорожка не прогрета/сайдкар недоступен.
+		metrics.WBSearchFetch.WithLabelValues("browser", "error").Inc()
+		return nil, fmt.Errorf("%w: sidecar status %d", ErrMarketplaceBlocked, resp.StatusCode)
+	}
 }
 
 func (s *WildberriesSearchScraper) setHeaders(req *http.Request, referer, cookie, ua string) {

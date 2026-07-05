@@ -24,16 +24,19 @@ func stubResp(status int, body string) *http.Response {
 	}
 }
 
-// TestScrapeSearchFallbackOn403 — direct отдаёт 403 (горячий запрос), фолбэк-прокси
-// отдаёт 200: выдача должна собраться через прокси, direct не должен ронять запрос.
-func TestScrapeSearchFallbackOn403(t *testing.T) {
-	var directHits, proxyHits int
+// TestScrapeSearchFallbackToBrowser — direct отдаёт 403 (горячий запрос), сайдкар
+// (browser) отдаёт 200: выдача собирается через сайдкар, direct не роняет запрос.
+func TestScrapeSearchFallbackToBrowser(t *testing.T) {
+	var directHits, sidecarHits int
 	directClient := &http.Client{Transport: rtFunc(func(*http.Request) *http.Response {
 		directHits++
 		return stubResp(http.StatusForbidden, "blocked")
 	})}
-	proxyCl := &http.Client{Transport: rtFunc(func(*http.Request) *http.Response {
-		proxyHits++
+	sidecarClient := &http.Client{Transport: rtFunc(func(r *http.Request) *http.Response {
+		sidecarHits++
+		if got := r.URL.Query().Get("query"); got != "iphone" {
+			t.Errorf("сайдкар получил query=%q, want iphone", got)
+		}
 		return stubResp(http.StatusOK, sampleSearchJSON)
 	})}
 
@@ -42,24 +45,25 @@ func TestScrapeSearchFallbackOn403(t *testing.T) {
 		pool:               &ProxyPool{clients: []proxyClient{{label: "direct", client: directClient}}},
 		tokens:             StaticTokenProvider{T: SearchToken{Cookie: "x_wbaas_token=abc", Slot: -1}},
 		maxPages:           1,
-		fallbackClient:     proxyCl,
+		browserURL:         "http://wb-search-miner:8081",
+		browserClient:      sidecarClient,
 	}
 
 	set, err := s.ScrapeSearch(context.Background(),
 		"https://www.wildberries.ru/catalog/0/search.aspx?search=iphone")
 	if err != nil {
-		t.Fatalf("ScrapeSearch с рабочим фолбэком вернул ошибку: %v", err)
+		t.Fatalf("ScrapeSearch с рабочим сайдкаром вернул ошибку: %v", err)
 	}
 	if len(set.Items) != 2 {
-		t.Fatalf("собрано %d товаров, want 2 (через прокси-фолбэк)", len(set.Items))
+		t.Fatalf("собрано %d товаров, want 2 (через сайдкар)", len(set.Items))
 	}
-	if directHits == 0 || proxyHits == 0 {
-		t.Errorf("ожидались обращения и к direct (403), и к прокси (200): direct=%d proxy=%d", directHits, proxyHits)
+	if directHits == 0 || sidecarHits == 0 {
+		t.Errorf("ожидались обращения и к direct (403), и к сайдкару (200): direct=%d sidecar=%d", directHits, sidecarHits)
 	}
 }
 
-// TestScrapeSearchNoFallbackReturnsBlocked — без фолбэка 403 остаётся ошибкой.
-func TestScrapeSearchNoFallbackReturnsBlocked(t *testing.T) {
+// TestScrapeSearchNoSidecarReturnsBlocked — без сайдкара 403 остаётся ошибкой.
+func TestScrapeSearchNoSidecarReturnsBlocked(t *testing.T) {
 	directClient := &http.Client{Transport: rtFunc(func(*http.Request) *http.Response {
 		return stubResp(http.StatusForbidden, "blocked")
 	})}
@@ -71,7 +75,7 @@ func TestScrapeSearchNoFallbackReturnsBlocked(t *testing.T) {
 	}
 	if _, err := s.ScrapeSearch(context.Background(),
 		"https://www.wildberries.ru/catalog/0/search.aspx?search=iphone"); err == nil {
-		t.Fatal("ожидалась ошибка (403 без фолбэка), получили nil")
+		t.Fatal("ожидалась ошибка (403 без сайдкара), получили nil")
 	}
 }
 
