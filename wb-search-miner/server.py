@@ -182,11 +182,12 @@ class Lane:
         self._page = await self._ctx.new_page()
         if BLOCK_RESOURCES:
             async def _route(route):
-                # Корректный async-хендлер: блокируем тяжёлые статики, остальное
-                # (в т.ч. JS челленджа wbaas) пропускаем. Обязательно await —
-                # fire-and-forget залипал бы на резолве и рушил загрузку/челлендж.
+                # Корректный async-хендлер: блокируем ТОЛЬКО image/media (как
+                # token-miner). Шрифты НЕ трогаем — их отсутствие меняет
+                # canvas/font-fingerprint, wbaas это палит (create-token 498).
+                # Обязательно await — fire-and-forget рушил бы загрузку/челлендж.
                 try:
-                    if route.request.resource_type in ("image", "media", "font"):
+                    if route.request.resource_type in ("image", "media"):
                         await route.abort()
                     else:
                         await route.continue_()
@@ -211,8 +212,15 @@ class Lane:
             return False
 
     async def _nudge(self):
+        # Как _human_nudge в token-miner: движение мыши (steps) + колесо. wbaas
+        # проверяет наличие человекоподобных событий указателя.
         try:
-            await self._page.mouse.wheel(0, random.randint(200, 900))
+            await self._page.mouse.move(random.randint(80, 1280), random.randint(80, 700),
+                                        steps=random.randint(4, 9))
+        except Exception:  # noqa: BLE001
+            pass
+        try:
+            await self._page.mouse.wheel(0, random.randint(200, 1100))
         except Exception:  # noqa: BLE001
             pass
 
