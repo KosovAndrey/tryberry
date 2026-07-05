@@ -85,14 +85,22 @@ func (s *synthRedirect) route(u *domain.User) (tgChat, vkPeer, maxUser int64, dr
 	if s.sampleN > 1 && u.ID%s.sampleN != 0 {
 		return 0, 0, 0, true
 	}
+	// Индексуем по ПОРЯДКОВОМУ номеру сэмпла (u.ID/sampleN), а не по самому id:
+	// иначе при sampleN, кратном len(канала) (напр. 10 и 2 TG-чата), все
+	// прошедшие сэмпл id чётны → всегда выбирался бы chat[0]. div>=1 (деление).
+	div := s.sampleN
+	if div < 1 {
+		div = 1
+	}
+	slot := int(u.ID / div)
 	if u.TelegramID != 0 && len(s.tg) > 0 {
-		tgChat = s.tg[int(u.ID)%len(s.tg)]
+		tgChat = s.tg[slot%len(s.tg)]
 	}
 	if u.VKID != nil && len(s.vk) > 0 {
-		vkPeer = s.vk[int(u.ID)%len(s.vk)]
+		vkPeer = s.vk[slot%len(s.vk)]
 	}
 	if u.MaxID != nil && len(s.max) > 0 {
-		maxUser = s.max[int(u.ID)%len(s.max)]
+		maxUser = s.max[slot%len(s.max)]
 	}
 	return tgChat, vkPeer, maxUser, false
 }
