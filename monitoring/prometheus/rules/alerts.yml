@@ -127,6 +127,19 @@ groups:
           summary: "Ozon-сайдкар: нет живых дорожек"
           description: "ozon-miner отвечает, но 0 прогретых дорожек 10+ минут — camoufox не проходит FAB (протух refresh-token/FAB-пропуск). Снять свежий OZON_COOKIE (HTTP Toolkit через мобильный прокси) и пересоздать ozon-miner: docker compose up -d --force-recreate ozon-miner."
 
+      # WB-search-сайдкар жив, но ни одной прогретой дорожки. Процесс-даун ловит
+      # ServiceDown; здесь процесс отвечает, но браузер не проходит wbaas-стену
+      # (create-token 498). Горячие WB-запросы перестают чиниться (уходят в 403).
+      # Частая причина — дрейф версии patchright (пин 1.60.1) или тайтенинг wbaas.
+      - alert: WbSearchMinerNoHealthyLanes
+        expr: wb_search_miner_healthy_lanes == 0
+        for: 15m
+        labels:
+          severity: warning
+        annotations:
+          summary: "WB-search-сайдкар: нет живых дорожек"
+          description: "wb-search-miner отвечает, но 0 прогретых дорожек 15+ минут — браузер не проходит wbaas-стену (create-token 498). Проверить версию patchright (пин 1.60.1) и логи дорожки; при тайтенинге wbaas — обновить движок. Горячие WB-запросы пока падают в 403."
+
       # Высокая латентность скрейпинга
       - alert: HighScrapeLatency
         expr: tryberrybot:scrape_duration_p95:5m > 10

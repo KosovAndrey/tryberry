@@ -1,11 +1,84 @@
 package scraper
 
 import (
+	"bytes"
+	"context"
 	"encoding/json"
+	"io"
+	"net/http"
 	"strings"
 	"testing"
 	"time"
 )
+
+// rtFunc — RoundTripper из функции (канонические ответы без сети).
+type rtFunc func(*http.Request) *http.Response
+
+func (f rtFunc) RoundTrip(r *http.Request) (*http.Response, error) { return f(r), nil }
+
+func stubResp(status int, body string) *http.Response {
+	return &http.Response{
+		StatusCode: status,
+		Body:       io.NopCloser(bytes.NewBufferString(body)),
+		Header:     make(http.Header),
+	}
+}
+
+// TestScrapeSearchFallbackToBrowser — direct отдаёт 403 (горячий запрос), сайдкар
+// (browser) отдаёт 200: выдача собирается через сайдкар, direct не роняет запрос.
+func TestScrapeSearchFallbackToBrowser(t *testing.T) {
+	var directHits, sidecarHits int
+	directClient := &http.Client{Transport: rtFunc(func(*http.Request) *http.Response {
+		directHits++
+		return stubResp(http.StatusForbidden, "blocked")
+	})}
+	sidecarClient := &http.Client{Transport: rtFunc(func(r *http.Request) *http.Response {
+		sidecarHits++
+		if got := r.URL.Query().Get("query"); got != "iphone" {
+			t.Errorf("сайдкар получил query=%q, want iphone", got)
+		}
+		return stubResp(http.StatusOK, sampleSearchJSON)
+	})}
+
+	s := &WildberriesSearchScraper{
+		WildberriesScraper: NewWildberriesScraper(5),
+		pool:               &ProxyPool{clients: []proxyClient{{label: "direct", client: directClient}}},
+		tokens:             StaticTokenProvider{T: SearchToken{Cookie: "x_wbaas_token=abc", Slot: -1}},
+		maxPages:           1,
+		browserURL:         "http://wb-search-miner:8081",
+		browserClient:      sidecarClient,
+		browserMaxPages:    1,
+	}
+
+	set, err := s.ScrapeSearch(context.Background(),
+		"https://www.wildberries.ru/catalog/0/search.aspx?search=iphone")
+	if err != nil {
+		t.Fatalf("ScrapeSearch с рабочим сайдкаром вернул ошибку: %v", err)
+	}
+	if len(set.Items) != 2 {
+		t.Fatalf("собрано %d товаров, want 2 (через сайдкар)", len(set.Items))
+	}
+	if directHits == 0 || sidecarHits == 0 {
+		t.Errorf("ожидались обращения и к direct (403), и к сайдкару (200): direct=%d sidecar=%d", directHits, sidecarHits)
+	}
+}
+
+// TestScrapeSearchNoSidecarReturnsBlocked — без сайдкара 403 остаётся ошибкой.
+func TestScrapeSearchNoSidecarReturnsBlocked(t *testing.T) {
+	directClient := &http.Client{Transport: rtFunc(func(*http.Request) *http.Response {
+		return stubResp(http.StatusForbidden, "blocked")
+	})}
+	s := &WildberriesSearchScraper{
+		WildberriesScraper: NewWildberriesScraper(5),
+		pool:               &ProxyPool{clients: []proxyClient{{label: "direct", client: directClient}}},
+		tokens:             StaticTokenProvider{T: SearchToken{Cookie: "x_wbaas_token=abc", Slot: -1}},
+		maxPages:           1,
+	}
+	if _, err := s.ScrapeSearch(context.Background(),
+		"https://www.wildberries.ru/catalog/0/search.aspx?search=iphone"); err == nil {
+		t.Fatal("ожидалась ошибка (403 без сайдкара), получили nil")
+	}
+}
 
 func newTestSearchScraper() *WildberriesSearchScraper {
 	return NewWildberriesSearchScraper(nil, nil, nil, 5, 0)

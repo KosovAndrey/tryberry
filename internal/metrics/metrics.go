@@ -163,6 +163,20 @@ var (
 		[]string{"status"}, // success | empty | error
 	)
 
+	// WBSearchFetch — исходы запросов страниц WB-поиска по транспорту и результату.
+	// transport: direct | browser; result: ok | forbidden | 429 | other | error.
+	// browser+ok = горячий запрос, спасённый браузер-сайдкаром wb-search-miner
+	// (см. wildberries_search.go). browser+forbidden = челлендж не пройден и в
+	// браузере. direct+forbidden = обычный 403 на горячем (уходит в сайдкар).
+	WBSearchFetch = promauto.NewCounterVec(
+		prometheus.CounterOpts{
+			Namespace: namespace,
+			Name:      "wb_search_fetch_total",
+			Help:      "WB search page fetches by transport and result",
+		},
+		[]string{"transport", "result"},
+	)
+
 	// SearchNotificationsSent — отправленные батч-уведомления по поиск-подпискам,
 	// сгруппированные по типу триггера.
 	SearchNotificationsSent = promauto.NewCounterVec(

@@ -17,6 +17,8 @@ services:
     restart: unless-stopped
   token-miner-reseller:
     restart: unless-stopped
+  wb-search-miner:
+    restart: unless-stopped
   search-worker:
     restart: unless-stopped
   reseller-worker:

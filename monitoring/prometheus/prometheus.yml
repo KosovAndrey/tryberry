@@ -47,6 +47,15 @@ scrape_configs:
         labels:
           service: ozon-miner
 
+  # Сайдкар WB-поиска (browser-as-transport для горячих запросов). Живые дорожки —
+  # отдельным алертом; падение процесса ловит ServiceDown по префиксу tryberrybot-*.
+  - job_name: tryberrybot-wb-search-miner
+    metrics_path: /metrics
+    static_configs:
+      - targets: [ 'wb-search-miner:8081' ]
+        labels:
+          service: wb-search-miner
+
   - job_name: tryberrybot-notifier
     metrics_path: /metrics
     static_configs:

@@ -331,6 +331,10 @@ services:
       SEARCH_TASKS_TOPIC: "search-tasks"
       WB_TOKEN_POOL_PREFIX: "wb:search:"
       WB_TOKEN_POOL_SIZE: "5"
+      # 403-фолбэк WB-поиска в браузер-сайдкар: wbaas режет ГОРЯЧИЕ запросы direct
+      # (различие в транспорте, не в токене/IP). Горячие уходят в прогретый
+      # браузер wb-search-miner (in-page fetch к тому же u-search).
+      WB_SEARCH_BROWSER_URL: "${WB_SEARCH_BROWSER_URL:-http://wb-search-miner:8081}"
       SEARCH_SCRAPE_INTERVAL_MINUTES: "20"
       SEARCH_MAX_PAGES: "5"
       SEARCH_PAGE_DELAY_MS: "700"
@@ -379,6 +383,9 @@ services:
       SEARCH_TASKS_TOPIC: "reseller-tasks"
       WB_TOKEN_POOL_PREFIX: "wb:reseller:"
       WB_TOKEN_POOL_SIZE: "5"
+      # 403-фолбэк перекуп-дорожки в тот же браузер-сайдкар wb-search-miner.
+      # См. WB_SEARCH_BROWSER_URL у search-worker.
+      WB_SEARCH_BROWSER_URL: "${WB_SEARCH_BROWSER_URL:-http://wb-search-miner:8081}"
       SEARCH_SCRAPE_INTERVAL_MINUTES: "20"
       # Reseller — премиум-тариф: даём WB-поиску покрытие 3 стр (300) против 2 у
       # бесплатной дорожки. WB-каталог дёшев, поэтому +1 страница ничего не стоит.
@@ -578,6 +585,37 @@ services:
       labels:
         logging: "promtail"
         service: "ozon-miner"
+
+  # ── WB search miner: браузер-как-транспорт для горячих запросов ─────────────
+  # Долгоживущий сервис: прогретые дорожки (headful Chromium/patchright в Xvfb)
+  # проходят wbaas-стену и отдают выдачу u-search in-page fetch'ем. Go-воркеры
+  # (search-worker/reseller-worker) зовут GET /search как 403-фолбэк по
+  # внутренней сети (WB_SEARCH_BROWSER_URL) — портов наружу нет. Прокси не нужен
+  # (direct с датацентр-IP в браузере проходит, как у token-miner).
+  wb-search-miner:
+      build:
+        context: ./wb-search-miner
+        dockerfile: Dockerfile
+      container_name: pt_wb_search_miner
+      init: true
+      environment:
+        WB_SEARCH_MINER_PORT: "8081"
+        WB_SEARCH_POOL_SIZE: "${WB_SEARCH_POOL_SIZE:-1}"
+        WB_WARM_QUERY: "${WB_WARM_QUERY:-телефон}"
+        # Опц. прокси дорожек (обычно НЕ нужен — direct проходит).
+        WB_SEARCH_PROXY_URL: "${WB_SEARCH_PROXY_URL:-}"
+        WB_LANE_1_PROXY: "${WB_LANE_1_PROXY:-}"
+        # Человекоподобный интервал запросов одной дорожки + джиттер.
+        WB_LANE_MIN_INTERVAL_MS: "${WB_LANE_MIN_INTERVAL_MS:-800}"
+        WB_LANE_JITTER: "${WB_LANE_JITTER:-0.4}"
+        # Периодический re-warm живой дорожки (рефреш токена/доверия), мин.
+        WB_WARM_KEEPALIVE_MINUTES: "${WB_WARM_KEEPALIVE_MINUTES:-30}"
+        HEADLESS: "false"
+        LOG_LEVEL: "INFO"
+      shm_size: "1gb"
+      labels:
+        logging: "promtail"
+        service: "wb-search-miner"
 
   scheduler:
       build:
