@@ -62,7 +62,7 @@ FETCH_TIMEOUT_S = float(os.getenv("WB_FETCH_TIMEOUT_SECONDS", "15"))
 FETCH_RETRIES = int(os.getenv("WB_FETCH_RETRIES", "2"))
 RETRY_PAUSE_MS = int(os.getenv("WB_RETRY_PAUSE_MS", "1200"))
 NAV_TIMEOUT_S = float(os.getenv("WB_NAV_TIMEOUT_SECONDS", "60"))
-WARM_WAIT_S = float(os.getenv("WB_WARM_WAIT_SECONDS", "75"))
+WARM_WAIT_S = float(os.getenv("WB_WARM_WAIT_SECONDS", "150"))
 WARM_RELOADS = int(os.getenv("WB_WARM_RELOADS", "2"))
 # Маркер u-search в URL ответов (ловим 200 на XHR самой страницы = стена пройдена,
 # cookie x_wbaas_token выставлен). Совпадает с путём USEARCH_PATH.
@@ -230,10 +230,11 @@ class Lane:
         пройдена, cookie x_wbaas_token выставлен). Потом проверяем in-page fetch.
         Успех → healthy; неудача → экспоненциальный backoff."""
         url = SEARCH_PAGE_URL.format(query=quote(WARM_QUERY))
-        seen = {"ok": False, "statuses": []}
+        seen = {"ok": False, "statuses": [], "all": []}
 
         def on_resp(resp):
             try:
+                seen["all"].append((resp.request.resource_type, resp.status, resp.url))
                 if USEARCH_MARKER in resp.url:
                     seen["statuses"].append(resp.status)
                     if resp.status == 200:
@@ -291,6 +292,36 @@ class Lane:
         self._next_warm = time.monotonic() + backoff
         log.warning("дорожка %d: прогрев не дал 200 (подряд %d, u-search: %s) — backoff %.0fс",
                     self.idx, self._warm_fails, seen["statuses"][-6:] or "—", backoff)
+        await self._dump_diag(seen)
+
+    async def _dump_diag(self, seen: dict):
+        """Диагностика провала прогрева: заголовок/тело страницы + гистограмма
+        хостов ответов + ключевые xhr/document — понять, стена это, пусто или
+        u-search ушёл на другой URL."""
+        try:
+            from collections import Counter
+            hosts = Counter()
+            for (_rt, _st, u) in seen["all"]:
+                try:
+                    hosts[urlparse(u).netloc] += 1
+                except Exception:  # noqa: BLE001
+                    pass
+            log.warning("─── ДИАГ дорожка %d ───", self.idx)
+            log.warning("ответов всего: %d, хосты: %s", len(seen["all"]), dict(hosts.most_common(8)))
+            for rt, st, u in seen["all"]:
+                if rt in ("document", "xhr", "fetch"):
+                    pu = urlparse(u)
+                    log.warning("  %-8s %s  %s%s", rt, st, pu.netloc, pu.path[:80])
+            try:
+                title = await self._page.title()
+                body = await self._page.evaluate("() => document.body ? document.body.innerText : ''")
+                log.warning("url=%s title=%r", self._page.url, title)
+                log.warning("body[:300]=%r", (body or "")[:300].replace("\n", " "))
+            except Exception as e:  # noqa: BLE001
+                log.warning("тело недоступно: %s", _first_line(e))
+            log.warning("─── /ДИАГ ───")
+        except Exception as e:  # noqa: BLE001
+            log.warning("диагностика упала: %s", _first_line(e))
 
     async def fetch_search(self, query: str, sort: str, page: int):
         """In-page fetch страницы выдачи. Возвращает (status, body_bytes).
