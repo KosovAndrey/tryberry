@@ -172,7 +172,7 @@ func buildSearchRegistry(ctx context.Context, log *slog.Logger) (*scraper.Regist
 			ProxyURL: getEnv("YANDEX_PROXY_URL", ""),
 			RPS:      2,
 			Logger:   log,
-		}), 100, getEnvInt("YANDEX_MAX_PAGES", 12)))
+		}), getEnvInt("SEARCH_MAX_ITEMS_YANDEX", 100), getEnvInt("YANDEX_MAX_PAGES", 12)))
 
 	scrapers = append(scrapers, scraper.NewAliexpressSearchScraper(
 		scraper.NewAliexpressScraper(scraper.AliexpressOptions{
@@ -185,7 +185,8 @@ func buildSearchRegistry(ctx context.Context, log *slog.Logger) (*scraper.Regist
 	// вернёт blocked, поэтому регистрируем лишь при заданном URL.
 	if bu := os.Getenv("OZON_BROWSER_URL"); bu != "" {
 		scrapers = append(scrapers, scraper.NewOzonSearchScraper(
-			scraper.NewOzonScraper(scraper.OzonOptions{Mode: "browser", BrowserURL: bu, Logger: log}), 60))
+			scraper.NewOzonScraper(scraper.OzonOptions{Mode: "browser", BrowserURL: bu, Logger: log}),
+			getEnvInt("SEARCH_MAX_ITEMS_OZON", 60)))
 	}
 
 	return scraper.NewRegistry(scrapers...), nil
