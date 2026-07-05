@@ -188,7 +188,9 @@ func (s *AliexpressSearchScraper) searchWithFallback(ctx context.Context, body [
 	// Холодная сессия: X5SEC иногда отдаёт 200 без товаров и без явного блок-маркера
 	// (cookie ещё не прогрета) — отсутствие snippetContainer трактуем как cold и
 	// идём через прокси (он проходит антибот и кладёт aer-cookie в общий jar).
-	if status != 200 || isAliBlocked(b) || !aliHasProducts(b) {
+	// В direct-only режиме (proxy=nil) фолбэка нет — отдаём direct-ответ как есть,
+	// блок/пустую выдачу разберёт вызывающий код (как у карточного Scrape).
+	if (status != 200 || isAliBlocked(b) || !aliHasProducts(b)) && s.proxy != nil {
 		return s.fetchSearch(ctx, s.proxy, body, referer)
 	}
 	return status, b, nil
