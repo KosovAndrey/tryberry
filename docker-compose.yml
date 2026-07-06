@@ -275,6 +275,11 @@ services:
       KAFKA_BROKERS: "kafka:29092"
       KAFKA_GROUP_ID: "price-tracker"
       TELEGRAM_BOT_TOKEN: "${TELEGRAM_BOT_TOKEN}"
+      # Параллельная обработка scrape-задач в одном инстансе (скрейп I/O-bound,
+      # CPU простаивал при последовательном консьюмере). Снимает главный потолок
+      # пропускной без доп. реплик; per-MP RPS всё равно капится rate.Limiter.
+      # 1 = прежний последовательный режим. docs/THROUGHPUT-ROADMAP.md №1.
+      CONSUMER_CONCURRENCY: "${CONSUMER_CONCURRENCY:-8}"
       SCRAPER_RATE_LIMIT_RPS: "5"
       SCRAPER_RATE_LIMIT_RPS_OZON: "1"
       # u-card-fallback (трансграничные WB-товары, basket-CDN их не видит) через

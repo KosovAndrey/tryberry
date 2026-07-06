@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"sync"
 	"time"
 
 	"github.com/segmentio/kafka-go"
@@ -140,6 +141,208 @@ func (c *Consumer) Run(ctx context.Context, handler HandlerFunc) error {
 		metrics.KafkaMessagesConsumed.WithLabelValues(topic, "success").Inc()
 		span.End()
 	}
+}
+
+// commitFlushInterval — как часто конкурентный консьюмер сбрасывает накопленные
+// вотермарки оффсетов в Kafka. Батчим, чтобы не делать по commit-RPC на каждое
+// сообщение под высокой пропускной. Потеря окна ≤ этого интервала при падении
+// безопасна (at-least-once, handler идемпотентен).
+const commitFlushInterval = 500 * time.Millisecond
+
+// RunConcurrent — как Run, но обрабатывает до concurrency сообщений параллельно
+// внутри ОДНОГО инстанса. Скрейп I/O-bound (ждём маркетплейс), CPU простаивает,
+// поэтому пул горутин даёт ×N к пропускной без доп. реплик.
+//
+// Коммит оффсетов — вотермарком непрерывного префикса на партицию: оффсет
+// коммитится, только когда ВСЕ предшествующие ему сообщения этой партиции
+// завершили handler. Так ни одно сообщение не «перепрыгнет» коммитом ещё не
+// обработанное. At-least-once сохраняется: при падении незакоммиченные
+// сообщения перечитаются и обработаются повторно (апсерты идемпотентны).
+//
+// Ошибка handler'а НЕ стопорит партицию: оффсет всё равно продвигается (как и в
+// последовательном Run, где после ошибки читается следующее сообщение и провал
+// эффективно пропускается) — товар/задача перепланируются штатным кадансом.
+// Порядок обработки в партиции не гарантируется — для идемпотентного скрейпа не важно.
+//
+// concurrency<=1 эквивалентно последовательному Run.
+func (c *Consumer) RunConcurrent(ctx context.Context, handler HandlerFunc, concurrency int) error {
+	if concurrency <= 1 {
+		return c.Run(ctx, handler)
+	}
+	topic := c.reader.Config().Topic
+	tracer := otel.Tracer("kafka.consumer")
+
+	tr := newOffsetTracker()
+	sem := make(chan struct{}, concurrency)
+	var wg sync.WaitGroup
+
+	// Коммиттер: периодически сбрасывает вотермарки партиций одним CommitMessages.
+	commitStopped := make(chan struct{})
+	go func() {
+		defer close(commitStopped)
+		t := time.NewTicker(commitFlushInterval)
+		defer t.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-t.C:
+				c.flushCommits(ctx, tr)
+			}
+		}
+	}()
+
+	backoff := minBackoff
+	for {
+		msg, err := c.reader.FetchMessage(ctx)
+		if err != nil {
+			if ctx.Err() != nil {
+				break
+			}
+			metrics.KafkaMessagesConsumed.WithLabelValues(topic, "error").Inc()
+			fmt.Printf("kafka fetch error: %v, retrying in %s\n", err, backoff)
+			if sleepWithCtx(ctx, backoff) {
+				break
+			}
+			backoff = nextBackoff(backoff)
+			continue
+		}
+		backoff = minBackoff
+
+		// Инициализация курсора партиции первым (низшим) оффсетом — из читающей
+		// горутины, где оффсеты партии идут по возрастанию.
+		tr.register(msg.Partition, msg.Offset)
+
+		sem <- struct{}{}
+		wg.Add(1)
+		metrics.KafkaInflight.WithLabelValues(topic).Inc()
+		go func(msg kafka.Message) {
+			defer wg.Done()
+			defer func() { <-sem }()
+			defer metrics.KafkaInflight.WithLabelValues(topic).Dec()
+
+			msgCtx := extractTraceContext(ctx, msg.Headers)
+			msgCtx, span := tracer.Start(msgCtx, "kafka.receive",
+				trace.WithSpanKind(trace.SpanKindConsumer),
+				trace.WithAttributes(
+					attribute.String("messaging.system", "kafka"),
+					attribute.String("messaging.destination.name", topic),
+				),
+			)
+
+			start := time.Now()
+			handlerErr := handler(msgCtx, Message{Key: msg.Key, Value: msg.Value})
+			metrics.KafkaProcessingDuration.WithLabelValues(topic).Observe(time.Since(start).Seconds())
+
+			if handlerErr != nil {
+				metrics.KafkaMessagesConsumed.WithLabelValues(topic, "error").Inc()
+				span.RecordError(handlerErr)
+				span.SetStatus(codes.Error, "handler failed")
+				fmt.Printf("handler error (offset advanced, task will be rescheduled): %v\n", handlerErr)
+			} else {
+				metrics.KafkaMessagesConsumed.WithLabelValues(topic, "success").Inc()
+			}
+			span.End()
+
+			// Помечаем оффсет завершённым (успех ИЛИ ошибка) — вотермарк двигается
+			// без head-of-line-стопа.
+			tr.complete(msg)
+		}(msg)
+	}
+
+	// Останов (ctx отменён): дождаться in-flight, дождаться выхода коммиттера,
+	// финально сбросить вотермарки фоновым контекстом (основной уже отменён).
+	wg.Wait()
+	<-commitStopped
+	c.flushCommits(context.Background(), tr)
+	return nil
+}
+
+// flushCommits коммитит по одному сообщению-вотермарку на партицию (kafka-go
+// коммитит offset+1, беря максимум по партиции).
+func (c *Consumer) flushCommits(ctx context.Context, tr *offsetTracker) {
+	msgs := tr.takeWatermarks()
+	if len(msgs) == 0 {
+		return
+	}
+	if err := c.reader.CommitMessages(ctx, msgs...); err != nil {
+		if ctx.Err() != nil {
+			return
+		}
+		fmt.Printf("kafka commit error: %v (messages will be redelivered)\n", err)
+	}
+}
+
+// offsetTracker считает непрерывный успешный префикс на партицию для безопасного
+// коммита в конкурентном консьюмере. Потокобезопасен.
+type offsetTracker struct {
+	mu    sync.Mutex
+	parts map[int]*partOffsets
+}
+
+type partOffsets struct {
+	cursor    int64                   // низший ещё не закоммиченный оффсет
+	inited    bool                    // курсор проинициализирован первым fetch'ем
+	done      map[int64]kafka.Message // завершённые оффсеты >= cursor, ждущие непрерывности
+	watermark *kafka.Message          // наивысшее сообщение, готовое к коммиту (не сброшено)
+}
+
+func newOffsetTracker() *offsetTracker {
+	return &offsetTracker{parts: make(map[int]*partOffsets)}
+}
+
+func (t *offsetTracker) part(partition int) *partOffsets {
+	p, ok := t.parts[partition]
+	if !ok {
+		p = &partOffsets{done: make(map[int64]kafka.Message)}
+		t.parts[partition] = p
+	}
+	return p
+}
+
+// register задаёт курсор партиции первым увиденным оффсетом.
+func (t *offsetTracker) register(partition int, offset int64) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	p := t.part(partition)
+	if !p.inited {
+		p.cursor = offset
+		p.inited = true
+	}
+}
+
+// complete помечает оффсет завершённым и продвигает вотермарк по непрерывному
+// префиксу завершённых оффсетов.
+func (t *offsetTracker) complete(msg kafka.Message) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	p := t.part(msg.Partition)
+	p.done[msg.Offset] = msg
+	for {
+		m, ok := p.done[p.cursor]
+		if !ok {
+			break
+		}
+		wm := m
+		p.watermark = &wm
+		delete(p.done, p.cursor)
+		p.cursor++
+	}
+}
+
+// takeWatermarks забирает по одному сообщению-вотермарку на партицию и очищает
+// их, чтобы не коммитить повторно.
+func (t *offsetTracker) takeWatermarks() []kafka.Message {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	var out []kafka.Message
+	for _, p := range t.parts {
+		if p.watermark != nil {
+			out = append(out, *p.watermark)
+			p.watermark = nil
+		}
+	}
+	return out
 }
 
 func (c *Consumer) Close() error {

@@ -363,6 +363,18 @@ var (
 		},
 		[]string{"topic"},
 	)
+
+	// KafkaInflight — число сообщений в обработке ПРЯМО СЕЙЧАС в конкурентном
+	// консьюмере (RunConcurrent). Приближается к CONSUMER_CONCURRENCY, когда пул
+	// насыщен (упёрлись в потолок параллелизма), около нуля — простаиваем.
+	KafkaInflight = promauto.NewGaugeVec(
+		prometheus.GaugeOpts{
+			Namespace: namespace,
+			Name:      "kafka_inflight_messages",
+			Help:      "Messages currently being processed by the concurrent consumer",
+		},
+		[]string{"topic"},
+	)
 )
 
 // ── HTTP (для middleware) ────────────────────────────────────────────────────

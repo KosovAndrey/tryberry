@@ -72,6 +72,16 @@ func run(log *slog.Logger) error {
 	if err != nil {
 		return fmt.Errorf("SCRAPER_RATE_LIMIT_RPS_ALI: %w", err)
 	}
+	// CONSUMER_CONCURRENCY — сколько scrape-задач обрабатывать параллельно в одном
+	// инстансе. Скрейп I/O-bound (нагрузочный тест 2026-07-05: CPU ~15% при
+	// последовательном консьюмере), поэтому пул горутин снимает главный потолок
+	// пропускной без доп. реплик. Per-marketplace RPS всё равно капится rate.Limiter
+	// в скрейперах — параллелизм лишь заполняет время ожидания ответа. 1 = прежний
+	// последовательный режим. docs/THROUGHPUT-ROADMAP.md №1.
+	concurrency, err := strconv.Atoi(getEnv("CONSUMER_CONCURRENCY", "8"))
+	if err != nil || concurrency < 1 {
+		return fmt.Errorf("CONSUMER_CONCURRENCY: must be a positive integer, got %q", getEnv("CONSUMER_CONCURRENCY", "8"))
+	}
 
 	// ── Подключения ──────────────────────────────────────────────────────────
 
@@ -191,8 +201,8 @@ func run(log *slog.Logger) error {
 	// ── Обработчик сообщений (цены) — блокирующий основной цикл ────────────────
 	handler := makeHandler(log, registry, productRepo, priceHistoryRepo, priceCache, producer, pm)
 
-	log.Info("scraper started, waiting for tasks...")
-	return consumer.Run(ctx, handler)
+	log.Info("scraper started, waiting for tasks...", "concurrency", concurrency)
+	return consumer.RunConcurrent(ctx, handler, concurrency)
 }
 
 func makeHandler(
