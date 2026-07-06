@@ -25,6 +25,7 @@ import (
 	redisrepo "gitlab.com/KosovAndrey/tryberrybot/internal/repository/redis"
 	"gitlab.com/KosovAndrey/tryberrybot/internal/scraper"
 	"gitlab.com/KosovAndrey/tryberrybot/internal/tracing"
+	"golang.org/x/sync/errgroup"
 )
 
 func main() {
@@ -81,6 +82,15 @@ func run(log *slog.Logger) error {
 	concurrency, err := strconv.Atoi(getEnv("CONSUMER_CONCURRENCY", "8"))
 	if err != nil || concurrency < 1 {
 		return fmt.Errorf("CONSUMER_CONCURRENCY: must be a positive integer, got %q", getEnv("CONSUMER_CONCURRENCY", "8"))
+	}
+	// OZON_CONSUMER_CONCURRENCY — параллелизм ОТДЕЛЬНОГО консьюмера ozon-scrape-tasks
+	// (docs/THROUGHPUT-ROADMAP.md №2). Ozon вынесен в свой топик, чтобы его медленные
+	// (~3-5с) браузерные скрейпы не занимали слоты пула быстрых WB/YM. Держим скромнее
+	// основного: rpsOzon=1/с на реплику всё равно потолок, пул лишь заполняет ожидание
+	// сайдкара. Реальный рычаг Ozon-пропускной — rpsOzon + дорожки ozon-miner.
+	ozonConcurrency, err := strconv.Atoi(getEnv("OZON_CONSUMER_CONCURRENCY", "6"))
+	if err != nil || ozonConcurrency < 1 {
+		return fmt.Errorf("OZON_CONSUMER_CONCURRENCY: must be a positive integer, got %q", getEnv("OZON_CONSUMER_CONCURRENCY", "6"))
 	}
 
 	// ── Подключения ──────────────────────────────────────────────────────────
@@ -154,6 +164,12 @@ func run(log *slog.Logger) error {
 	consumer := kafka.NewConsumer(kafkaBrokers, "scrape-tasks", kafkaGroupID)
 	defer consumer.Close()
 
+	// Ozon вынесен в отдельный топик + СВОЮ consumer-group (изоляция rebalance и
+	// отдельный lag в мониторинге, как reseller-tasks). Тот же handler — registry
+	// сам роутит по URL; сюда просто приходят только Ozon-задачи от планировщика.
+	ozonConsumer := kafka.NewConsumer(kafkaBrokers, "ozon-scrape-tasks", kafkaGroupID+"-ozon")
+	defer ozonConsumer.Close()
+
 	producer := kafka.NewProducer(kafkaBrokers, "price-events")
 	defer producer.Close()
 
@@ -201,8 +217,16 @@ func run(log *slog.Logger) error {
 	// ── Обработчик сообщений (цены) — блокирующий основной цикл ────────────────
 	handler := makeHandler(log, registry, productRepo, priceHistoryRepo, priceCache, producer, pm)
 
-	log.Info("scraper started, waiting for tasks...", "concurrency", concurrency)
-	return consumer.RunConcurrent(ctx, handler, concurrency)
+	log.Info("scraper started, waiting for tasks...",
+		"concurrency", concurrency, "ozon_concurrency", ozonConcurrency)
+
+	// Два независимых консюмера в одном инстансе: быстрый WB/YM/Ali (scrape-tasks)
+	// и медленный Ozon (ozon-scrape-tasks). errgroup: падение/останов любого гасит
+	// оба (общий egCtx), ctx-cancel завершает штатно (RunConcurrent → nil).
+	eg, egCtx := errgroup.WithContext(ctx)
+	eg.Go(func() error { return consumer.RunConcurrent(egCtx, handler, concurrency) })
+	eg.Go(func() error { return ozonConsumer.RunConcurrent(egCtx, handler, ozonConcurrency) })
+	return eg.Wait()
 }
 
 func makeHandler(

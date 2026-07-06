@@ -103,6 +103,12 @@ func run(log *slog.Logger) error {
 
 	productProducer := kafka.NewProducer(brokers, "scrape-tasks")
 	defer productProducer.Close()
+	// Ozon — самый медленный (браузерный сайдкар ~3-5с) и туже всех зажат
+	// rate-лимитом — в отдельный топик, чтобы его backlog не занимал слоты пула
+	// быстрых WB/YM в scraper. Своя consumer-group + свой параллелизм на стороне
+	// scraper (docs/THROUGHPUT-ROADMAP.md №2). Топик авто-создаётся (10 партиций).
+	ozonProducer := kafka.NewProducer(brokers, "ozon-scrape-tasks")
+	defer ozonProducer.Close()
 	searchProducer := kafka.NewProducer(brokers, "search-tasks")
 	defer searchProducer.Close()
 	// Быстрая дорожка перекупов — отдельный топик (отдельная consumer group и
@@ -116,7 +122,7 @@ func run(log *slog.Logger) error {
 		"ozon_mult", ozonMult,
 		"tick", tick.String())
 
-	go runProductScheduler(ctx, log, productRepo, productProducer, tick, defaultInterval, ozonMinInterval, ozonMult)
+	go runProductScheduler(ctx, log, productRepo, productProducer, ozonProducer, tick, defaultInterval, ozonMinInterval, ozonMult)
 	go runSearchScheduler(ctx, log, searchQueryRepo, searchProducer, resellerProducer, tick, defaultInterval, ozonSearchMin)
 
 	<-ctx.Done()
@@ -135,12 +141,12 @@ func runProductScheduler(
 	ctx context.Context,
 	log *slog.Logger,
 	productRepo *postgres.ProductRepo,
-	producer *kafka.Producer,
+	producer, ozonProducer *kafka.Producer,
 	tickInterval, defaultInterval, ozonMinInterval time.Duration,
 	ozonMult int,
 ) {
 	tick := func() {
-		if err := productSchedulerTick(ctx, log, productRepo, producer, defaultInterval, ozonMinInterval, ozonMult); err != nil {
+		if err := productSchedulerTick(ctx, log, productRepo, producer, ozonProducer, defaultInterval, ozonMinInterval, ozonMult); err != nil {
 			log.Error("product scheduler tick failed", "err", err)
 		}
 	}
@@ -161,7 +167,7 @@ func productSchedulerTick(
 	ctx context.Context,
 	log *slog.Logger,
 	productRepo *postgres.ProductRepo,
-	producer *kafka.Producer,
+	producer, ozonProducer *kafka.Producer,
 	defaultInterval, ozonMinInterval time.Duration,
 	ozonMult int,
 ) error {
@@ -260,17 +266,28 @@ func productSchedulerTick(
 		return fmt.Errorf("claim products enqueued: %w", err)
 	}
 
-	sent := 0
+	sent, ozonSent := 0, 0
 	for _, d := range dueList {
 		task := domain.ScrapeTask{ProductID: d.id, URL: d.url}
 		key := strconv.FormatInt(d.id, 10)
-		if err := producer.Send(ctx, key, task); err != nil {
-			log.Error("send scrape task", "product_id", d.id, "err", err)
+		// Ozon → отдельный топик (детект тот же, что при расчёте каданса выше).
+		// Прочие МП (WB/YM/Ali) — общий scrape-tasks.
+		p := producer
+		isOzon := strings.Contains(strings.ToLower(d.url), "ozon.ru")
+		if isOzon {
+			p = ozonProducer
+		}
+		if err := p.Send(ctx, key, task); err != nil {
+			log.Error("send scrape task", "product_id", d.id, "ozon", isOzon, "err", err)
 			continue
 		}
-		sent++
+		if isOzon {
+			ozonSent++
+		} else {
+			sent++
+		}
 	}
-	log.Info("product scheduler tick done", "due", len(dueList), "sent", sent)
+	log.Info("product scheduler tick done", "due", len(dueList), "sent", sent, "ozon_sent", ozonSent)
 	return nil
 }
 
