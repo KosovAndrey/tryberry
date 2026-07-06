@@ -88,6 +88,15 @@ services:
   scraper:
     restart: unless-stopped
     ports: !reset []
+    # Скрейпер — узкое место (I/O-bound, маркетплейсы отвечают сотни мс). Планировщик
+    # кладёт scrape-tasks (10 партиций) быстрее, чем одна реплика их дренирует → лаг
+    # растёт. 3 реплики проверены как оптимум (нагрузочный тест 5k синтетиков). Держим
+    # в оверрлее, потому что число реплик — runtime-флаг: без этого любой `up -d` без
+    # `--scale scraper=3` тихо откатывал в 1 реплику. `--scale` остаётся для ручного
+    # разгона под пик. Реплики безопасны: consumer-group делит партиции, partition.Manager
+    # идемпотентен под advisory-lock.
+    deploy:
+      replicas: 3
 
   notifier:
     restart: unless-stopped
