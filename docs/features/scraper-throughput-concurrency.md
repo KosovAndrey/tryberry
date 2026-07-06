@@ -55,10 +55,22 @@
 коммит вотермарком непрерывного успешного префикса на партицию (оффсет
 коммитится, только когда завершены ВСЕ предшествующие ему на партиции) — at-least-once
 сохранён, head-of-line-стопа нет (ошибка handler'а тоже двигает вотермарк, задача
-перепланируется кадансом). Метрика `pt_kafka_inflight_messages{topic}`. Per-MP RPS
-по-прежнему капится rate.Limiter — параллелизм лишь заполняет время ожидания ответа.
-`pt_notifier`/`search-worker`/`reseller-worker` остаются последовательными (не
-упираются). Детали плана — docs/THROUGHPUT-ROADMAP.md №1.
+перепланируется кадансом). Метрика `tryberrybot_kafka_inflight_messages{topic}`.
+Per-MP RPS по-прежнему капится rate.Limiter — параллелизм лишь заполняет время
+ожидания ответа. `pt_notifier`/`search-worker`/`reseller-worker` остаются
+последовательными (не упираются). Детали плана — docs/THROUGHPUT-ROADMAP.md №1.
+
+**UPD 2026-07-06 — №2: Ozon вынесен в отдельный топик.** С worker-pool (№1)
+head-of-line blocking почти ушёл, но остался риск: Ozon (браузерный сайдкар ~3-5с
++ туго зажат `rpsOzon=1/с`) под своим backlog'ом может занять все слоты общего
+пула и голодить быстрые WB/YM. Планировщик (`cmd/scheduler`) теперь роутит
+Ozon-товары в топик `ozon-scrape-tasks`, прочие — в `scrape-tasks`. Scraper гоняет
+ДВА независимых консьюмера (errgroup): основной (`CONSUMER_CONCURRENCY`) и
+Ozon-овый (`OZON_CONSUMER_CONCURRENCY`, деф. 6) со СВОЕЙ consumer-group
+`<group>-ozon` (отдельный lag в мониторинге, kafka-exporter видит группу сам).
+Handler общий — registry роутит по URL, миграция безболезненна (старые Ozon-задачи
+в `scrape-tasks` доработает основной консюмер). ВАЖНО: сам топик Ozon НЕ ускоряет —
+это изоляция; рычаг пропускной Ozon = `rpsOzon` + дорожки `ozon-miner`.
 
 ## Побочное (мелочь)
 
