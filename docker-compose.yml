@@ -613,6 +613,9 @@ services:
         WB_LANE_JITTER: "${WB_LANE_JITTER:-0.4}"
         # Периодический re-warm живой дорожки (рефреш токена/доверия), мин.
         WB_WARM_KEEPALIVE_MINUTES: "${WB_WARM_KEEPALIVE_MINUTES:-30}"
+        # После N неудачных прогревов подряд — пересоздать браузер (свежий
+        # фингерпринт против залипания на document-498). 0 — не пересоздавать.
+        WB_WARM_RELAUNCH_AFTER: "${WB_WARM_RELAUNCH_AFTER:-3}"
         HEADLESS: "false"
         LOG_LEVEL: "INFO"
       shm_size: "1gb"

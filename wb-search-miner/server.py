@@ -21,7 +21,9 @@ GET /search?query=<q>&sort=<s>&page=<n> → дорожка делает in-page 
 upstream-статус (403 при стойкой стене).
 
 Живучесть: джиттер интервала, backoff на стойкой стене (не долбить — жжёт IP),
-периодический re-warm, пересоздание браузера после смерти драйвера. Прокси НЕ
+периодический re-warm, пересоздание браузера после смерти драйвера И после N
+неудачных прогревов подряд (свежий фингерпринт против залипания на document-498).
+Живой browse в прогреве (скролл+dwell) снижает шанс докатиться до стены. Прокси НЕ
 нужен (майнер доказал: direct с датацентр-IP проходит), но опционально
 поддержан через WB_SEARCH_PROXY_URL / WB_LANE_<i>_PROXY.
 """
@@ -75,6 +77,11 @@ LANE_JITTER = float(os.getenv("WB_LANE_JITTER", "0.4"))
 MAINT_INTERVAL_S = float(os.getenv("WB_HEALTH_INTERVAL_SECONDS", "30"))
 WARM_KEEPALIVE_S = float(os.getenv("WB_WARM_KEEPALIVE_MINUTES", "30")) * 60.0
 WARM_BACKOFF_MAX_S = float(os.getenv("WB_WARM_BACKOFF_MAX_SECONDS", "600"))
+# После скольких ПОДРЯД неудачных прогревов пересоздать браузер (свежий контекст/
+# фингерпринт) вместо долбёжки того же контекста. Лечит залипание на document-498:
+# когда wbaas walled сам HTML навигации, ре-навигация той же сессии часами даёт
+# тот же 498 (наблюдалось ~6ч под тестовой молотилкой горячих). 0 — не пересоздавать.
+WARM_RELAUNCH_AFTER = int(os.getenv("WB_WARM_RELAUNCH_AFTER", "3"))
 
 LOCALE = os.getenv("WB_MINER_LOCALE", "ru-RU")
 TIMEZONE = os.getenv("WB_MINER_TIMEZONE", "Europe/Moscow")
@@ -138,7 +145,8 @@ class Lane:
         self.healthy = False
         self._last_at = 0.0
         self._last_warm = 0.0
-        self._warm_fails = 0
+        self._warm_fails = 0            # подряд неудач (для backoff)
+        self._fails_since_relaunch = 0  # подряд неудач с последнего relaunch
         self._next_warm = 0.0
         self._pw = None
         self._browser = None
@@ -200,11 +208,37 @@ class Lane:
         except Exception:  # noqa: BLE001
             pass
 
+    async def _human_browse(self):
+        # Более «живое» поведение на выдаче: несколько прокруток с паузами +
+        # движения указателя. wbaas смотрит на dwell и события скролла/мыши, так
+        # что живой browse снижает шанс докатиться до стены на холодную. ВАЖНО:
+        # уже выданную document-стену (498 на самой навигации) это НЕ снимает —
+        # страницы нет, скроллить нечего; это профилактика, а не лечение.
+        for _ in range(random.randint(2, 4)):
+            await self._nudge()
+            try:
+                await self._page.mouse.wheel(0, random.randint(400, 1500))
+            except Exception:  # noqa: BLE001
+                pass
+            try:
+                await self._page.wait_for_timeout(random.randint(500, 1600))
+            except Exception:  # noqa: BLE001
+                await asyncio.sleep(random.uniform(0.5, 1.6))
+
     async def warm(self):
         """Прогрев как в token-miner: навигация на страницу поиска, СЛУШАЕМ
         ответы — ждём 200 на СОБСТВЕННОМ u-search XHR страницы (= wbaas-стена
         пройдена, cookie x_wbaas_token выставлен). Потом проверяем in-page fetch.
         Успех → healthy; неудача → экспоненциальный backoff."""
+        # Залипание: N неудач подряд → текущий контекст, скорее всего, walled на
+        # уровне document (498 на самой навигации, ре-навигация не помогает).
+        # Пересоздаём браузер со свежим фингерпринтом ПЕРЕД прогревом.
+        if WARM_RELAUNCH_AFTER > 0 and self._fails_since_relaunch >= WARM_RELAUNCH_AFTER:
+            log.warning("дорожка %d: %d неудач подряд — пересоздаю браузер перед прогревом",
+                        self.idx, self._fails_since_relaunch)
+            if await self._relaunch():
+                self._fails_since_relaunch = 0
+
         url = SEARCH_PAGE_URL.format(query=quote(WARM_QUERY))
         seen = {"ok": False, "statuses": [], "all": []}
 
@@ -234,11 +268,7 @@ class Lane:
                         continue
                 end = time.time() + per_attempt
                 while time.time() < end and not seen["ok"]:
-                    await self._nudge()
-                    try:
-                        await self._page.wait_for_timeout(2500)
-                    except Exception:  # noqa: BLE001
-                        await asyncio.sleep(2.5)
+                    await self._human_browse()
                 if seen["ok"]:
                     break
                 log.info("дорожка %d: попытка %d, 200 нет (u-search: %s)",
@@ -255,6 +285,7 @@ class Lane:
         if seen["ok"]:
             self.healthy = True
             self._warm_fails = 0
+            self._fails_since_relaunch = 0
             self._next_warm = 0.0
             self._last_warm = time.monotonic()
             log.info("дорожка %d прогрета: u-search 200 (wbaas пройден)", self.idx)
@@ -262,6 +293,7 @@ class Lane:
 
         self.healthy = False
         self._warm_fails += 1
+        self._fails_since_relaunch += 1
         backoff = min(MAINT_INTERVAL_S * (2 ** self._warm_fails), WARM_BACKOFF_MAX_S)
         self._next_warm = time.monotonic() + backoff
         log.warning("дорожка %d: прогрев не дал 200 (подряд %d, u-search: %s) — backoff %.0fс",
