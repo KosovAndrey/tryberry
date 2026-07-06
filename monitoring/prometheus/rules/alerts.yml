@@ -156,8 +156,11 @@ groups:
       # аннотации). Загрублено (2026-06-23): порог >5 за 15м + for:5m — одиночные
       # удалённые товары молчат, а реальный сбой резолва (формула уехала / шард лёг,
       # десятки not_found) ловится. Дрейф формулы отдельно ловит WBBasketFormulaDrift.
+      # Ещё загрублено (2026-07-06): под нагрузочным объёмом (5k синтетиков) фоновая
+      # доля удалённых/трансгран. артикулов давала >5/15м → алерт флапал; >20/15м
+      # оставляет фон молчащим, реальный обвал резолва (десятки not_found) ловит.
       - alert: WBBasketNotFound
-        expr: increase(tryberrybot_wb_basket_resolve_total{outcome="not_found"}[15m]) > 5
+        expr: increase(tryberrybot_wb_basket_resolve_total{outcome="not_found"}[15m]) > 20
         for: 5m
         labels:
           severity: warning
@@ -167,14 +170,19 @@ groups:
 
       # WB: формула баскета сильно промахнулась (нашли далёким перебором >±4) —
       # пора расширить таблицу/окно в wbBasketNumber.
+      # Загрублено (2026-07-06): путь САМОЗАЖИВАЕТСЯ — товар всё равно находится пробой
+      # соседей и результат кэшируется (vol→basket), т.е. probe_far — не инцидент, а
+      # напоминание обновить таблицу. Прежний >0/for:0m пейджил на каждый единичный
+      # far-probe и флапал. >30/10м + for:10m = формула настолько устарела, что десятки
+      # резолвов ходят далёким перебором (реальная латентность) — тогда чинить таблицу.
       - alert: WBBasketFormulaDrift
-        expr: increase(tryberrybot_wb_basket_resolve_total{outcome="probe_far"}[10m]) > 0
-        for: 0m
+        expr: increase(tryberrybot_wb_basket_resolve_total{outcome="probe_far"}[10m]) > 30
+        for: 10m
         labels:
           severity: warning
         annotations:
           summary: "WB: формула basket-шарда уехала"
-          description: "За последние 10 мин WB-товары находились далёким перебором (>±4 от формулы) — wbBasketNumber отстал от новых vol-диапазонов, обнови маппинг."
+          description: "За 10 мин >30 WB-товаров находились далёким перебором (>±4 от формулы) — wbBasketNumber отстал от новых vol-диапазонов, обнови таблицу порогов."
 
   - name: tryberrybot_kafka
     interval: 30s
@@ -185,9 +193,13 @@ groups:
       # уведомлений на одной партиции (ключ=product_id) упиралась в медленный
       # Telegram-egress и за минуты рассасывалась. Реальную хронику (egress лёг /
       # консьюмер встал) видно как устойчивый lag>300 дольше 15м; severe ловит
-      # CriticalKafkaConsumerLag (>1000). Структурный фикс — задача «Бандлинг».
+      # CriticalKafkaConsumerLag. Структурный фикс — задача «Бандлинг».
+      # Порог поднят (2026-07-06): под нагрузочным тестом (5k синтетиков) scraper —
+      # заведомо узкое место, партиции scrape-tasks штатно держат lag ~300-550 и
+      # алерт флапал на границе 300. >1000/партицию за 15м = партиция реально
+      # застряла (консьюмер встал / завис хендлер), а не штатный backlog под нагрузкой.
       - alert: HighKafkaConsumerLag
-        expr: kafka_consumergroup_lag > 300
+        expr: kafka_consumergroup_lag > 1000
         for: 15m
         labels:
           severity: warning
@@ -195,10 +207,11 @@ groups:
           summary: "Высокий consumer lag в {{ $labels.topic }}"
           description: "Группа {{ $labels.consumergroup }} отстаёт на {{ $value }} сообщений в топике {{ $labels.topic }} дольше 15 минут"
 
-      # Сообщения копятся очень сильно
+      # Сообщения копятся очень сильно. Порог поднят вслед за warning (2026-07-06):
+      # >2500/партицию — недостижимо штатным backlog'ом, только реальный затык.
       - alert: CriticalKafkaConsumerLag
-        expr: kafka_consumergroup_lag > 1000
-        for: 2m
+        expr: kafka_consumergroup_lag > 2500
+        for: 5m
         labels:
           severity: critical
         annotations:
@@ -227,9 +240,13 @@ groups:
       # 429-троттл / осели исчерпанные строки (юзер заблокировал бота, attempts на
       # потолке). Не критично для приёма команд, но юзеры не получают алерты.
       # См. docs/SCALING-NOTIFIER-DELIVERY.md.
+      # Порог поднят (2026-07-06): под нагрузочным тестом волны алертов штатно давали
+      # глубину 100-210, которая рассасывается за минуты → флап на границе 100. Флашер
+      # ~1500/мин, поэтому 500 висящих ДОЛЬШЕ 15м = egress реально встал (Telegram лёг /
+      # жёсткий 429), а не штатный всплеск доставки.
       - alert: PendingAlertsBacklog
-        expr: tryberrybot_pending_alerts_depth > 100
-        for: 10m
+        expr: tryberrybot_pending_alerts_depth > 500
+        for: 15m
         labels:
           severity: warning
         annotations:
