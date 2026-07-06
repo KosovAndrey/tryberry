@@ -9,6 +9,7 @@ import (
 	"os"
 	"strconv"
 	"strings"
+	"time"
 
 	"gitlab.com/KosovAndrey/tryberrybot/internal/domain"
 	"gitlab.com/KosovAndrey/tryberrybot/internal/max"
@@ -295,6 +296,56 @@ func (d *deliverer) SendPlanExpiringReminder(ctx context.Context, userID int64) 
 		"⏳ Тариф скоро закончится\n\n"+
 			"Завтра истекает срок твоего тарифа. Продли, чтобы не потерять подписки и лимиты — "+
 			"иначе часть из них будет приостановлена.\n\nТарифы — кнопка «💳 Тарифы» внизу.", "")
+}
+
+// SendTrialWinback — пуш win-back-цепочки (стадия 1/2/3) с персональным кодом.
+// TG получает HTML с кнопками «Применить скидку»/«Тарифы», VK/MAX — plain-текст
+// с кодом (вводится через кнопку «🎟 Промокод» в меню).
+func (d *deliverer) SendTrialWinback(ctx context.Context, userID int64, stage int, code string, deadline time.Time) error {
+	html, plain := winbackTexts(stage, code, deadline)
+	return d.deliver(ctx, userID, 0,
+		func(ctx context.Context, chat int64) error {
+			return d.tg.SendTrialWinback(ctx, chat, html, code)
+		},
+		plain, "")
+}
+
+// winbackTexts — тексты стадий win-back для TG (HTML) и VK/MAX (plain).
+func winbackTexts(stage int, code string, deadline time.Time) (html, plain string) {
+	due := domain.FormatMSK(deadline)
+	switch stage {
+	case 1:
+		html = "🎁 <b>Триал заканчивается через 2 дня</b>\n\n" +
+			"Спасибо, что попробовал(а) поиск и быстрые проверки! Чтобы не расставаться, " +
+			fmt.Sprintf("дарю персональную скидку <b>−%d%%</b> на первый платёж любого тарифа.\n\n", domain.WinbackDiscountPct) +
+			"Твой код: <code>" + code + "</code>\n" +
+			"Применить: /promo " + code + "\n\n" +
+			"Код действует до <b>" + due + "</b> — 2 дня триала и ещё 2 после."
+		plain = "🎁 Триал заканчивается через 2 дня\n\n" +
+			fmt.Sprintf("Дарю персональную скидку −%d%% на первый платёж любого тарифа.\n\n", domain.WinbackDiscountPct) +
+			"Твой код: " + code + "\n" +
+			"Ввести его: кнопка «🎟 Промокод» в меню.\n\n" +
+			"Код действует до " + due + " — 2 дня триала и ещё 2 после."
+	case 2:
+		html = "⏳ <b>Триал закончился</b>\n\n" +
+			"Бесплатно остаются <b>5 товаров</b> и <b>1 поиск-подписка</b> (проверяю реже). " +
+			"Подписки сверх лимита я приостановил и храню их настройки ещё 7 дней.\n\n" +
+			fmt.Sprintf("Твоя скидка <b>−%d%%</b> ещё действует до <b>%s</b>:\n", domain.WinbackDiscountPct, due) +
+			"<code>" + code + "</code> → /promo " + code
+		plain = "⏳ Триал закончился\n\n" +
+			"Бесплатно остаются 5 товаров и 1 поиск-подписка (проверяю реже). " +
+			"Подписки сверх лимита я приостановил и храню их настройки ещё 7 дней.\n\n" +
+			fmt.Sprintf("Твоя скидка −%d%% ещё действует до %s. Код: %s — кнопка «🎟 Промокод» в меню.", domain.WinbackDiscountPct, due, code)
+	default: // 3
+		html = fmt.Sprintf("⌛️ <b>Скидка −%d%% сгорает сегодня</b>\n\n", domain.WinbackDiscountPct) +
+			"Код <code>" + code + "</code> действует до <b>" + due + "</b> — " +
+			"это последний шанс оформить Lite или Pro дешевле и вернуть паузные подписки, пока они не удалились.\n\n" +
+			"Применить: /promo " + code
+		plain = fmt.Sprintf("⌛️ Скидка −%d%% сгорает сегодня\n\n", domain.WinbackDiscountPct) +
+			"Код " + code + " действует до " + due + " — последний шанс оформить Lite или Pro дешевле " +
+			"и вернуть паузные подписки, пока они не удалились. Кнопка «🎟 Промокод» в меню."
+	}
+	return html, plain
 }
 
 func (d *deliverer) SendReferralRewardNotice(ctx context.Context, userID int64, friendName string, days int, granted bool) error {

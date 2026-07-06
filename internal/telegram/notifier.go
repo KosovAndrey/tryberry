@@ -280,6 +280,19 @@ func (n *Notifier) SendPlanExpiringReminder(ctx context.Context, chatID int64) e
 	return n.sendMessage(ctx, chatID, text, keyboard)
 }
 
+// SendTrialWinback — пуш win-back-цепочки конца триала (стадии 1/2/3) с
+// персональным discount-кодом. Тексты стадий собирает domain-независимый
+// WinbackText в notifier — сюда приходит готовый HTML.
+func (n *Notifier) SendTrialWinback(ctx context.Context, chatID int64, html, code string) error {
+	keyboard := map[string]any{
+		"inline_keyboard": [][]map[string]any{
+			{{"text": "🎟 Применить скидку", "callback_data": "promo:apply:" + code}},
+			{{"text": "💳 Тарифы", "callback_data": "menu:plans"}},
+		},
+	}
+	return n.sendMessage(ctx, chatID, html, keyboard)
+}
+
 // SendReferralRewardNotice — другу засчитана активация, рефереру начислены дни.
 // granted=false — награда записана в аудит, но план не менялся (бессрочный план).
 func (n *Notifier) SendReferralRewardNotice(ctx context.Context, chatID int64, friendName string, days int, granted bool) error {

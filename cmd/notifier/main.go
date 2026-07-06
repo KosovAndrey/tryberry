@@ -150,7 +150,9 @@ func run(log *slog.Logger) error {
 	// действующему плану. Живёт здесь, т.к. notifier — единственный синглтон с
 	// БД И egress в Telegram (scheduler без HTTPS_PROXY юзеру написать не может).
 	reconcileInterval := time.Duration(getEnvInt("PLAN_RECONCILE_INTERVAL_MINUTES", 15)) * time.Minute
-	go runPlanReconciler(ctx, log, searchSubRepo, subRepo, userRepo, referralRepo, sender, reconcileInterval)
+	winbackRepo := postgres.NewWinbackRepo(pool)
+	promoRepo := postgres.NewPromoRepo(pool)
+	go runPlanReconciler(ctx, log, searchSubRepo, subRepo, userRepo, referralRepo, winbackRepo, promoRepo, sender, reconcileInterval)
 
 	// Персональный дайджест «твои товары сейчас» (еженедельно). Гейт DIGEST_ENABLED —
 	// фича шлёт сообщения ВСЕМ юзерам, поэтому включается осознанно (по умолчанию выкл).
@@ -208,12 +210,18 @@ func runPlanReconciler(
 	subRepo *postgres.SubscriptionRepo,
 	userRepo *postgres.UserRepo,
 	referralRepo *postgres.ReferralRepo,
+	winbackRepo *postgres.WinbackRepo,
+	promoRepo *postgres.PromoRepo,
 	sender *deliverer,
 	interval time.Duration,
 ) {
 	tick := func() {
 		now := time.Now()
 		cutoff := now.Add(-domain.PlanGracePeriod)
+
+		// 0. Win-back конца триала (cmd/notifier/winback.go) — ДО paused-notice:
+		//    юзерам с win-back-цепочкой стадия 2 заменяет общее уведомление.
+		winbackTick(ctx, log, winbackRepo, promoRepo, userRepo, sender, now)
 
 		// 1. Пауза сверхлимитных подписок истёкших юзеров (поиск + товары).
 		//    Затронутых уведомляем ОДИН раз, объединяя оба типа.
@@ -225,8 +233,21 @@ func runPlanReconciler(
 			notify[uid] = struct{}{}
 		}
 		if len(notify) > 0 {
-			log.Info("reconcile: notifying paused users", "users", len(notify))
+			ids := make([]int64, 0, len(notify))
 			for uid := range notify {
+				ids = append(ids, uid)
+			}
+			// Триальщики с win-back-строкой получают стадию 2 цепочки (в ней и
+			// пауза, и скидка) — общий paused-notice им не шлём.
+			inWinback, err := winbackRepo.HasWinback(ctx, ids)
+			if err != nil {
+				log.Warn("reconcile: has winback", "err", err)
+			}
+			log.Info("reconcile: notifying paused users", "users", len(notify), "winback_covered", len(inWinback))
+			for uid := range notify {
+				if _, ok := inWinback[uid]; ok {
+					continue
+				}
 				if err := sender.SendPlanPausedNotice(ctx, uid); err != nil {
 					log.Error("reconcile: notify paused", "user_id", uid, "err", err)
 				}

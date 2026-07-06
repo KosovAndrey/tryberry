@@ -572,6 +572,15 @@ func (b *Bot) handleCallback(ctx context.Context, cb *tgbotapi.CallbackQuery) {
 	case cb.Data == "menu:promo":
 		b.promptCheckoutPromo(ctx, cb.From.ID, chatID, messageID, "")
 
+	case strings.HasPrefix(cb.Data, "promo:apply:"):
+		// Кнопка «Применить скидку» из win-back-пуша: применяем код как /promo КОД.
+		user, err := b.userRepo.GetByTelegramID(ctx, cb.From.ID)
+		if err != nil {
+			b.answerCallback(cb.ID, "Ошибка")
+			return
+		}
+		b.applyPromoCode(ctx, chatID, cb.From.ID, user, strings.TrimPrefix(cb.Data, "promo:apply:"), "")
+
 	case cb.Data == "menu:help":
 		b.sendHelpMenu(chatID, messageID, true)
 
