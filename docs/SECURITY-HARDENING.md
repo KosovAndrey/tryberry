@@ -130,22 +130,26 @@ nmap -Pn <IP>
 - [ ] (опц.) сменить SSH-порт с 22 на нестандартный — снижает шум сканеров.
 
 ### 4. Ротация секретов (сервер был доступен извне)
-- [ ] Раз БД и Redis торчали наружу, а RCE-попытка была — считать все секреты
-      потенциально засвеченными. Сменить в `.env` и у провайдеров:
-      - [ ] `TELEGRAM_BOT_TOKEN` (BotFather → /revoke) + `TELEGRAM_ALERT_BOT_TOKEN`
-      - [ ] `VK_GROUP_TOKEN` (настройки сообщества → перевыпустить)
-      - [ ] `MAX_BOT_TOKEN`
-      - [ ] `YOOKASSA_SECRET_KEY` / `ROBOKASSA_PASSWORD1/2` (ЛК провайдера)
-      - [ ] `S3_ACCESS_KEY_ID`/`S3_SECRET_ACCESS_KEY` (ЛК Selectel)
-      - [ ] `GRAFANA_ADMIN_PASSWORD` (+ сменить пароль в самой Grafana, если
-            логинился с ним: hash лежит в grafana_data)
+- [x] Раз БД и Redis торчали наружу, а RCE-попытка была — считать все секреты
+      потенциально засвеченными. Сменить в `.env` и у провайдеров (ротация 2026-07-06):
+      - [x] `TELEGRAM_BOT_TOKEN` (BotFather → /revoke) + `TELEGRAM_ALERT_BOT_TOKEN`
+      - [x] `VK_GROUP_TOKEN` (настройки сообщества → перевыпустить)
+      - [x] `MAX_BOT_TOKEN`
+      - [x] `ROBOKASSA_PASSWORD1/2` (ЛК Робокассы). `YOOKASSA_SECRET_KEY` — n/a:
+            провайдер `PAYMENT_PROVIDER=robokassa`, ЮKassa не активна, ключ убран из `.env`
+      - [x] `S3_ACCESS_KEY_ID`/`S3_SECRET_ACCESS_KEY` (ЛК Selectel; создан новый ключ,
+            sync 20/20 без 403 — старый ключ удалить в ЛК после подтверждения)
+      - [ ] `GRAFANA_ADMIN_PASSWORD` — отложено как принятый риск: Grafana отдаёт только
+            дашборды (datasource — read-only monitor-роль), доступ к VPS закрыт. Сменить
+            при желании (2 мин): env + профиль admin → Change password (hash в grafana_data)
       - [x] `POSTGRES_PASSWORD` (сменён в ходе инцидента)
-      - [ ] `VK_CALLBACK_SECRET`, `MAX_CALLBACK_SECRET`
+      - [x] `VK_CALLBACK_SECRET`, `MAX_CALLBACK_SECRET`
       - [x] `TELEGRAM_WEBHOOK_SECRET` — n/a: в polling-режиме не используется и
             в `.env` не задан, ротировать нечего (см. ранбук, шаг 6)
-      - [ ] ключи/пароли в `xray/config.json` и `wireguard/*` (если провайдер
-            VPN/VLESS позволяет — перевыпустить)
-- [ ] `chmod 600 .env` (входит в `server-harden.sh`).
+      - [x] `xray/config.json` — старые un1.pro выведены, новый сервер der9.joybang.site
+            (2 плеча: reality+vision tcp:443 + ws+tls:9443), egress на Telegram работает.
+            `wireguard/*` — резервное плечо, egress-only, оставлено как принятый риск
+- [x] `chmod 600 .env` (входит в `server-harden.sh`).
 - [x] `.env`, `xray/config.json`, `wireguard/*` в `.gitignore` (секреты не в git).
 
 ---
