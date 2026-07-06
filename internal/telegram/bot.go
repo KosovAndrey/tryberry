@@ -162,7 +162,7 @@ func (b *Bot) SetCommands() error {
 		{Command: "track_search", Description: "Отслеживать поиск — /track_search <ссылка>"},
 		{Command: "list_search", Description: "Мои поиск-подписки"},
 		{Command: "plans", Description: "💳 Тарифы и подписка"},
-		{Command: "trial", Description: "🎁 Триал поиска (3 дня)"},
+		{Command: "trial", Description: "🎁 Триал поиска (10 дней)"},
 		{Command: "promo", Description: "🎟 Активировать промокод"},
 		{Command: "ref", Description: "👥 Пригласить друга"},
 		{Command: "profile", Description: "👤 Профиль"},

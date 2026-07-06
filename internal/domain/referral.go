@@ -11,7 +11,9 @@ const (
 // ЦИФРЫ РЕФЕРАЛКИ МЕНЯЮТСЯ ЗДЕСЬ (как и каталог тарифов).
 const (
 	// ReferralTrialDuration — расширенный триал приглашённому (вместо TrialDuration).
-	ReferralTrialDuration = 7 * 24 * time.Hour
+	// Держать СТРОГО больше TrialDuration, иначе «расширенный» станет даунгрейдом
+	// (тексты рефералки показывают оба числа: «14 вместо 10»).
+	ReferralTrialDuration = 14 * 24 * time.Hour
 
 	// ReferralActivatedRewardDays — дней рефереру за «активного» друга.
 	ReferralActivatedRewardDays = 5

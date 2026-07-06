@@ -5,8 +5,11 @@ import (
 	"time"
 )
 
-// TrialDuration — срок бесплатного триала поиска.
-const TrialDuration = 3 * 24 * time.Hour
+// TrialDuration — срок бесплатного триала поиска. 10 дней: медианный товар
+// меняет цену реже раза в неделю — за 3 дня юзер не успевал получить ни одного
+// алерта (wow-момент), 10 покрывают ~1.5 цикла + волну акций МП
+// (docs/TARIFF-FREE-SEARCH-LINK.md, ревизия тарифов).
+const TrialDuration = 10 * 24 * time.Hour
 
 // PlanGracePeriod — сколько держим поиск-подписки на паузе после истечения плана,
 // прежде чем удалить насовсем. Юзеру обещаем 7 дней на продление; храним 8 с
@@ -28,6 +31,13 @@ type Plan struct {
 	// быструю дорожку (reseller-tasks, отдельный пул токенов). 0 → дефолт-фолбэк.
 	Interval time.Duration
 
+	// SearchInterval — отдельная частота проверки ПОИСК-подписок: поисковый
+	// скрейп сильно дороже товарного (WB-горячие — навигация браузера в
+	// сайдкаре, Ozon — дорожка ozon-miner). 0 → берётся Interval (для всех
+	// платных планов поведение прежнее); задаёт его только free (6ч) — редкий
+	// каданс фри-поиска как хука/воронки.
+	SearchInterval time.Duration
+
 	// PriceRub — цена разовой оплаты в рублях. 0 → план не покупается.
 	PriceRub int
 
@@ -38,8 +48,8 @@ type Plan struct {
 
 // Plans — каталог тарифов. ЦИФРЫ МЕНЯЮТСЯ ЗДЕСЬ.
 var Plans = map[string]Plan{
-	"free":           {Name: "free", Title: "Free", MaxProduct: 5, MaxSearch: 0, Interval: 60 * time.Minute, PriceRub: 0},
-	"trial":          {Name: "trial", Title: "Триал (3 дня)", MaxProduct: 100, MaxSearch: 10, Interval: 15 * time.Minute, PriceRub: 0},
+	"free":           {Name: "free", Title: "Free", MaxProduct: 5, MaxSearch: 1, Interval: 60 * time.Minute, SearchInterval: 6 * time.Hour, PriceRub: 0},
+	"trial":          {Name: "trial", Title: "Триал (10 дней)", MaxProduct: 100, MaxSearch: 10, Interval: 15 * time.Minute, PriceRub: 0},
 	"lite":           {Name: "lite", Title: "Lite", MaxProduct: 20, MaxSearch: 3, Interval: 30 * time.Minute, PriceRub: 199, SubPriceRub: 189},
 	"pro":            {Name: "pro", Title: "Pro", MaxProduct: 100, MaxSearch: 10, Interval: 15 * time.Minute, PriceRub: 499, SubPriceRub: 479},
 	"reseller_start": {Name: "reseller_start", Title: "Reseller Start", MaxProduct: 5, MaxSearch: 1, Interval: time.Minute, PriceRub: 990, SubPriceRub: 940},
@@ -87,6 +97,15 @@ func (p Plan) EffectiveInterval(def time.Duration) time.Duration {
 		return p.Interval
 	}
 	return def
+}
+
+// EffectiveSearchInterval — частота проверки поиск-подписок: SearchInterval,
+// либо обычный EffectiveInterval, если план отдельную не задаёт.
+func (p Plan) EffectiveSearchInterval(def time.Duration) time.Duration {
+	if p.SearchInterval > 0 {
+		return p.SearchInterval
+	}
+	return p.EffectiveInterval(def)
 }
 
 // BundleWindow — окно коалесинга алертов перед отправкой одним сообщением

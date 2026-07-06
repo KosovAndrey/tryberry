@@ -235,13 +235,16 @@ type SchedulableProduct struct {
 	LastEnqueuedAt *time.Time
 	OwnerPlan      string
 	PlanExpiresAt  *time.Time
+	// LastPriceChangeAt — когда цена менялась в последний раз (NULL = новый
+	// трек); питает волатильностный бэкофф в планировщике (domain.VolatilityMult).
+	LastPriceChangeAt *time.Time
 }
 
 // GetSchedulableProducts — по строке на каждую активную товарную подписку: товар
 // + план владельца. MIN-интервал и решение «пора» планировщик считает в Go.
 func (r *ProductRepo) GetSchedulableProducts(ctx context.Context) ([]SchedulableProduct, error) {
 	const q = `
-		SELECT p.id, p.url, p.last_enqueued_at, u.plan, u.plan_expires_at
+		SELECT p.id, p.url, p.last_enqueued_at, u.plan, u.plan_expires_at, p.last_price_change_at
 		FROM products p
 		JOIN subscriptions s ON s.product_id = p.id AND s.active = TRUE
 		JOIN users u ON u.id = s.user_id`
@@ -255,12 +258,21 @@ func (r *ProductRepo) GetSchedulableProducts(ctx context.Context) ([]Schedulable
 	var out []SchedulableProduct
 	for rows.Next() {
 		var p SchedulableProduct
-		if err := rows.Scan(&p.ProductID, &p.URL, &p.LastEnqueuedAt, &p.OwnerPlan, &p.PlanExpiresAt); err != nil {
+		if err := rows.Scan(&p.ProductID, &p.URL, &p.LastEnqueuedAt, &p.OwnerPlan, &p.PlanExpiresAt, &p.LastPriceChangeAt); err != nil {
 			return nil, err
 		}
 		out = append(out, p)
 	}
 	return out, rows.Err()
+}
+
+// TouchPriceChanged — зафиксировать смену цены товара (сбрасывает
+// волатильностный бэкофф в ×1). Дёргает scraper-worker рядом с change-only
+// INSERT в price_history.
+func (r *ProductRepo) TouchPriceChanged(ctx context.Context, productID int64) error {
+	const q = `UPDATE products SET last_price_change_at = NOW() WHERE id = $1`
+	_, err := r.db.Exec(ctx, q, productID)
+	return err
 }
 
 // ClaimEnqueued — отметить товары поставленными в очередь (last_enqueued_at=NOW).

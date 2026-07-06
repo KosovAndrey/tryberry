@@ -552,8 +552,15 @@ func productLimitText(plan domain.Plan, used int) string {
 func (b *Bot) searchLimitText(plan domain.Plan, used int) string {
 	if plan.MaxSearch == 0 {
 		return "🔎 Поиск-подписки на твоём тарифе пока недоступны.\n\n" +
-			"Поиск по ссылке есть на тарифах <b>Lite</b> и выше — /plans. Также можно попробовать бесплатный триал на 3 дня — команда /trial.\n\n" +
+			"Поиск по ссылке есть на тарифах <b>Lite</b> и выше — /plans. Также можно попробовать бесплатный триал на 10 дней — команда /trial.\n\n" +
 			"По вопросам — @kosov_andrey."
+	}
+	if plan.Name == "free" {
+		return fmt.Sprintf(
+			"🚫 На тарифе <b>Free</b> доступна одна поиск-подписка (%d из %d занято), проверка — %s.\n\n"+
+				"Больше поисков и проверка чаще — на тарифах <b>Lite</b> и <b>Pro</b>: /plans. Новым пользователям — бесплатный триал на 10 дней: /trial.\n\n"+
+				"Отменить ненужное: /list_search.",
+			used, plan.MaxSearch, domain.IntervalPhrase(plan.EffectiveSearchInterval(plan.Interval)))
 	}
 	return fmt.Sprintf(
 		"🚫 Достигнут лимит поиск-подписок тарифа <b>%s</b>: %d из %d.\n\n"+

@@ -51,7 +51,7 @@ func (b *Bot) sendPlansMenu(ctx context.Context, tgID, chatID int64, messageID i
 		))
 	}
 
-	sb.WriteString("Бесплатный тариф Free — 5 товаров, без поиск-подписок. Новым пользователям доступен триал поиска: /trial.")
+	sb.WriteString("Бесплатный тариф Free — 5 товаров и 1 поиск-подписка (проверка раз в 6 часов). Новым пользователям доступен триал поиска: /trial.")
 
 	rows = append(rows, tgbotapi.NewInlineKeyboardRow(
 		tgbotapi.NewInlineKeyboardButtonData("◀️ В меню", "menu:main"),

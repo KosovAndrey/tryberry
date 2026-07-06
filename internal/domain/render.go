@@ -25,7 +25,7 @@ var PlanShowcase = []struct {
 	{"reseller_pro", "максимум скорости и объёма"},
 }
 
-// IntervalPhrase — «каждую минуту / каждые 15 минут / каждый час».
+// IntervalPhrase — «каждую минуту / каждые 15 минут / каждый час / каждые 6 часов».
 func IntervalPhrase(d time.Duration) string {
 	m := int(d.Minutes())
 	switch {
@@ -33,8 +33,23 @@ func IntervalPhrase(d time.Duration) string {
 		return "каждую минуту"
 	case m == 60:
 		return "каждый час"
+	case m > 60 && m%60 == 0:
+		h := m / 60
+		return fmt.Sprintf("каждые %d %s", h, hoursWord(h))
 	default:
 		return fmt.Sprintf("каждые %d минут", m)
+	}
+}
+
+// hoursWord — склонение «час/часа/часов» для N>1 (2 часа, 6 часов, 22 часа).
+func hoursWord(n int) string {
+	switch {
+	case n%100 >= 11 && n%100 <= 14:
+		return "часов"
+	case n%10 >= 2 && n%10 <= 4:
+		return "часа"
+	default:
+		return "часов"
 	}
 }
 

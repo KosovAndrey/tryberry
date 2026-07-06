@@ -289,6 +289,12 @@ below_target) — **новой продуктовой семантики не т
 
 ## 4. Имплементация (чек-лист)
 
+Статус 2026-07-06: пп. 1–5 и 7 (метрики частично) РЕАЛИЗОВАНЫ в этой ветке
+(миграция 026, domain.VolatilityMult/ApplyVolatility + тесты, тач колонок в
+воркерах, волатильность в обоих тиках планировщика c fastSub-исключением
+reseller, тексты TG/VK/MAX + лендинг, триал 10 дней / реферальный 14).
+Осталось: п. 6 (win-back пуш) и деплой с накатом миграции.
+
 1. `internal/domain/plan.go`: `MaxSearch: 1` + `SearchInterval` для free;
    `EffectiveSearchInterval(def)`; `VolatilityMult(lastChange, subscribers,
    now)` с юнит-тестами (границы лестницы, NULL, кап популярности);

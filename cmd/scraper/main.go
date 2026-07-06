@@ -264,6 +264,12 @@ func makeHandler(
 				if err := priceHistoryRepo.Insert(ctx, task.ProductID, result.Price); err != nil {
 					return fmt.Errorf("insert price history: %w", err)
 				}
+				// Смена цены сбрасывает волатильностный бэкофф планировщика
+				// (docs/TARIFF-FREE-SEARCH-LINK.md §2). Best-effort: не сорвал
+				// запись истории — не валим и скрейп.
+				if err := productRepo.TouchPriceChanged(ctx, task.ProductID); err != nil {
+					log.Warn("touch price changed", "product_id", task.ProductID, "err", err)
+				}
 			}
 			if priceCache != nil {
 				if err := priceCache.Set(ctx, task.ProductID, result.Price); err != nil {

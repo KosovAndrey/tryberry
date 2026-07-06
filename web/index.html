@@ -4,7 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>TryBerry — отслеживание цен на маркетплейсах в Telegram, VK и MAX</title>
-<meta name="description" content="TryBerry следит за ценами на Wildberries, Ozon, Яндекс Маркете и AliExpress и сам пишет в Telegram, ВКонтакте или MAX, когда товар подешевел или достиг нужной цены. История цены на графике, бесплатный план и триал 3 дня.">
+<meta name="description" content="TryBerry следит за ценами на Wildberries, Ozon, Яндекс Маркете и AliExpress и сам пишет в Telegram, ВКонтакте или MAX, когда товар подешевел или достиг нужной цены. История цены на графике, бесплатный план и триал 10 дней.">
 <link rel="icon" type="image/png" href="/logo.png">
 <link rel="apple-touch-icon" href="/logo.png">
 <link rel="preload" href="/fonts/onest-400-cyrillic.woff2" as="font" type="font/woff2" crossorigin>
@@ -497,7 +497,7 @@ footer{background:var(--plum-deep);padding:70px 0 40px;border-top:1px solid var(
     { "@type": "Question", "name": "Нужно ли давать боту логин или доступ к аккаунту маркетплейса?", "acceptedAnswer": { "@type": "Answer", "text": "Нет. TryBerry работает только с публичной ценой по ссылке и не запрашивает ваши данные от маркетплейса. Достаточно ссылки на товар или на страницу выдачи." } },
     { "@type": "Question", "name": "Чем «поиск по ссылке» отличается от отслеживания товара?", "acceptedAnswer": { "@type": "Answer", "text": "Отслеживание товара следит за одной карточкой. Поиск по ссылке следит за целой страницей результатов — сотнями товаров сразу — и присылает те, что подешевели по вашей стратегии." } },
     { "@type": "Question", "name": "Что за три стратегии срабатывания?", "acceptedAnswer": { "@type": "Answer", "text": "Порог цены — уведомить при достижении вашей суммы. Любое снижение — при первом падении относительно цены на момент подписки. Скидка от процента — только когда падение превысит заданный процент." } },
-    { "@type": "Question", "name": "Это правда бесплатно?", "acceptedAnswer": { "@type": "Answer", "text": "Да. Бесплатный план (5 товарных подписок) доступен навсегда и без карты. Поиск по ссылке можно бесплатно попробовать 3 дня по триалу — он включается один раз на аккаунт командой /trial. Платные тарифы оплачиваются в боте через Робокассу." } },
+    { "@type": "Question", "name": "Это правда бесплатно?", "acceptedAnswer": { "@type": "Answer", "text": "Да. Бесплатный план (5 товарных подписок и 1 поиск по ссылке) доступен навсегда и без карты. Поиск по ссылке можно бесплатно попробовать 10 дней по триалу — он включается один раз на аккаунт командой /trial. Платные тарифы оплачиваются в боте через Робокассу." } },
     { "@type": "Question", "name": "Как часто бот проверяет цены?", "acceptedAnswer": { "@type": "Answer", "text": "Зависит от тарифа: на Free — раз в 60 минут, на Lite — раз в 30, на Триале и Pro — раз в 15, на тарифах для реселлеров — раз в минуту. Уведомление приходит в Telegram сразу после того, как условие сработало." } },
     { "@type": "Question", "name": "Что значит «учёт баллов за отзыв»?", "acceptedAnswer": { "@type": "Answer", "text": "У части товаров WB начисляет баллы за отзыв. Мы вычитаем их из цены и показываем эффективную стоимость — то, во что покупка обойдётся на деле, а не «на витрине»." } },
     { "@type": "Question", "name": "Как оплатить тариф и можно ли вернуть деньги?", "acceptedAnswer": { "@type": "Answer", "text": "Оплата проходит в боте через Робокассу — картой или по СБП. Подписка активируется автоматически сразу после платежа, чек приходит через «Мой налог». Если подключено автопродление — оплата списывается раз в 30 дней, перед списанием придёт напоминание; продление можно отменить в любой момент, а возврат за неиспользованный период оформляется по заявлению на contact@kosovandrey.ru. Подробности — в разделе «Оплата и возврат» и в публичной оферте." } }
@@ -537,7 +537,7 @@ footer{background:var(--plum-deep);padding:70px 0 40px;border-top:1px solid var(
         <button type="button" class="btn-primary" id="heroStart">Начать бесплатно</button>
         <a href="#plans" class="btn-ghost">Посмотреть тарифы</a>
       </div>
-      <div class="hero-note" data-reveal style="--d:.35s"><b>Бесплатный план</b> навсегда · триал 3 дня · без карты</div>
+      <div class="hero-note" data-reveal style="--d:.35s"><b>Бесплатный план</b> навсегда · триал 10 дней · без карты</div>
     </div>
     <div data-reveal="scale" style="--d:.2s">
       <div class="phone">
@@ -712,7 +712,7 @@ footer{background:var(--plum-deep);padding:70px 0 40px;border-top:1px solid var(
     <div class="sec-head">
       <span class="eyebrow" data-reveal>Тарифы</span>
       <h2 data-reveal style="--d:.05s">Начните <span class="accent">бесплатно</span>. Растите, когда нужно.</h2>
-      <p data-reveal style="--d:.1s">Бесплатный план — навсегда и без карты. Хотите попробовать «Поиск по ссылке» — включается 3-дневный триал в один клик.</p>
+      <p data-reveal style="--d:.1s">Бесплатный план — навсегда и без карты. Хотите попробовать «Поиск по ссылке» — включается 10-дневный триал в один клик.</p>
     </div>
     <div class="plan-grid">
       <div class="plan" data-reveal>
@@ -721,15 +721,15 @@ footer{background:var(--plum-deep);padding:70px 0 40px;border-top:1px solid var(
         <div class="desc">Для старта и слежки за избранным.</div>
         <ul>
           <li><svg viewBox="0 0 24 24"><path d="M20 6 9 17l-5-5"/></svg>5 товарных подписок</li>
-          <li class="off"><svg viewBox="0 0 24 24"><path d="M18 6 6 18M6 6l12 12"/></svg>Поиск по ссылке</li>
+          <li><svg viewBox="0 0 24 24"><path d="M20 6 9 17l-5-5"/></svg>1 поиск по ссылке (раз в 6 часов)</li>
           <li><svg viewBox="0 0 24 24"><path d="M20 6 9 17l-5-5"/></svg>Проверка раз в 60 мин</li>
           <li><svg viewBox="0 0 24 24"><path d="M20 6 9 17l-5-5"/></svg>Все 3 стратегии и учёт баллов</li>
         </ul>
       </div>
       <div class="plan" data-reveal style="--d:.06s">
-        <span class="pill">3 дня бесплатно</span>
+        <span class="pill">10 дней бесплатно</span>
         <h3>Триал</h3>
-        <div class="price">0 ₽<small> / 3 дня</small></div>
+        <div class="price">0 ₽<small> / 10 дней</small></div>
         <div class="desc">Полный доступ без обязательств.</div>
         <ul>
           <li><svg viewBox="0 0 24 24"><path d="M20 6 9 17l-5-5"/></svg>100 товарных подписок</li>
@@ -855,7 +855,7 @@ footer{background:var(--plum-deep);padding:70px 0 40px;border-top:1px solid var(
       </div>
       <div class="faq-item" data-reveal>
         <button class="faq-q">Это правда бесплатно?</button>
-        <div class="faq-a"><div class="faq-a-in">Да. Бесплатный план (5 товарных подписок) доступен навсегда и без карты. Поиск по ссылке можно бесплатно попробовать 3 дня по триалу — он включается один раз на аккаунт командой /trial. Платные тарифы оплачиваются в боте через Робокассу.</div></div>
+        <div class="faq-a"><div class="faq-a-in">Да. Бесплатный план (5 товарных подписок и 1 поиск по ссылке) доступен навсегда и без карты. Поиск по ссылке можно бесплатно попробовать 10 дней по триалу — он включается один раз на аккаунт командой /trial. Платные тарифы оплачиваются в боте через Робокассу.</div></div>
       </div>
       <div class="faq-item" data-reveal>
         <button class="faq-q">Как часто бот проверяет цены?</button>

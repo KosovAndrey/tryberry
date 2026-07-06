@@ -46,7 +46,7 @@ func (b *Bot) sendPlans(ctx context.Context, vkID int64, user *domain.User) {
 			ColorPrimary,
 		)})
 	}
-	sb.WriteString("Бесплатный тариф Free — 5 товаров, без поиск-подписок. Новым пользователям доступен триал поиска — кнопка «Триал».")
+	sb.WriteString("Бесплатный тариф Free — 5 товаров и 1 поиск-подписка (проверка раз в 6 часов). Новым пользователям доступен триал поиска — кнопка «Триал».")
 
 	b.send(ctx, vkID, sb.String(), &Keyboard{Inline: true, Buttons: rows})
 }

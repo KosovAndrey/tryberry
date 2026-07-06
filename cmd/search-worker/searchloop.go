@@ -94,6 +94,27 @@ type entry struct {
 	eff  int64
 }
 
+// minPriceTopN — по скольким первым позициям выдачи считаем минимальную цену
+// для детекта волатильности запроса.
+const minPriceTopN = 10
+
+// minTopNPrice — минимальная эффективная цена (в копейках) среди первых
+// minPriceTopN позиций выдачи; ok=false, если нечего считать.
+func minTopNPrice(entries []entry) (int64, bool) {
+	var minEff int64
+	found := false
+	for _, e := range entries {
+		if e.item.Position > minPriceTopN || e.eff <= 0 {
+			continue
+		}
+		if !found || e.eff < minEff {
+			minEff = e.eff
+			found = true
+		}
+	}
+	return minEff, found
+}
+
 func (w *searchWorker) scrapeQuery(ctx context.Context, q *domain.SearchQuery) error {
 	ss, err := w.registry.FindSearchByURL(q.NormalizedURL)
 	if err != nil {
@@ -148,6 +169,15 @@ func (w *searchWorker) scrapeQuery(ctx context.Context, q *domain.SearchQuery) e
 		return fmt.Errorf("batch upsert results: %w", err)
 	}
 
+	// Волатильность выдачи для бэкоффа планировщика: «изменением» считаем только
+	// смену МИНИМАЛЬНОЙ цены топ-N (состав/позиции ротируются, особенно у Ozon,
+	// и дребезжали бы бэкоффом). UpdateMinPrice — no-op, если минимум не менялся.
+	if minEff, ok := minTopNPrice(entries); ok {
+		if err := w.queries.UpdateMinPrice(ctx, q.ID, searchsub.Rubles(minEff)); err != nil {
+			w.log.Warn("update min price", "query_id", q.ID, "err", err)
+		}
+	}
+
 	w.log.Info("query scraped",
 		"query_id", q.ID, "text", q.QueryText,
 		"items", len(entries), "pages", set.PagesRead, "total_found", set.TotalFound)
@@ -162,7 +192,10 @@ func (w *searchWorker) scrapeQuery(ctx context.Context, q *domain.SearchQuery) e
 	}
 	now := time.Now()
 	for _, sub := range subs {
-		iv := domain.EffectivePlanFor(sub.OwnerPlan, sub.OwnerPlanExpiresAt, now).EffectiveInterval(w.defaultInterval)
+		// Поиск-интервал плана (у free он отдельный, 6ч): free-подписчик запроса,
+		// который делит выдачу с pro (скрейп каждые 15м), оценивается не чаще
+		// СВОЕГО поиск-каданса.
+		iv := domain.EffectivePlanFor(sub.OwnerPlan, sub.OwnerPlanExpiresAt, now).EffectiveSearchInterval(w.defaultInterval)
 		if !shouldEvaluate(sub.LastEvaluatedAt, iv, now) {
 			continue // оценивали недавно — не чаще интервала тарифа
 		}

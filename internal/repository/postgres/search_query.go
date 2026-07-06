@@ -127,6 +127,9 @@ type SchedulableRow struct {
 	LastEnqueuedAt *time.Time
 	OwnerPlan      string
 	PlanExpiresAt  *time.Time
+	// LastChangeAt — когда менялась минимальная цена топ-N выдачи (NULL = новый
+	// запрос); питает волатильностный бэкофф в планировщике.
+	LastChangeAt *time.Time
 }
 
 // GetSchedulable — по строке на каждую активную поиск-подписку: запрос + план
@@ -135,7 +138,7 @@ type SchedulableRow struct {
 func (r *SearchQueryRepo) GetSchedulable(ctx context.Context) ([]SchedulableRow, error) {
 	const q = `
 		SELECT sq.id, sq.marketplace, sq.normalized_url, sq.query_text, sq.last_enqueued_at,
-		       u.plan, u.plan_expires_at
+		       u.plan, u.plan_expires_at, sq.last_change_at
 		FROM search_queries sq
 		JOIN search_subscriptions ss ON ss.search_query_id = sq.id AND ss.active = TRUE
 		JOIN users u ON u.id = ss.user_id`
@@ -150,12 +153,26 @@ func (r *SearchQueryRepo) GetSchedulable(ctx context.Context) ([]SchedulableRow,
 	for rows.Next() {
 		var row SchedulableRow
 		if err := rows.Scan(&row.QueryID, &row.Marketplace, &row.NormalizedURL, &row.QueryText,
-			&row.LastEnqueuedAt, &row.OwnerPlan, &row.PlanExpiresAt); err != nil {
+			&row.LastEnqueuedAt, &row.OwnerPlan, &row.PlanExpiresAt, &row.LastChangeAt); err != nil {
 			return nil, err
 		}
 		out = append(out, row)
 	}
 	return out, rows.Err()
+}
+
+// UpdateMinPrice — зафиксировать минимальную цену топ-N выдачи. Если она
+// изменилась с прошлого скрейпа (или ещё не записана) — обновляется вместе с
+// last_change_at, сбрасывая волатильностный бэкофф; иначе UPDATE не трогает ни
+// одной строки (no-op). Состав/позиции выдачи изменением НЕ считаются —
+// ротация (особенно Ozon) дребезжала бы бэкоффом.
+func (r *SearchQueryRepo) UpdateMinPrice(ctx context.Context, id int64, minPrice float64) error {
+	const q = `
+		UPDATE search_queries
+		SET last_min_price = $2, last_change_at = NOW()
+		WHERE id = $1 AND last_min_price IS DISTINCT FROM $2`
+	_, err := r.db.Exec(ctx, q, id, minPrice)
+	return err
 }
 
 // ClaimEnqueued — отметить запросы поставленными в очередь (last_enqueued_at=NOW).

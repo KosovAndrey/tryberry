@@ -176,18 +176,22 @@ func productSchedulerTick(
 	now := time.Now()
 
 	type agg struct {
-		url    string
-		eff    time.Duration
-		lastEn *time.Time
-		has    bool // есть хоть один подписчик, по которому товар скрейпится
+		url        string
+		eff        time.Duration
+		lastEn     *time.Time
+		lastChange *time.Time // последняя смена цены — волатильностный бэкофф
+		subs       int        // активных подписчиков — кап популярности
+		fastSub    bool       // есть подписчик минутного (reseller) тарифа — бэкофф не применяем
+		has        bool       // есть хоть один подписчик, по которому товар скрейпится
 	}
 	byProduct := make(map[int64]*agg)
 	for _, r := range rows {
 		a, ok := byProduct[r.ProductID]
 		if !ok {
-			a = &agg{url: r.URL, lastEn: r.LastEnqueuedAt}
+			a = &agg{url: r.URL, lastEn: r.LastEnqueuedAt, lastChange: r.LastPriceChangeAt}
 			byProduct[r.ProductID] = a
 		}
+		a.subs++
 		lurl := strings.ToLower(r.URL)
 		// Ozon — единственный антибот, требующий троттла: FAB + один аккаунт/IP за
 		// общим мобильным прокси не терпят частого опроса. Я.Маркет СЮДА БОЛЬШЕ НЕ
@@ -197,6 +201,13 @@ func productSchedulerTick(
 		isOzon := strings.Contains(lurl, "ozon.ru")
 		plan := domain.EffectivePlanFor(r.OwnerPlan, r.PlanExpiresAt, now)
 		iv := plan.EffectiveInterval(defaultInterval)
+		// Reseller-подписчик (минутный тариф) выключает волатильностный бэкофф
+		// для товара целиком — в т.ч. на Ozon, где его eff после множителя/пола
+		// = 20м: скорость — ядро ценности reseller, замедлять его нельзя нигде.
+		// Определяем по ТАРИФНОМУ интервалу (до Ozon-правок).
+		if iv <= resellerLaneCutoff {
+			a.fastSub = true
+		}
 		if isOzon {
 			// Ozon троттлим: тарифный каданс × ozonMult, с полом ozonMinInterval.
 			// Reseller-планы (1 мин) идут этим же путём → их Ozon-каданс = пол 20м
@@ -223,7 +234,16 @@ func productSchedulerTick(
 		if !a.has {
 			continue
 		}
-		if a.lastEn != nil && now.Sub(*a.lastEn) < a.eff {
+		// Волатильностный бэкофф: давно не менявшаяся цена → реже опрос
+		// (×1..×3, сброс первым изменением). Товары с reseller-подписчиком не
+		// трогаем совсем (fastSub, вкл. их Ozon-путь с полом 20м) — частота и
+		// есть продукт reseller-тарифов. Потолка нет: худший товарный случай
+		// 60м×3 = 3ч. Ozon-пол выше не нарушается (множитель ≥ 1).
+		eff := a.eff
+		if !a.fastSub && eff > resellerLaneCutoff {
+			eff = domain.ApplyVolatility(eff, a.lastChange, a.subs, now, 0)
+		}
+		if a.lastEn != nil && now.Sub(*a.lastEn) < eff {
 			continue
 		}
 		dueList = append(dueList, due{id: id, url: a.url})
@@ -325,23 +345,34 @@ func searchSchedulerTick(
 	now := time.Now()
 
 	// Группируем по запросу: эффективный интервал = MIN по подписчикам.
+	// Интервал ПОИСКА — отдельный от товарного (EffectiveSearchInterval):
+	// поисковый скрейп дороже, free задаёт свой редкий каданс (6ч).
 	type agg struct {
-		mp     string
-		url    string
-		text   string
-		eff    time.Duration
-		lastEn *time.Time
+		mp         string
+		url        string
+		text       string
+		eff        time.Duration
+		lastEn     *time.Time
+		lastChange *time.Time // последняя смена мин. цены топ-N — бэкофф
+		subs       int        // активных подписчиков — кап популярности
+		fastSub    bool       // есть подписчик минутного (reseller) тарифа — бэкофф не применяем
 	}
 	byQuery := make(map[int64]*agg)
 	for _, r := range rows {
-		iv := domain.EffectivePlanFor(r.OwnerPlan, r.PlanExpiresAt, now).EffectiveInterval(defaultInterval)
+		iv := domain.EffectivePlanFor(r.OwnerPlan, r.PlanExpiresAt, now).EffectiveSearchInterval(defaultInterval)
 		a, ok := byQuery[r.QueryID]
 		if !ok {
-			byQuery[r.QueryID] = &agg{mp: r.Marketplace, url: r.NormalizedURL, text: r.QueryText, eff: iv, lastEn: r.LastEnqueuedAt}
-			continue
-		}
-		if iv < a.eff {
+			a = &agg{mp: r.Marketplace, url: r.NormalizedURL, text: r.QueryText, eff: iv, lastEn: r.LastEnqueuedAt, lastChange: r.LastChangeAt}
+			byQuery[r.QueryID] = a
+		} else if iv < a.eff {
 			a.eff = iv
+		}
+		a.subs++
+		// По тарифному интервалу (до Ozon-пола): Ozon-запрос перекупа флорится до
+		// 30м и уходит с fast-дорожки, но волатильностный бэкофф на него всё
+		// равно не распространяется — reseller не замедляем нигде.
+		if iv <= resellerLaneCutoff {
+			a.fastSub = true
 		}
 	}
 
@@ -360,10 +391,20 @@ func searchSchedulerTick(
 	// Отбираем созревшие.
 	var due []dueQuery
 	for id, a := range byQuery {
-		if a.lastEn != nil && now.Sub(*a.lastEn) < a.eff {
+		// Дорожку выбираем ДО волатильности: бэкофф не должен выкидывать
+		// перекупа из fast-lane. Запросы с reseller-подписчиком (fastSub) не
+		// замедляем совсем — в т.ч. Ozon, ушедший с fast-дорожки по полу 30м.
+		fast := a.eff <= resellerLaneCutoff
+		eff := a.eff
+		if !a.fastSub {
+			// Волатильностный бэкофф + потолок: любая выдача проверяется
+			// минимум дважды в сутки (free-поиск 6ч не уезжает дальше 12ч).
+			eff = domain.ApplyVolatility(eff, a.lastChange, a.subs, now, domain.SearchIntervalCeil)
+		}
+		if a.lastEn != nil && now.Sub(*a.lastEn) < eff {
 			continue // ещё не пора
 		}
-		due = append(due, dueQuery{id: id, url: a.url, text: a.text, fast: a.eff <= resellerLaneCutoff})
+		due = append(due, dueQuery{id: id, url: a.url, text: a.text, fast: fast})
 	}
 	if len(due) == 0 {
 		return nil

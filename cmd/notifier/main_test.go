@@ -86,7 +86,7 @@ func TestSelectSearchRestores(t *testing.T) {
 	future := testNow.Add(time.Hour)
 
 	var cands []postgres.PausedSearchSub
-	// Лимиты из domain.Plans: pro.MaxSearch=10, trial.MaxSearch=10, free.MaxSearch=0.
+	// Лимиты из domain.Plans: pro.MaxSearch=10, trial.MaxSearch=10, free.MaxSearch=1.
 	// user 1: pro действует (MaxSearch=10), 4 паузных → вернём все 4.
 	for i := int64(1); i <= 4; i++ {
 		cands = append(cands, postgres.PausedSearchSub{ID: i, UserID: 1, Plan: "pro", PlanExpiresAt: ptime(future), CreatedAt: at(i)})
@@ -95,13 +95,15 @@ func TestSelectSearchRestores(t *testing.T) {
 	for i := int64(5); i <= 8; i++ {
 		cands = append(cands, postgres.PausedSearchSub{ID: i, UserID: 2, Plan: "trial", PlanExpiresAt: ptime(future), CreatedAt: at(i)})
 	}
-	// user 3: истёкший (free, MaxSearch=0), 2 паузных → не возвращаем.
+	// user 3: истёкший (→free, MaxSearch=1), 2 паузных → возвращаем СТАРЕЙШИЙ (id 9):
+	// фри-поиск как хук — после даунгрейда один поиск продолжает жить
+	// (docs/TARIFF-FREE-SEARCH-LINK.md §1, «бонус-эффект free MaxSearch=1»).
 	for i := int64(9); i <= 10; i++ {
 		cands = append(cands, postgres.PausedSearchSub{ID: i, UserID: 3, Plan: "pro", PlanExpiresAt: ptime(past), CreatedAt: at(i)})
 	}
 
 	got := selectSearchRestores(cands, testNow)
-	if want := []int64{1, 2, 3, 4, 5, 6, 7, 8}; !eq(got, want) {
+	if want := []int64{1, 2, 3, 4, 5, 6, 7, 8, 9}; !eq(got, want) {
 		t.Fatalf("restore = %v, want %v", got, want)
 	}
 }

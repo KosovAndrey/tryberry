@@ -94,7 +94,7 @@ func (r *Receiver) SetCommands() error {
 		{Command: "list", Description: "Мои подписки"},
 		{Command: "track_search", Description: "Отслеживать поиск — /track_search <ссылка>"},
 		{Command: "list_search", Description: "Мои поиск-подписки"},
-		{Command: "trial", Description: "🎁 Триал поиска (3 дня)"},
+		{Command: "trial", Description: "🎁 Триал поиска (10 дней)"},
 		{Command: "myplan", Description: "Мой тариф и лимиты"},
 		{Command: "help", Description: "Помощь"},
 	}
