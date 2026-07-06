@@ -59,17 +59,19 @@ func run(log *slog.Logger) error {
 	// Дефолт-фолбэк интервала для тарифов без своего Interval (на практике все
 	// планы его задают; фолбэк — страховка).
 	defaultInterval := time.Duration(getEnvInt("SCRAPE_INTERVAL_MINUTES", 15)) * time.Minute
-	// Пол интервала для Ozon: антибот FAB + один аккаунт/IP не терпят частого
-	// опроса (в отличие от WB basket CDN). Ozon-товары скрейпим не чаще этого,
-	// даже у reseller_pro (1 мин). 0 — отключить ограничение.
-	ozonMinInterval := time.Duration(getEnvInt("OZON_MIN_INTERVAL_MINUTES", 20)) * time.Minute
-	// Ozon идёт тарифным кадансом как WB, но в N раз реже (антибот не любит
-	// частоту): эффективный интервал Ozon-товара = интервал плана × этот множитель,
-	// с полом ozonMinInterval. Reseller-планы Ozon не тянут вовсе (см. ниже).
+	// ОПЦИОНАЛЬНЫЙ аварийный троттл Ozon-ТОВАРОВ (пол + множитель к тарифному
+	// интервалу). Исторически Ozon душили, т.к. mobile-API ходил за одним
+	// аккаунтом/IP и не терпел частоты. С переходом на браузерный сайдкар
+	// ozon-miner (антибот-безопасный транспорт) троттл больше не нужен и в проде
+	// ВЫКЛЮЧЕН (.env: OZON_MIN_INTERVAL_MINUTES=0, OZON_INTERVAL_MULTIPLIER=1) →
+	// Ozon-товары идут ПОЛНЫМ тарифным кадансом как WB/YM (reseller = 1 мин).
+	// Оставлено рычагом на случай, если сайдкар начнёт захлёбываться. Пол=0 и
+	// множитель=1 = троттл выкл. Канон: docs/SCRAPE-CADENCE.md.
+	ozonMinInterval := time.Duration(getEnvInt("OZON_MIN_INTERVAL_MINUTES", 0)) * time.Minute
+	ozonMult := getEnvInt("OZON_INTERVAL_MULTIPLIER", 1)
 	// Пол интервала для Ozon-ПОИСКА (отдельно от товарного): выдача ротируется
 	// и тянется через одну прогретую дорожку сайдкара — частить нельзя. 0 — выкл.
 	ozonSearchMin := time.Duration(getEnvInt("OZON_SEARCH_MIN_INTERVAL_MINUTES", 30)) * time.Minute
-	ozonMult := getEnvInt("OZON_INTERVAL_MULTIPLIER", 2)
 	if ozonMult < 1 {
 		ozonMult = 1
 	}
@@ -208,17 +210,16 @@ func productSchedulerTick(
 		plan := domain.EffectivePlanFor(r.OwnerPlan, r.PlanExpiresAt, now)
 		iv := plan.EffectiveInterval(defaultInterval)
 		// Reseller-подписчик (минутный тариф) выключает волатильностный бэкофф
-		// для товара целиком — в т.ч. на Ozon, где его eff после множителя/пола
-		// = 20м: скорость — ядро ценности reseller, замедлять его нельзя нигде.
-		// Определяем по ТАРИФНОМУ интервалу (до Ozon-правок).
+		// для товара целиком — скорость есть ядро ценности reseller, замедлять
+		// его нельзя нигде (в т.ч. на Ozon). Определяем по ТАРИФНОМУ интервалу.
 		if iv <= resellerLaneCutoff {
 			a.fastSub = true
 		}
 		if isOzon {
-			// Ozon троттлим: тарифный каданс × ozonMult, с полом ozonMinInterval.
-			// Reseller-планы (1 мин) идут этим же путём → их Ozon-каданс = пол 20м
-			// (раньше Ozon перекупам был НЕДОСТУПЕН; решение — дать доступ на
-			// троттл-кадансе, docs/SCRAPE-CADENCE.md; больше дорожек Ozon — позже).
+			// Опциональный троттл Ozon (× ozonMult, пол ozonMinInterval). В проде
+			// ВЫКЛЮЧЕН (mult=1, пол=0) — Ozon идёт полным тарифным кадансом как WB
+			// (reseller = 1 мин); сайдкар ozon-miner держит нагрузку. Оба параметра
+			// >дефолта включают троттл обратно. docs/SCRAPE-CADENCE.md.
 			iv *= time.Duration(ozonMult)
 			if ozonMinInterval > 0 && iv < ozonMinInterval {
 				iv = ozonMinInterval
@@ -236,15 +237,17 @@ func productSchedulerTick(
 	}
 	var dueList []due
 	for id, a := range byProduct {
-		// Ozon-товар, у которого все подписчики — reseller: ни одного вклада → не скрейпим.
+		// Страховка: товар без единого вкладывающегося подписчика не скрейпим
+		// (при выключенном Ozon-троттле не срабатывает, но оставлено на случай
+		// его включения — тогда Ozon-товар только с reseller-подписчиками мог бы
+		// не набрать вклад).
 		if !a.has {
 			continue
 		}
 		// Волатильностный бэкофф: давно не менявшаяся цена → реже опрос
 		// (×1..×3, сброс первым изменением). Товары с reseller-подписчиком не
-		// трогаем совсем (fastSub, вкл. их Ozon-путь с полом 20м) — частота и
-		// есть продукт reseller-тарифов. Потолка нет: худший товарный случай
-		// 60м×3 = 3ч. Ozon-пол выше не нарушается (множитель ≥ 1).
+		// трогаем совсем (fastSub) — частота и есть продукт reseller-тарифов.
+		// Потолка нет: худший товарный случай 60м×3 = 3ч.
 		eff := a.eff
 		if !a.fastSub && eff > resellerLaneCutoff {
 			eff = domain.ApplyVolatility(eff, a.lastChange, a.subs, now, 0)

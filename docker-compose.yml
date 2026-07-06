@@ -643,10 +643,12 @@ services:
         DATABASE_URL: "postgres://tryberry_app:${APP_DB_PASSWORD:?APP_DB_PASSWORD must be set in .env}@postgres:5432/tryberrybot?sslmode=disable"
         KAFKA_BROKERS: "kafka:29092"
         SCRAPE_INTERVAL_MINUTES: "15"
-        OZON_MIN_INTERVAL_MINUTES: "${OZON_MIN_INTERVAL_MINUTES:-20}"
-        # Ozon идёт кадансом тарифа × этот множитель (free 60→120 мин и т.д.);
-        # reseller-планы Ozon не тянут. Антибот не любит частоту.
-        OZON_INTERVAL_MULTIPLIER: "${OZON_INTERVAL_MULTIPLIER:-2}"
+        # Опциональный аварийный троттл Ozon-товаров (пол интервала + множитель к
+        # тарифу). В проде ВЫКЛЮЧЕН (.env: 0 и 1) — Ozon идёт полным тарифным
+        # кадансом как WB/YM (reseller = 1 мин), сайдкар ozon-miner держит нагрузку.
+        # Ставить >0/>1 только если сайдкар начнёт захлёбываться. docs/SCRAPE-CADENCE.md.
+        OZON_MIN_INTERVAL_MINUTES: "${OZON_MIN_INTERVAL_MINUTES:-0}"
+        OZON_INTERVAL_MULTIPLIER: "${OZON_INTERVAL_MULTIPLIER:-1}"
         # Пол интервала Ozon-ПОИСКА (выдача ротируется, одна прогретая дорожка):
         # не чаще этого даже на быстрых тарифах → уводит Ozon с reseller-дорожки.
         OZON_SEARCH_MIN_INTERVAL_MINUTES: "${OZON_SEARCH_MIN_INTERVAL_MINUTES:-30}"
