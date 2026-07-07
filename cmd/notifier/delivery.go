@@ -191,7 +191,13 @@ func (d *deliverer) deliver(ctx context.Context, userID, telegramID int64, sendT
 		metrics.NotificationsDelivered.WithLabelValues("vk", statusLabel(vkErr)).Inc()
 	}
 	if maxUser != 0 {
-		mxErr = d.mx.SendMessage(ctx, maxUser, vkText)
+		// Как в VK: если у товара есть картинка — шлём её аттачем (внутри клиента
+		// best-effort с фолбэком на текст), иначе просто текст.
+		if vkImageURL != "" {
+			mxErr = d.mx.SendMessagePhoto(ctx, maxUser, vkText, vkImageURL)
+		} else {
+			mxErr = d.mx.SendMessage(ctx, maxUser, vkText)
+		}
 		if mxErr == nil {
 			delivered = true
 		}
