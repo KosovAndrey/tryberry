@@ -233,10 +233,21 @@ func (c *Client) cachedPhoto(imageURL string) *schemes.PhotoTokens {
 	return e.tokens
 }
 
-// cachePhoto кладёт токен в кэш с TTL photoCacheTTL.
+// cachePhoto кладёт токен в кэш с TTL photoCacheTTL. Протухшие записи сами не
+// исчезают (нет фоновой уборки), а notifier живёт неделями — без sweep'а кэш
+// рос бы на каждый уникальный imageURL; поэтому при разрастании лениво
+// выметаем протухшие прямо здесь, под уже взятым локом.
 func (c *Client) cachePhoto(imageURL string, tokens *schemes.PhotoTokens) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
+	if len(c.photoCache) >= 1024 {
+		now := time.Now()
+		for k, e := range c.photoCache {
+			if now.After(e.exp) {
+				delete(c.photoCache, k)
+			}
+		}
+	}
 	c.photoCache[imageURL] = photoCacheEntry{tokens: tokens, exp: time.Now().Add(photoCacheTTL)}
 }
 
