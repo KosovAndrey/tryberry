@@ -77,7 +77,9 @@ func NewWildberriesSellerScraper(base *WildberriesScraper, maxPages int, pageDel
 	}
 	s := &WildberriesSellerScraper{
 		WildberriesScraper: base,
-		client:             &http.Client{Timeout: 12 * time.Second},
+		// Переиспользуемый клиент с тюнингованным пулом keep-alive (per-host 32):
+		// открытый каталог продавца (catalog.wb.ru) без антибота, ходим постранично.
+		client:             &http.Client{Timeout: 12 * time.Second, Transport: newTunedHTTPTransport()},
 		apiBase:            wbSellerAPIBase,
 		maxPages:           maxPages,
 		pageDelay:          pageDelay,

@@ -39,7 +39,10 @@ type WildberriesScraper struct {
 }
 
 func NewWildberriesScraper(rps float64) *WildberriesScraper {
-	c := &http.Client{Timeout: 8 * time.Second}
+	// Один переиспользуемый клиент на basket-CDN и u-card с тюнингованным пулом
+	// keep-alive (per-host 32): basket-шарды — десятки хостов, ходим часто и
+	// конкуррентно, дефолтные 2 соединения/хост заставляли бы пересоздавать TLS.
+	c := &http.Client{Timeout: 8 * time.Second, Transport: newTunedHTTPTransport()}
 	return &WildberriesScraper{
 		// basket CDN отвечает за доли секунды; 8s — щедрый потолок на случай
 		// сетевых задержек, но при норме мы укладываемся в <1s
