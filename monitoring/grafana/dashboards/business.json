@@ -371,6 +371,122 @@
      "refId": "B"
     }
    ]
+  },
+  {
+   "id": 11,
+   "type": "timeseries",
+   "title": "Воронка конверсии фри-поиска (за сутки)",
+   "description": "Апселл показан → активирован триал → оплачен апгрейд из free/trial. Отношение линий = конверсия воронки.",
+   "gridPos": {
+    "h": 8,
+    "w": 12,
+    "x": 0,
+    "y": 36
+   },
+   "datasource": {
+    "type": "prometheus",
+    "uid": "${DS_PROMETHEUS}"
+   },
+   "fieldConfig": {
+    "defaults": {
+     "unit": "short",
+     "min": 0,
+     "custom": {
+      "drawStyle": "line",
+      "lineInterpolation": "linear",
+      "fillOpacity": 10,
+      "lineWidth": 2
+     }
+    },
+    "overrides": []
+   },
+   "options": {
+    "legend": {
+     "displayMode": "list",
+     "placement": "bottom"
+    },
+    "tooltip": {
+     "mode": "multi"
+    }
+   },
+   "targets": [
+    {
+     "datasource": {
+      "type": "prometheus",
+      "uid": "${DS_PROMETHEUS}"
+     },
+     "expr": "sum(increase(tryberrybot_search_upsell_shown_total[24h]))",
+     "legendFormat": "апселл показан",
+     "refId": "A"
+    },
+    {
+     "datasource": {
+      "type": "prometheus",
+      "uid": "${DS_PROMETHEUS}"
+     },
+     "expr": "sum(increase(tryberrybot_trial_activations_total[24h]))",
+     "legendFormat": "триал активирован",
+     "refId": "B"
+    },
+    {
+     "datasource": {
+      "type": "prometheus",
+      "uid": "${DS_PROMETHEUS}"
+     },
+     "expr": "sum(increase(tryberrybot_tariff_upgrades_total{from=~\"free|trial\"}[24h]))",
+     "legendFormat": "оплачен апгрейд (из free/trial)",
+     "refId": "C"
+    }
+   ]
+  },
+  {
+   "id": 12,
+   "type": "timeseries",
+   "title": "Апгрейды тарифа by from→to (за сутки)",
+   "description": "Смены тарифа по успешным платежам. from==to = продление, from=free/trial → lite/pro = целевая конверсия.",
+   "gridPos": {
+    "h": 8,
+    "w": 12,
+    "x": 12,
+    "y": 36
+   },
+   "datasource": {
+    "type": "prometheus",
+    "uid": "${DS_PROMETHEUS}"
+   },
+   "fieldConfig": {
+    "defaults": {
+     "unit": "short",
+     "min": 0,
+     "custom": {
+      "drawStyle": "line",
+      "lineInterpolation": "linear",
+      "fillOpacity": 10,
+      "lineWidth": 2
+     }
+    },
+    "overrides": []
+   },
+   "options": {
+    "legend": {
+     "displayMode": "list",
+     "placement": "bottom"
+    },
+    "tooltip": {
+     "mode": "multi"
+    }
+   },
+   "targets": [
+    {
+     "datasource": {
+      "type": "prometheus",
+      "uid": "${DS_PROMETHEUS}"
+     },
+     "expr": "sum by (from, to) (increase(tryberrybot_tariff_upgrades_total[24h]))",
+     "legendFormat": "{{from}} → {{to}}",
+     "refId": "A"
+    }
+   ]
   }
  ]
 }

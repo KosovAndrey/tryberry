@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"gitlab.com/KosovAndrey/tryberrybot/internal/domain"
+	"gitlab.com/KosovAndrey/tryberrybot/internal/metrics"
 )
 
 // Тарифы и триал в MAX. Витрина — domain.PlanShowcase/domain.Plans, как в TG/VK.
@@ -218,6 +219,7 @@ func (b *Bot) handleTrial(ctx context.Context, maxID int64, user *domain.User) {
 		b.send(ctx, maxID, "🎁 Триал уже был активирован ранее.", kb)
 		return
 	}
+	metrics.TrialActivations.WithLabelValues("max").Inc()
 
 	b.restorePausedAfterUpgrade(ctx, user.ID, domain.Plans["trial"])
 

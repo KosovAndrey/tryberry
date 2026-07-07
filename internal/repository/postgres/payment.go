@@ -143,5 +143,8 @@ func (r *PaymentRepo) MarkSucceeded(ctx context.Context, paymentID int64, now ti
 
 	metrics.PaymentsSucceeded.Inc()
 	metrics.PaymentRevenueKopecks.Add(float64(out.AmountKopecks))
+	// Воронка конверсии: план до покупки (plan) → купленный (out.Plan).
+	// from==to = продление; from=free/trial → to=lite/pro = целевой апгрейд.
+	metrics.TariffUpgrades.WithLabelValues(plan, out.Plan).Inc()
 	return out, true, nil
 }

@@ -12,6 +12,7 @@ import (
 	tgbotapi "github.com/go-telegram-bot-api/telegram-bot-api/v5"
 
 	"gitlab.com/KosovAndrey/tryberrybot/internal/domain"
+	"gitlab.com/KosovAndrey/tryberrybot/internal/metrics"
 )
 
 // fsmTTL — сколько ждём ввод порога/процента, прежде чем состояние протухнет.
@@ -556,6 +557,7 @@ func (b *Bot) searchLimitText(plan domain.Plan, used int) string {
 			"По вопросам — @kosov_andrey."
 	}
 	if plan.Name == "free" {
+		metrics.SearchUpsellShown.WithLabelValues("tg").Inc()
 		return fmt.Sprintf(
 			"🚫 На тарифе <b>Free</b> доступна одна поиск-подписка (%d из %d занято), проверка — %s.\n\n"+
 				"Больше поисков и проверка чаще — на тарифах <b>Lite</b> и <b>Pro</b>: /plans. Новым пользователям — бесплатный триал на 10 дней: /trial.\n\n"+

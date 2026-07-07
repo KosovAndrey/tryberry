@@ -148,6 +148,45 @@ var (
 			Help:      "Total revenue from succeeded payments, in kopecks",
 		},
 	)
+
+	// ── Воронка конверсии (фри-поиск → триал → платный) ──────────────────────
+	// Ставим ДО запуска: конверсию задним числом не измеришь. Считаем три стадии
+	// воронки, чтобы после старта видеть free→lite/pro.
+
+	// TariffUpgrades — смена тарифа по УСПЕШНОМУ платежу: from = план до покупки,
+	// to = купленный. from==to = продление, from=free/trial → to=lite/pro =
+	// целевая конверсия воронки. Инкрементит payment.MarkSucceeded.
+	TariffUpgrades = promauto.NewCounterVec(
+		prometheus.CounterOpts{
+			Namespace: namespace,
+			Name:      "tariff_upgrades_total",
+			Help:      "Paid tariff changes by from/to plan (from==to = renewal)",
+		},
+		[]string{"from", "to"},
+	)
+
+	// TrialActivations — активации бесплатного триала по каналу входа (tg|vk|max):
+	// вход в воронку после фри-поиска. Инкрементит handleTrial при успехе.
+	TrialActivations = promauto.NewCounterVec(
+		prometheus.CounterOpts{
+			Namespace: namespace,
+			Name:      "trial_activations_total",
+			Help:      "Free trial activations by channel",
+		},
+		[]string{"channel"},
+	)
+
+	// SearchUpsellShown — показ апселла фри-юзеру, упёршемуся в лимит поиска
+	// (каналы tg|vk|max): спрос на «больше поисков» = потенциал апгрейда.
+	// Инкрементит free-ветка searchLimitText.
+	SearchUpsellShown = promauto.NewCounterVec(
+		prometheus.CounterOpts{
+			Namespace: namespace,
+			Name:      "search_upsell_shown_total",
+			Help:      "Free-tier search-limit upsell shown, by channel",
+		},
+		[]string{"channel"},
+	)
 )
 
 // ── Поиск-подписки ───────────────────────────────────────────────────────────
