@@ -127,8 +127,11 @@ func (b *Bot) sendMyPlan(ctx context.Context, vkID int64, user *domain.User) {
 	var sb strings.Builder
 	fmt.Fprintf(&sb, "ℹ️ Твой тариф: %s\n\n", plan.Title)
 	fmt.Fprintf(&sb, "📦 Товары: %d из %d\n", prod, plan.MaxProduct)
-	fmt.Fprintf(&sb, "🔎 Поиски: %d из %d\n", srch, plan.MaxSearch)
-	fmt.Fprintf(&sb, "⏱ Интервал проверки: %d мин\n", int(plan.Interval.Minutes()))
+	fmt.Fprintf(&sb, "🔎 Поиски: %d из %d", srch, plan.MaxSearch)
+	if si := plan.EffectiveSearchInterval(plan.Interval); plan.MaxSearch > 0 && si != plan.Interval {
+		fmt.Fprintf(&sb, " · проверка %s", domain.IntervalPhrase(si))
+	}
+	fmt.Fprintf(&sb, "\n⏱ Интервал проверки: %d мин\n", int(plan.Interval.Minutes()))
 	if plan.PriceRub > 0 {
 		fmt.Fprintf(&sb, "💳 Цена: %d ₽/мес\n", plan.PriceRub)
 	}
@@ -143,7 +146,7 @@ func (b *Bot) sendMyPlan(ctx context.Context, vkID int64, user *domain.User) {
 	if hasSub {
 		rows = append(rows, []Button{TextButton("🚫 Отменить автопродление", buttonPayload(cmdSubCancel), ColorSecondary)})
 	}
-	if plan.MaxSearch == 0 && !user.TrialUsed {
+	if plan.ShowTrialOffer() && !user.TrialUsed {
 		sb.WriteString("\n🎁 Тебе доступен бесплатный триал поиска — кнопка ниже.")
 		rows = append(rows, []Button{TextButton("🎁 Активировать триал", buttonPayload(cmdTrial), ColorPrimary)})
 	}
