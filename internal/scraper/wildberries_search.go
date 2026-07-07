@@ -107,7 +107,8 @@ func (s *WildberriesSearchScraper) SetBrowserSidecar(baseURL string, maxPages in
 	s.browserURL = baseURL
 	// Сайдкар делает in-page fetch в браузере (навигация + челлендж) — щедрый
 	// таймаут, тяжёлая дорожка отвечает не мгновенно.
-	s.browserClient = &http.Client{Timeout: 45 * time.Second}
+	// Переиспользуемый клиент к сайдкару (внутренний хост) с пулом keep-alive.
+	s.browserClient = &http.Client{Timeout: 45 * time.Second, Transport: newTunedHTTPTransport()}
 }
 
 // MatchesSearch — WB-ссылка с текстовым поиском (?search=...).

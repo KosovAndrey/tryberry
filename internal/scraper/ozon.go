@@ -125,7 +125,8 @@ func NewOzonScraper(opts OzonOptions) *OzonScraper {
 		}
 		s.browserURL = strings.TrimRight(opts.BrowserURL, "/")
 		// Таймаут с запасом: дорожка может прогревать сессию/решать FAB на холодном старте.
-		s.browserClient = &http.Client{Timeout: 60 * time.Second}
+		// Переиспользуемый клиент к сайдкару (внутренний хост) с пулом keep-alive.
+		s.browserClient = &http.Client{Timeout: 60 * time.Second, Transport: newTunedHTTPTransport()}
 		s.configured = true
 		log.Info("ozon scraper configured", "mode", mode, "transport", "browser-pool",
 			"sidecar", s.browserURL)
