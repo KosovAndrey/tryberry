@@ -1,0 +1,68 @@
+# WB basket probe — measured 2026-07-07
+# Method: real existing nmIDs harvested from public WB search (search.wb.ru v9,
+# direct, no token) via probe.sh, then card.json probed on basket-NN.wbbasket.ru
+# until 200. Basket CDN has no antibot (404 on wrong shard, 200 on the right one).
+#
+# vol = nmID/100000. Each row is a real, live product.
+#
+# vol    nmID           real_basket   old_formula   note
+6410     641084431      31            31            ok
+6700     670048328      32            31            MISS(-1)
+6875     687533697      33            32            MISS(-1)
+6942     694264334      33            32            MISS(-1)
+6950     695084243      33            33            ok
+6972     697235996      33            33            ok
+7068     706869633      34            33            MISS(-1)
+7084     708470547      34            33            MISS(-1)
+7172     717220224      34            34            ok
+7280     728068729      34            34            ok
+7584     758401032      35            35            ok
+7825     782571327      36            36            ok
+7949     794923399      36            36            ok
+8015     801531315      37            37            ok
+8037     803728174      37            37            ok
+8074     807465274      37            37            ok
+8326     832658156      38            38            ok
+8352     835207296      38            38            ok
+8360     836077556      38            38            ok
+8449     844902003      38            38            ok
+8660     866061160      38            39            MISS(+1)
+8741     874137347      38            39            MISS(+1)
+8844     884452534      39            39            ok
+8943     (known)        39            40            MISS(+1)   # from task/runtime
+9007     900756058      39            40            MISS(+1)
+9429     942931623      40            41            MISS(+1)
+9780     978041390      41            42            MISS(+1)
+9950     995015330      41            42            MISS(+1)
+9975     997568267      41            42            MISS(+1)
+9991     999119920      41            42            MISS(+1)
+10160    1016005990     41            43            MISS(+2)
+10284    1028419114     41            43            MISS(+2)
+10961    1096166369     42            46            MISS(+4)
+11117    1111762960     42            46            MISS(+4)
+11420    1142019797     43            47            MISS(+4)
+11625    1162557005     43            47            MISS(+4)
+
+# ── Derived shard boundaries (min live vol observed per basket) ──────────────
+# basket 31 : ..6410  (existing table boundary 6437 kept — no live id in 6438..6699)
+# basket 32 : 6700
+# basket 33 : 6875 .. 6972
+# basket 34 : 7068 .. 7280
+# basket 35 : 7584
+# basket 36 : 7825 .. 7949
+# basket 37 : 8015 .. 8074
+# basket 38 : 8326 .. 8741
+# basket 39 : 8844 .. 9007   (incl. known vol 8943)
+# basket 40 : 9429
+# basket 41 : 9780 .. 10284
+# basket 42 : 10961 .. 11117
+# basket 43 : 11420 .. 11625   (= max live vol today)
+#
+# Threshold[N] set to (min vol of basket N+1) - 1 → gap vols map to the LOWER
+# basket (undershoot bias; runtime probes ±neighbours and self-heals).
+#
+# Tail period: old 312 badly undershoots (real width ~430-800 vol/basket at the
+# high end, avg ~570). New tail: 43 + (vol-11420)/600 — conservative (large
+# period => predicts a slightly LOW basket for future vol>11625, the safe side).
+#
+# max live vol today: 11625 (basket 43). Everything above is future/not-yet-live.
