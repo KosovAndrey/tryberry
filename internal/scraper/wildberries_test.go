@@ -5,6 +5,29 @@ import (
 	"testing"
 )
 
+// TestWBBasketNumberMeasured — таблица «vol → реальный basket», измеренная
+// пробой живых артикулов 2026-07-07 (см. experiments/wb-basket-probe/results.txt).
+// Сторожит от регрессий калибровки шардов; nmID = vol*100000 (номер шарда зависит
+// только от vol).
+func TestWBBasketNumberMeasured(t *testing.T) {
+	cases := []struct {
+		vol    int64
+		basket int64
+	}{
+		{6410, 31}, {6700, 32}, {6875, 33}, {6972, 33}, {7068, 34},
+		{7280, 34}, {7584, 35}, {7825, 36}, {7949, 36}, {8015, 37},
+		{8074, 37}, {8326, 38}, {8741, 38}, {8844, 39}, {8943, 39},
+		{9007, 39}, {9429, 40}, {9780, 41}, {10284, 41}, {10961, 42},
+		{11117, 42}, {11420, 43}, {11625, 43},
+	}
+	for _, c := range cases {
+		id := c.vol * 100000
+		if got := wbBasketNumber(id); got != c.basket {
+			t.Errorf("wbBasketNumber(vol %d) = %d; измерено %d", c.vol, got, c.basket)
+		}
+	}
+}
+
 func TestBasketCandidates(t *testing.T) {
 	// Кандидат первым, затем ближайшие соседи (±1, ±2 …) — для vol8943 формула даёт
 	// 40, а реальный шард 39, он должен пробоваться сразу после кандидата.
