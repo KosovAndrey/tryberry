@@ -11,6 +11,7 @@ import (
 	tgbotapi "github.com/go-telegram-bot-api/telegram-bot-api/v5"
 
 	"gitlab.com/KosovAndrey/tryberrybot/internal/domain"
+	"gitlab.com/KosovAndrey/tryberrybot/internal/metrics"
 )
 
 const dateLayout = "02.01.2006 15:04"
@@ -51,6 +52,7 @@ func (b *Bot) handleTrial(ctx context.Context, chatID int64, messageID int, user
 		b.showView(chatID, messageID, "🎁 Триал уже был активирован ранее.", backToMenuKeyboard())
 		return
 	}
+	metrics.TrialActivations.WithLabelValues("tg").Inc()
 
 	b.restorePausedAfterUpgrade(ctx, user.TelegramID)
 

@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"gitlab.com/KosovAndrey/tryberrybot/internal/domain"
+	"gitlab.com/KosovAndrey/tryberrybot/internal/metrics"
 )
 
 // Поиск-подписки из VK: тот же флоу, что в telegram/search.go — ссылка →
@@ -382,6 +383,7 @@ func (b *Bot) searchLimitText(plan domain.Plan, used int) string {
 			"Они есть на тарифах Lite и выше — кнопка «Тарифы». А ещё можно попробовать бесплатный триал — кнопка «Триал»."
 	}
 	if plan.Name == "free" {
+		metrics.SearchUpsellShown.WithLabelValues("vk").Inc()
 		return fmt.Sprintf(
 			"🚫 На тарифе Free доступна одна поиск-подписка (%d из %d занято), проверка — %s.\n\n"+
 				"Больше поисков и проверка чаще — на тарифах Lite и Pro (кнопка «Тарифы»). Новым пользователям — бесплатный триал на 10 дней (кнопка «Триал»).\n\n"+
