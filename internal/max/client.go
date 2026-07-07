@@ -8,6 +8,7 @@
 package max
 
 import (
+	"bytes"
 	"context"
 	"crypto/tls"
 	"crypto/x509"
@@ -15,7 +16,10 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
+	"log/slog"
 	"net/http"
+	"sync"
 	"time"
 
 	maxbot "github.com/max-messenger/max-bot-api-client-go"
@@ -43,9 +47,39 @@ func maxHTTPClient() *http.Client {
 	return &http.Client{Timeout: 30 * time.Second, Transport: tr}
 }
 
+// Лимиты дорожки фото-аттача в уведомлениях (см. SendMessagePhoto).
+const (
+	// maxImageBytes — потолок скачиваемой картинки товара. Больше — считаем
+	// подозрительным/битым и уходим в текстовый фолбэк, чтобы не тянуть мегабайты
+	// в память на волне алертов.
+	maxImageBytes = 10 << 20
+	// imageDownloadTimeout — таймаут скачивания картинки с CDN маркетплейса.
+	// Отдельный от 30с MAX API: картинка не должна задерживать доставку текста.
+	imageDownloadTimeout = 10 * time.Second
+	// photoCacheTTL — сколько держим upload-токен фото. Токены MAX переиспользуемы
+	// между сообщениями (schema.yaml: «Use token ... to reuse the same attachment
+	// in other message»), а одно фото товара уходит десяткам подписчиков на одной
+	// волне — час покрывает волну, не рискуя протухшими токенами.
+	photoCacheTTL = time.Hour
+)
+
+// photoCacheEntry — закэшированный upload-токен фото с моментом протухания.
+type photoCacheEntry struct {
+	tokens *schemes.PhotoTokens
+	exp    time.Time
+}
+
 // Client — обёртка над maxbot.Api с VK-подобным API отправки.
 type Client struct {
 	api *maxbot.Api
+	log *slog.Logger
+
+	// imgHTTP — отдельный клиент для СКАЧИВАНИЯ картинки товара с CDN маркетплейса.
+	// Не MAX-клиент: тут не нужен российский корень, зато нужен короткий таймаут.
+	imgHTTP *http.Client
+
+	mu         sync.Mutex // защищает photoCache
+	photoCache map[string]photoCacheEntry
 }
 
 func NewClient(token string) (*Client, error) {
@@ -53,7 +87,12 @@ func NewClient(token string) (*Client, error) {
 	if err != nil {
 		return nil, err
 	}
-	return &Client{api: api}, nil
+	return &Client{
+		api:        api,
+		log:        slog.Default(),
+		imgHTTP:    &http.Client{Timeout: imageDownloadTimeout},
+		photoCache: make(map[string]photoCacheEntry),
+	}, nil
 }
 
 // API даёт доступ к нижележащему клиенту (нужно cmd/api для подписки на webhook).
@@ -103,12 +142,102 @@ func (c *Client) SendMessageKeyboard(ctx context.Context, userID int64, text str
 	return c.api.Messages.Send(ctx, m)
 }
 
-// SendMessagePhoto — в MAX картинку отдаём превью ссылки (disable_link_preview
-// по умолчанию выключен), поэтому image игнорируем: товарная ссылка в тексте
-// сама разворачивается в карточку. Сигнатура совпадает с vk.Client для
+// SendMessagePhoto — уведомление о цене с фото товара как аттачем. Раньше image
+// игнорировали в ставке на превью ссылки, но авто-превью маркетплейса приходит
+// обрезанным и убогим; поэтому качаем картинку, грузим её в MAX и шлём как
+// PhotoAttachment, а превью ссылки в этом сообщении гасим (SetDisableLinkPreview),
+// чтобы карточка не дублировалась. Best-effort: при ЛЮБОЙ ошибке дорожки с фото
+// (скачивание/upload/сборка) откатываемся на текущее поведение — текст с превью:
+// доставка уведомления важнее картинки. Сигнатура совпадает с vk.Client для
 // переиспользования в notifier.
-func (c *Client) SendMessagePhoto(ctx context.Context, userID int64, text, _ string) error {
+func (c *Client) SendMessagePhoto(ctx context.Context, userID int64, text, imageURL string) error {
+	if imageURL != "" {
+		tokens, err := c.resolvePhotoTokens(ctx, imageURL)
+		if err != nil {
+			c.log.Warn("max: photo attach skipped, fallback to text",
+				"user_id", userID, "image_url", imageURL, "err", err)
+		} else {
+			m := maxbot.NewMessage().SetUser(userID).SetText(text).
+				SetDisableLinkPreview(true).AddPhoto(tokens)
+			if sendErr := c.api.Messages.Send(ctx, m); sendErr == nil {
+				return nil
+			} else {
+				// Send с фото не прошёл — попробуем хотя бы текст (превью включено).
+				c.log.Warn("max: photo message send failed, fallback to text",
+					"user_id", userID, "err", sendErr)
+			}
+		}
+	}
 	return c.SendMessage(ctx, userID, text)
+}
+
+// resolvePhotoTokens возвращает upload-токен фото по URL: сперва из кэша, иначе
+// скачивает картинку своим http-клиентом и грузит в MAX. Токены переиспользуемы,
+// поэтому кэшируем их по imageURL (см. photoCacheTTL) — на волне алертов одно фото
+// уходит многим подписчикам, и повторные upload'ы не нужны.
+func (c *Client) resolvePhotoTokens(ctx context.Context, imageURL string) (*schemes.PhotoTokens, error) {
+	if t := c.cachedPhoto(imageURL); t != nil {
+		return t, nil
+	}
+	data, err := c.downloadImage(ctx, imageURL)
+	if err != nil {
+		return nil, err
+	}
+	tokens, err := c.api.Uploads.UploadPhotoFromReader(ctx, bytes.NewReader(data))
+	if err != nil {
+		return nil, fmt.Errorf("max: upload photo: %w", err)
+	}
+	c.cachePhoto(imageURL, tokens)
+	return tokens, nil
+}
+
+// downloadImage качает картинку товара с CDN маркетплейса. Лимит maxImageBytes,
+// чтобы не утянуть в память лишнего; ошибка (сеть/не-200/переразмер) уводит
+// вызывающего в текстовый фолбэк.
+func (c *Client) downloadImage(ctx context.Context, imageURL string) ([]byte, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, imageURL, nil)
+	if err != nil {
+		return nil, err
+	}
+	resp, err := c.imgHTTP.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("max: download image: %w", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("max: download image status %d", resp.StatusCode)
+	}
+	// Читаем на 1 байт больше лимита: если прочлось maxImageBytes+1 — картинка
+	// превышает потолок, отбрасываем.
+	data, err := io.ReadAll(io.LimitReader(resp.Body, maxImageBytes+1))
+	if err != nil {
+		return nil, fmt.Errorf("max: read image: %w", err)
+	}
+	if len(data) > maxImageBytes {
+		return nil, fmt.Errorf("max: image too large (> %d bytes)", maxImageBytes)
+	}
+	if len(data) == 0 {
+		return nil, fmt.Errorf("max: empty image body")
+	}
+	return data, nil
+}
+
+// cachedPhoto — свежий токен из кэша либо nil (промах/протухло).
+func (c *Client) cachedPhoto(imageURL string) *schemes.PhotoTokens {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	e, ok := c.photoCache[imageURL]
+	if !ok || time.Now().After(e.exp) {
+		return nil
+	}
+	return e.tokens
+}
+
+// cachePhoto кладёт токен в кэш с TTL photoCacheTTL.
+func (c *Client) cachePhoto(imageURL string, tokens *schemes.PhotoTokens) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.photoCache[imageURL] = photoCacheEntry{tokens: tokens, exp: time.Now().Add(photoCacheTTL)}
 }
 
 // AnswerCallback — гасит «часики» на нажатой кнопке (ответ не обязателен в MAX,
