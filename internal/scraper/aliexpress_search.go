@@ -5,12 +5,17 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"net/http"
 	"net/url"
 	"regexp"
+	"strconv"
 	"strings"
+	"time"
 
 	fhttp "github.com/bogdanfinn/fhttp"
 	tls_client "github.com/bogdanfinn/tls-client"
+
+	"gitlab.com/KosovAndrey/tryberrybot/internal/metrics"
 )
 
 // AliexpressSearchScraper — скрейпер поисковой выдачи aliexpress.ru по ссылке вида
@@ -24,6 +29,18 @@ import (
 type AliexpressSearchScraper struct {
 	*AliexpressScraper
 	maxItems int
+
+	// browserURL — база сайдкара ali-miner (браузер-как-транспорт). X5SEC режет
+	// голый direct-POST выдачи с датацентр-IP (карточный productData при этом
+	// проходит — у выдачи проверка строже). Браузер сайдкара навигирует на
+	// страницу /wholesale и перехватывает НАТИВНЫЙ ответ /aer-webapi/v1/search
+	// фронта — как wb-search-miner у WB. Пусто → фолбэка нет, блок уходит
+	// наверх как ErrMarketplaceBlocked.
+	browserURL    string
+	browserClient *http.Client
+	// browserMaxPages — сколько страниц тянуть через сайдкар за один скрейп
+	// (навигация дорогая; топ-20 первой страницы для трека min-цены достаточно).
+	browserMaxPages int
 }
 
 var _ SearchScraper = (*AliexpressSearchScraper)(nil)
@@ -35,6 +52,24 @@ func NewAliexpressSearchScraper(base *AliexpressScraper, maxItems int) *Aliexpre
 		maxItems = 60
 	}
 	return &AliexpressSearchScraper{AliexpressScraper: base, maxItems: maxItems}
+}
+
+// SetBrowserSidecar подключает сайдкар ali-miner как фолбэк на X5SEC-блок:
+// заблокированный/пустой direct-ответ выдачи уводим в прогретый браузер
+// (GET /search?text=&page=). maxPages — сколько страниц тянуть через сайдкар
+// (<=0 → 1). Пустой URL — фолбэка нет. Зеркало WB SetBrowserSidecar.
+func (s *AliexpressSearchScraper) SetBrowserSidecar(baseURL string, maxPages int) {
+	baseURL = strings.TrimRight(strings.TrimSpace(baseURL), "/")
+	if maxPages <= 0 {
+		maxPages = 1
+	}
+	s.browserMaxPages = maxPages
+	if baseURL == "" {
+		return
+	}
+	s.browserURL = baseURL
+	// Сайдкар навигирует браузер и ждёт нативный XHR — отвечает не мгновенно.
+	s.browserClient = &http.Client{Timeout: 45 * time.Second, Transport: newTunedHTTPTransport()}
 }
 
 // MatchesSearch — поисковая ссылка aliexpress.ru: путь /wholesale с параметром
@@ -105,11 +140,41 @@ func (s *AliexpressSearchScraper) ScrapeSearch(ctx context.Context, rawURL strin
 
 	out := &SearchResultSet{}
 	seen := make(map[string]bool)
+	// preferBrowser залипает на весь запрос: как только direct упёрся в X5SEC и
+	// браузер спас страницу, дальнейшие страницы идут сразу в сайдкар (не жжём
+	// direct-квоту об стену). Страниц через браузер — не больше browserMaxPages.
+	var preferBrowser bool
+	browserUsed := 0
 	for page := 1; page <= maxAliSearchPages; page++ {
 		if err := s.limiter.Wait(ctx); err != nil {
 			return out, err
 		}
-		status, body, err := s.searchWithFallback(ctx, aliSearchBody(text, page), referer)
+		var (
+			status int
+			body   []byte
+			err    error
+		)
+		if preferBrowser {
+			if browserUsed >= s.browserMaxPages {
+				break // топ по браузеру исчерпан — отдаём что есть
+			}
+			status, body, err = s.fetchViaBrowser(ctx, text, page)
+			browserUsed++
+		} else {
+			status, body, err = s.searchWithFallback(ctx, aliSearchBody(text, page), referer)
+			// Блок/не-200/пустая выдача на direct → пробуем браузер-сайдкар.
+			// Пустой 200 без товаров тоже сюда: холодная сессия X5SEC часто
+			// выглядит именно так (без явного блок-маркера).
+			if aliFetchOutcome(status, body, err) != "ok" && s.browserURL != "" && browserUsed < s.browserMaxPages {
+				bstatus, bbody, berr := s.fetchViaBrowser(ctx, text, page)
+				browserUsed++
+				if berr == nil && bstatus == 200 && !isAliBlocked(bbody) {
+					status, body, err = bstatus, bbody, nil
+					preferBrowser = true
+					s.log.Info("aliexpress search: direct блокирован, ушли в браузер-сайдкар", "text", text, "page", page)
+				}
+			}
+		}
 		if err != nil {
 			if len(out.Items) > 0 {
 				break // частичный результат сохраняем
@@ -182,6 +247,7 @@ func aliSearchBody(text string, page int) []byte {
 // прокси (обновляет aer-cookie в общем jar). Зеркало AliexpressScraper.Scrape.
 func (s *AliexpressSearchScraper) searchWithFallback(ctx context.Context, body []byte, referer string) (int, []byte, error) {
 	status, b, err := s.fetchSearch(ctx, s.direct, body, referer)
+	metrics.AliSearchFetch.WithLabelValues("direct", aliFetchOutcome(status, b, err)).Inc()
 	if err != nil {
 		return 0, nil, err
 	}
@@ -191,9 +257,55 @@ func (s *AliexpressSearchScraper) searchWithFallback(ctx context.Context, body [
 	// В direct-only режиме (proxy=nil) фолбэка нет — отдаём direct-ответ как есть,
 	// блок/пустую выдачу разберёт вызывающий код (как у карточного Scrape).
 	if (status != 200 || isAliBlocked(b) || !aliHasProducts(b)) && s.proxy != nil {
-		return s.fetchSearch(ctx, s.proxy, body, referer)
+		status, b, err = s.fetchSearch(ctx, s.proxy, body, referer)
+		metrics.AliSearchFetch.WithLabelValues("proxy", aliFetchOutcome(status, b, err)).Inc()
+		return status, b, err
 	}
 	return status, b, nil
+}
+
+// aliFetchOutcome — классификация ответа выдачи для метрики/решения о фолбэке:
+// error | blocked (X5SEC) | other (не-200) | empty (200 без товаров) | ok.
+func aliFetchOutcome(status int, body []byte, err error) string {
+	switch {
+	case err != nil:
+		return "error"
+	case isAliBlocked(body):
+		return "blocked"
+	case status != 200:
+		return "other"
+	case !aliHasProducts(body):
+		return "empty"
+	default:
+		return "ok"
+	}
+}
+
+// fetchViaBrowser — X5SEC-фолбэк: страница выдачи из прогретого браузера
+// сайдкара ali-miner (GET /search?text=&page=). Сайдкар навигирует на
+// /wholesale?SearchText=... и перехватывает нативный ответ /aer-webapi/v1/search
+// фронта, так что тело — тот же JSON, что и у direct (parseAliexpressSearch
+// общий). Статус зеркалит upstream.
+func (s *AliexpressSearchScraper) fetchViaBrowser(ctx context.Context, text string, page int) (int, []byte, error) {
+	if s.browserURL == "" || s.browserClient == nil {
+		return 0, nil, fmt.Errorf("aliexpress search browser sidecar not configured")
+	}
+	q := url.Values{}
+	q.Set("text", text)
+	q.Set("page", strconv.Itoa(page))
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, s.browserURL+"/search?"+q.Encode(), nil)
+	if err != nil {
+		return 0, nil, err
+	}
+	resp, err := s.browserClient.Do(req)
+	if err != nil {
+		metrics.AliSearchFetch.WithLabelValues("browser", "error").Inc()
+		return 0, nil, fmt.Errorf("aliexpress search browser: %w", err)
+	}
+	defer resp.Body.Close()
+	b, _ := io.ReadAll(io.LimitReader(resp.Body, 6<<20))
+	metrics.AliSearchFetch.WithLabelValues("browser", aliFetchOutcome(resp.StatusCode, b, nil)).Inc()
+	return resp.StatusCode, b, nil
 }
 
 // aliHasProducts — быстрый признак непустой выдачи (без полного парса).

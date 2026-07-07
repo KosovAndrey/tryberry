@@ -156,6 +156,9 @@ func run(log *slog.Logger) error {
 		}),
 		getEnvInt("SEARCH_MAX_ITEMS_ALI", 80),
 	)
+	// X5SEC-фолбэк выдачи в браузер-сайдкар ali-miner (как WB выше): direct-POST
+	// выдачи X5SEC режет с датацентр-IP, хотя карточный productData проходит.
+	aliSearch.SetBrowserSidecar(getEnv("ALI_BROWSER_URL", ""), getEnvInt("ALI_SEARCH_BROWSER_MAX_PAGES", 1))
 	registry := scraper.NewRegistry(wbSearch, wbSeller, yandexSearch, ozonSearch, ozonSeller, aliSearch)
 
 	// ── Kafka ─────────────────────────────────────────────────────────────────

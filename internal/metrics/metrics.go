@@ -177,6 +177,21 @@ var (
 		[]string{"transport", "result"},
 	)
 
+	// AliSearchFetch — исходы запросов страниц Ali-поиска по транспорту и
+	// результату. transport: direct | proxy | browser; result: ok | blocked |
+	// empty | other | error. blocked = X5SEC-стена (выдачу X5SEC проверяет
+	// строже карточного productData); browser+ok = запрос, спасённый сайдкаром
+	// ali-miner (см. aliexpress_search.go). Рост direct+blocked при нулевом
+	// browser+ok = поиск Ali лежит.
+	AliSearchFetch = promauto.NewCounterVec(
+		prometheus.CounterOpts{
+			Namespace: namespace,
+			Name:      "ali_search_fetch_total",
+			Help:      "Ali search page fetches by transport and result",
+		},
+		[]string{"transport", "result"},
+	)
+
 	// SearchNotificationsSent — отправленные батч-уведомления по поиск-подпискам,
 	// сгруппированные по типу триггера.
 	SearchNotificationsSent = promauto.NewCounterVec(

@@ -19,6 +19,8 @@ services:
     restart: unless-stopped
   wb-search-miner:
     restart: unless-stopped
+  ali-miner:
+    restart: unless-stopped
   search-worker:
     restart: unless-stopped
   reseller-worker:
