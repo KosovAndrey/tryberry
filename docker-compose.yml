@@ -242,6 +242,9 @@ services:
       # (с датацентра cold-сессия = капча), дальше запросы напрямую. Пусто → фолбэк
       # на OZON_PROXY_URL (дележ IP жжёт его — при нагрузке задать отдельный).
       ALI_PROXY_URL: "${ALI_PROXY_URL:-}"
+      # Ali-поиск по ссылке при /track: X5SEC режет direct-выдачу → фолбэк в
+      # браузер-сайдкар ali-miner (как OZON_BROWSER_URL). Карточка идёт direct.
+      ALI_BROWSER_URL: "${ALI_BROWSER_URL:-http://ali-miner:8082}"
     depends_on:
       postgres:
         condition: service_healthy
@@ -363,6 +366,9 @@ services:
       # Ozon-поиск идёт ТОЛЬКО через сайдкар ozon-miner (browser-пул): прямой API
       # за FAB. /search дёргает выдачу из прогретой дорожки (searchResultsV2).
       OZON_BROWSER_URL: "${OZON_BROWSER_URL:-http://ozon-miner:8080}"
+      # Ali-поиск: direct-POST /aer-webapi/v1/search, а на X5SEC-блок — фолбэк в
+      # браузер-сайдкар ali-miner (карточка Ali проходит direct, выдачу режет).
+      ALI_BROWSER_URL: "${ALI_BROWSER_URL:-http://ali-miner:8082}"
     depends_on:
       postgres:
         condition: service_healthy
@@ -417,6 +423,8 @@ services:
       # (browser-пул), как у search-worker. ВНИМАНИЕ: перекуп-каданс (≤1 мин) для
       # Ozon агрессивен для одной прогретой дорожки — следить за блокировками.
       OZON_BROWSER_URL: "${OZON_BROWSER_URL:-http://ozon-miner:8080}"
+      # Ali-поиск на быстрых тарифах — тот же X5SEC-фолбэк в сайдкар ali-miner.
+      ALI_BROWSER_URL: "${ALI_BROWSER_URL:-http://ali-miner:8082}"
     depends_on:
       postgres:
         condition: service_healthy
@@ -631,6 +639,41 @@ services:
       labels:
         logging: "promtail"
         service: "wb-search-miner"
+
+  # ── Ali miner: браузер-как-транспорт для поисковой выдачи aliexpress.ru ──────
+  # Долгоживущий сервис: прогретые дорожки (headful Chromium/patchright в Xvfb)
+  # проходят X5SEC и отдают выдачу /aer-webapi/v1/search перехватом нативного
+  # XHR. Go-воркеры (search/reseller/bot) зовут GET /search как фолбэк на
+  # X5SEC-блок direct-выдачи (ALI_BROWSER_URL) по внутренней сети — портов
+  # наружу нет. Прокси не нужен (карточная дорожка доказала: X5SEC пускает
+  # датацентр-IP при живой сессии).
+  ali-miner:
+      build:
+        context: ./ali-miner
+        dockerfile: Dockerfile
+      container_name: pt_ali_miner
+      init: true
+      environment:
+        ALI_MINER_PORT: "8082"
+        ALI_SEARCH_POOL_SIZE: "${ALI_SEARCH_POOL_SIZE:-1}"
+        ALI_WARM_QUERY: "${ALI_WARM_QUERY:-телефон}"
+        # Опц. прокси дорожек (обычно НЕ нужен — direct проходит).
+        ALI_SEARCH_PROXY_URL: "${ALI_SEARCH_PROXY_URL:-}"
+        ALI_LANE_1_PROXY: "${ALI_LANE_1_PROXY:-}"
+        # Человекоподобный интервал запросов одной дорожки + джиттер.
+        ALI_LANE_MIN_INTERVAL_MS: "${ALI_LANE_MIN_INTERVAL_MS:-1500}"
+        ALI_LANE_JITTER: "${ALI_LANE_JITTER:-0.4}"
+        # Периодический re-warm живой дорожки (рефреш доверия сессии), мин.
+        ALI_WARM_KEEPALIVE_MINUTES: "${ALI_WARM_KEEPALIVE_MINUTES:-30}"
+        # После N неудачных прогревов подряд — пересоздать браузер (свежий
+        # фингерпринт против залипания на walled-контексте). 0 — не пересоздавать.
+        ALI_WARM_RELAUNCH_AFTER: "${ALI_WARM_RELAUNCH_AFTER:-3}"
+        HEADLESS: "false"
+        LOG_LEVEL: "INFO"
+      shm_size: "1gb"
+      labels:
+        logging: "promtail"
+        service: "ali-miner"
 
   scheduler:
       build:

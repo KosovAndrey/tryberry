@@ -174,12 +174,15 @@ func buildSearchRegistry(ctx context.Context, log *slog.Logger) (*scraper.Regist
 			Logger:   log,
 		}), getEnvInt("SEARCH_MAX_ITEMS_YANDEX", 100), getEnvInt("YANDEX_MAX_PAGES", 12)))
 
-	scrapers = append(scrapers, scraper.NewAliexpressSearchScraper(
+	aliSearch := scraper.NewAliexpressSearchScraper(
 		scraper.NewAliexpressScraper(scraper.AliexpressOptions{
 			ProxyURL: getEnv("ALI_PROXY_URL", ""),
 			RPS:      2,
 			Logger:   log,
-		}), 80))
+		}), 80)
+	// X5SEC-фолбэк выдачи в браузер-сайдкар ali-miner (как WB выше).
+	aliSearch.SetBrowserSidecar(getEnv("ALI_BROWSER_URL", ""), getEnvInt("ALI_SEARCH_BROWSER_MAX_PAGES", 1))
+	scrapers = append(scrapers, aliSearch)
 
 	// Ozon — только через сайдкар ozon-miner; без OZON_BROWSER_URL выдача
 	// вернёт blocked, поэтому регистрируем лишь при заданном URL.

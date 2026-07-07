@@ -145,15 +145,19 @@ func run(log *slog.Logger) error {
 		RPS:      1,
 		Logger:   log,
 	})
+	// Поисковый Ali встраивает карточный → даёт и разбор карточки, и
+	// распознавание поисковых ссылок (MatchesSearch/NormalizeSearchURL).
+	// Первый скрейп поиск-подписки идёт прямо тут (/track) → сайдкар ali-miner
+	// нужен и bot-worker'у, иначе горячая ссылка упрётся в X5SEC на добавлении.
+	aliSearch := scraper.NewAliexpressSearchScraper(aliexpressCard, 80)
+	aliSearch.SetBrowserSidecar(getEnv("ALI_BROWSER_URL", ""), 1)
 	registry := scraper.NewRegistry(
 		wbSearch,
 		wbSeller,
 		scraper.NewOzonSearchScraper(ozonCard, 60),
 		scraper.NewOzonSellerScraper(ozonCard, 60),
 		scraper.NewYandexMarketSearchScraper(yandexCard, 100, 12),
-		// Поисковый Ali встраивает карточный → даёт и разбор карточки, и
-		// распознавание поисковых ссылок (MatchesSearch/NormalizeSearchURL).
-		scraper.NewAliexpressSearchScraper(aliexpressCard, 80),
+		aliSearch,
 	)
 
 	// getMe ходит наружу (через HTTPS_PROXY). Ретраим старт.
