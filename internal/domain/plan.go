@@ -108,6 +108,16 @@ func (p Plan) EffectiveSearchInterval(def time.Duration) time.Duration {
 	return p.EffectiveInterval(def)
 }
 
+// ShowTrialOffer — годится ли план для предложения бесплатного триала поиска на
+// /myplan: бесплатный тариф (free даёт лишь 1 поиск @ 6ч — триал = 10 @ 15м,
+// сильный апселл) либо безпоисковый legacy-план (basic). У платных поиск уже
+// есть, триал им не предлагаем. NB: до тарифов v2 free имел MaxSearch=0, и
+// условие было просто `MaxSearch == 0`; после открытия фри-поиска (free=1) это
+// перестало ловить free — хелпер восстанавливает CTA воронки.
+func (p Plan) ShowTrialOffer() bool {
+	return p.Name == planFree || p.MaxSearch == 0
+}
+
 // BundleWindow — окно коалесинга алертов перед отправкой одним сообщением
 // (бандлинг доставки, Phase 1b — см. docs/SCALING-NOTIFIER-DELIVERY.md). Дорогие
 // тарифы получают уведомления быстрее (короче окно), free сильнее склеивается;

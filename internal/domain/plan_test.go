@@ -5,6 +5,26 @@ import (
 	"time"
 )
 
+func TestShowTrialOffer(t *testing.T) {
+	// free (1 поиск @6ч) и безпоисковый legacy basic — предлагаем триал;
+	// платные с поиском — нет. Регрессия: после free MaxSearch 0→1 условие
+	// `MaxSearch==0` перестало ловить free (см. ShowTrialOffer).
+	cases := map[string]bool{
+		"free":           true,
+		"basic":          true, // legacy, MaxSearch=0
+		"lite":           false,
+		"pro":            false,
+		"trial":          false,
+		"reseller_start": false,
+		"reseller_pro":   false,
+	}
+	for name, want := range cases {
+		if got := Plans[name].ShowTrialOffer(); got != want {
+			t.Errorf("ShowTrialOffer(%s) = %v, want %v", name, got, want)
+		}
+	}
+}
+
 func TestBundleWindow(t *testing.T) {
 	cases := map[string]time.Duration{
 		"free":           15 * time.Minute,

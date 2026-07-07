@@ -79,8 +79,11 @@ func (b *Bot) handleMyPlan(ctx context.Context, chatID int64, messageID int, use
 	var sb strings.Builder
 	fmt.Fprintf(&sb, "ℹ️ <b>Твой тариф: %s</b>\n\n", plan.Title)
 	fmt.Fprintf(&sb, "📦 Товары: <b>%d из %d</b>\n", prod, plan.MaxProduct)
-	fmt.Fprintf(&sb, "🔎 Поиски: <b>%d из %d</b>\n", srch, plan.MaxSearch)
-	fmt.Fprintf(&sb, "⏱ Интервал проверки: <b>%d мин</b>\n", int(plan.Interval.Minutes()))
+	fmt.Fprintf(&sb, "🔎 Поиски: <b>%d из %d</b>", srch, plan.MaxSearch)
+	if si := plan.EffectiveSearchInterval(plan.Interval); plan.MaxSearch > 0 && si != plan.Interval {
+		fmt.Fprintf(&sb, " · проверка %s", domain.IntervalPhrase(si))
+	}
+	fmt.Fprintf(&sb, "\n⏱ Интервал проверки: <b>%d мин</b>\n", int(plan.Interval.Minutes()))
 	if plan.PriceRub > 0 {
 		fmt.Fprintf(&sb, "💳 Цена: <b>%d ₽/мес</b>\n", plan.PriceRub)
 	}
@@ -95,7 +98,7 @@ func (b *Bot) handleMyPlan(ctx context.Context, chatID int64, messageID int, use
 	if cancelBtn != nil {
 		rows = append(rows, cancelBtn)
 	}
-	if plan.MaxSearch == 0 && !user.TrialUsed {
+	if plan.ShowTrialOffer() && !user.TrialUsed {
 		sb.WriteString("\n🎁 Тебе доступен бесплатный триал поиска — кнопка ниже.")
 		rows = append(rows, tgbotapi.NewInlineKeyboardRow(
 			tgbotapi.NewInlineKeyboardButtonData("🎁 Активировать триал", "menu:trial"),
