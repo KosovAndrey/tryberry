@@ -488,44 +488,46 @@ func (r *UserRepo) MergeAccounts(ctx context.Context, keptID, absorbedID int64, 
 		return err
 	}
 
-	// Биллинг-подписки: история переезжает целиком, но активной может остаться
-	// только одна (uq_billing_sub_active). Если активны обе — гасим ту, чей план
-	// не совпал с выбранным итоговым (при прочих равных — absorbed): двойное
+	// Биллинг-подписки: история переезжает целиком, но «живой» для чарджера
+	// может остаться только одна. Живые — active И past_due: чарджер ретраит
+	// просроченные (GetDue в billing_subscription.go), а uq_billing_sub_active
+	// держит уникальность только по active — если гасить лишь активные, kept
+	// молча унаследует чужой просроченный автоплатёж (двойное списание), и
+	// GetActiveByUserID начнёт отдавать чужую past_due как текущую. Победителя
+	// выбираем один раз по всем живым обоих юзеров, остальные гасим: двойное
 	// автосписание хуже лишней отмены.
-	type activeSub struct {
-		id   int64
-		plan string
-	}
-	readActive := func(userID int64) (*activeSub, error) {
-		var s activeSub
-		err := tx.QueryRow(ctx,
-			`SELECT id, plan FROM billing_subscriptions WHERE user_id = $1 AND status = 'active'`,
-			userID).Scan(&s.id, &s.plan)
-		if errors.Is(err, pgx.ErrNoRows) {
-			return nil, nil
-		}
-		if err != nil {
-			return nil, err
-		}
-		return &s, nil
-	}
-	keptSub, err := readActive(keptID)
+	var live []mergeLiveSub
+	subRows, err := tx.Query(ctx, `
+		SELECT id, plan, status, user_id FROM billing_subscriptions
+		WHERE user_id IN ($1, $2) AND status IN ('active', 'past_due')
+		ORDER BY created_at DESC`, keptID, absorbedID)
 	if err != nil {
 		return err
 	}
-	absorbedSub, err := readActive(absorbedID)
-	if err != nil {
+	for subRows.Next() {
+		var s mergeLiveSub
+		if err := subRows.Scan(&s.ID, &s.Plan, &s.Status, &s.UserID); err != nil {
+			subRows.Close()
+			return err
+		}
+		live = append(live, s)
+	}
+	subRows.Close()
+	if err := subRows.Err(); err != nil {
 		return err
 	}
-	if keptSub != nil && absorbedSub != nil {
-		loserID := absorbedSub.id
-		if keptSub.plan != plan && absorbedSub.plan == plan {
-			loserID = keptSub.id
+	if len(live) > 1 {
+		winner := pickMergeBillingWinner(live, plan, keptID)
+		losers := make([]int64, 0, len(live)-1)
+		for i, s := range live {
+			if i != winner {
+				losers = append(losers, s.ID)
+			}
 		}
 		if _, err := tx.Exec(ctx, `
 			UPDATE billing_subscriptions
 			SET status = 'canceled', canceled_at = NOW(), updated_at = NOW()
-			WHERE id = $1`, loserID); err != nil {
+			WHERE id = ANY($1)`, losers); err != nil {
 			return err
 		}
 	}
