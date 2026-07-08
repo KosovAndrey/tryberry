@@ -1,6 +1,43 @@
 # Production deploy — пошаговая инструкция
 
-Развёртывание `tryberry.ru` на Yandex Cloud VM с nginx, Let's Encrypt и закрытой Grafana.
+Развёртывание `tryberry.ru` с nginx, Let's Encrypt и закрытой Grafana.
+
+Прод-сервер: `ssh kosovandrey@194.164.245.150`, проект в `~/projects/tryberrybot`.
+
+---
+
+## Обычный деплой (рутинный, после мержа в main)
+
+Полный цикл — всегда с ОБОИМИ `-f` (без prod-оверлея наружу торчат порты
+Redis/PG/Kafka — инцидент 2026-07-03):
+
+```bash
+ssh kosovandrey@194.164.245.150
+cd ~/projects/tryberrybot
+git pull
+
+# при необходимости: новые env-переменные (смотри диф docker-compose.yml)
+nano .env
+
+# пересобрать и перекатить ТОЛЬКО затронутые сервисы (пример)
+docker compose -f docker-compose.yml -f docker-compose.prod.yml build scraper bot-worker search-worker
+docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d scraper bot-worker search-worker
+
+# проверка
+docker compose -f docker-compose.yml -f docker-compose.prod.yml ps
+docker compose -f docker-compose.yml -f docker-compose.prod.yml logs --tail 50 scraper bot-worker
+```
+
+Замечания:
+
+- Реплики зашиты в prod-оверлей (`deploy.replicas`, сейчас scraper=3) —
+  отдельный `--scale` не нужен, `up -d` сам держит нужное число.
+- Миграции goose на проде — руками через psql от суперюзера (PG-порт закрыт,
+  ghcr-goose недоступен): `docker compose -f docker-compose.yml -f docker-compose.prod.yml exec postgres psql -U postgres -d tryberrybot`.
+- Быстрая проверка метрик без Grafana:
+  `docker compose -f docker-compose.yml -f docker-compose.prod.yml exec prometheus wget -qO- 'http://localhost:9090/api/v1/query?query=<PromQL>'`.
+
+Дальше — историческая пошаговая инструкция ПЕРВИЧНОЙ настройки (nginx/TLS/htpasswd).
 
 ---
 
@@ -45,7 +82,7 @@ nginx/certbot/
 
 ```bash
 # Зайди по SSH
-ssh kosovandrey@93.77.188.238
+ssh kosovandrey@194.164.245.150
 
 # Проверь docker compose plugin (нужна v2.20+ для !reset)
 docker compose version
@@ -76,7 +113,7 @@ git push
 На VM:
 
 ```bash
-cd ~/tryberrybot  # или где у тебя лежит проект
+cd ~/projects/tryberrybot
 git pull
 ```
 
