@@ -44,7 +44,20 @@ blender --background --python render/iphone/scene.py
 - `use_gpu`: пытается OptiX/CUDA, иначе CPU.
 
 ## Где мы сейчас
-**Итерация 1** — процедурный плейсхолдер-телефон (скруглённый корпус, фиолетовый
-металл, tone-on-tone логотип из `web/logo.png`, трёхточечный свет). Это проверка
-пайплайна, НЕ финальная геометрия. Дальше: подмена на реальную модель айфона,
-экран-UI (Figma → текстура), анимация разворота/разблокировки/пуша, энкод в видео.
+Стиллы ГОТОВЫ и на сайте: `web/hero-iphone.png`/`.webp` (прозрачный фон, экран
+выключен) + живой HTML-экран оверлеем по `out/screen_rect.json` — композит в
+`web/index.html` (lockscreen → Face ID unlock → бабблы пуша, всё на DOM).
+
+**Текущая стадия — 3D-разворот-интро** (последняя):
+1. На Windows: `git pull`, в `scene.py` поставить `CONFIG["turn"] = True`,
+   Run Script → PNG-секвенция разворота (крышка 180° → анфас) в `out/turn/`
+   (~84 кадра, 2.8s @ 30fps; телефон крутится, камера/свет стоят —
+   последний кадр 1-в-1 `still_front`).
+2. В WSL: `bash render/iphone/encode_turn.sh /mnt/c/<путь к out/turn>` —
+   альфа-WebM → `web/hero-iphone-turn.webm`.
+3. Подключение на сайте (после п.2): `<video>` поверх `.phone` → по `ended`
+   подмена на PNG + включение DOM-экрана. Safari (нет VP9-альфы) — фолбэк
+   сразу на PNG без интро.
+
+Ручки: `turn_seconds` / `turn_fps` / `turn_samples` / `turn_reverse` в CONFIG;
+яркость бликов — `SOFTBOX_ENERGY`.
