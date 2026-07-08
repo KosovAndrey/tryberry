@@ -104,7 +104,7 @@ func run(log *slog.Logger) error {
 
 	// getMe ходит наружу к Telegram (через HTTPS_PROXY). Канал флапает — ретраим
 	// с backoff'ом, чтобы старт не падал в петлю.
-	receiver, err := initWithRetry(ctx, log, func() (*telegram.Receiver, error) {
+	receiver, err := telegram.InitWithRetry(ctx, log, func() (*telegram.Receiver, error) {
 		return telegram.NewReceiver(botToken, log)
 	})
 	if err != nil {
@@ -464,36 +464,6 @@ func run(log *slog.Logger) error {
 		return fmt.Errorf("http server: %w", err)
 	}
 	return nil
-}
-
-// initWithRetry повторяет инициализацию с backoff'ом до успеха или отмены ctx
-// (getMe на старте ходит к Telegram, канал нестабилен).
-func initWithRetry[T any](ctx context.Context, log *slog.Logger, build func() (T, error)) (T, error) {
-	const maxBackoff = 30 * time.Second
-	backoff := time.Second
-	for attempt := 1; ; attempt++ {
-		v, err := build()
-		if err == nil {
-			if attempt > 1 {
-				log.Info("telegram init ok after retries", "attempts", attempt)
-			}
-			return v, nil
-		}
-		log.Warn("telegram init failed (getMe), retrying",
-			"attempt", attempt, "backoff", backoff.String(), "err", err)
-		select {
-		case <-ctx.Done():
-			var zero T
-			return zero, fmt.Errorf("cancelled after %d attempts: %w", attempt, err)
-		case <-time.After(backoff):
-		}
-		if backoff < maxBackoff {
-			backoff *= 2
-			if backoff > maxBackoff {
-				backoff = maxBackoff
-			}
-		}
-	}
 }
 
 func runMetricsUpdater(ctx context.Context, log *slog.Logger, pool *pgxpool.Pool) {

@@ -15,6 +15,8 @@ import (
 	"time"
 
 	tgbotapi "github.com/go-telegram-bot-api/telegram-bot-api/v5"
+
+	"gitlab.com/KosovAndrey/tryberrybot/internal/metrics"
 )
 
 type Receiver struct {
@@ -105,26 +107,46 @@ func (r *Receiver) SetCommands() error {
 // RunPolling — long-poll; на каждый апдейт зовёт fn (ingestor → продюс в Kafka).
 // Блокируется до отмены ctx. getUpdates — синглтон, поэтому ingestor должен быть
 // single-instance (в отличие от реплицируемых bot-worker).
+//
+// Цикл явный, а не GetUpdatesChan: tgbotapi глотает ошибки getUpdates внутри
+// (лог + retry), и отозванный на лету токен / умерший egress снаружи не видны —
+// бот просто молчит (инцидент 2026-07-08). Здесь каждый успешный полл двигает
+// telegram_poll_last_success_timestamp_seconds, ошибки считает
+// telegram_poll_errors_total; алерт TelegramPollingStale ловит застывший цикл.
+// Long-poll возвращается каждые ~timeout секунд и без апдейтов, так что метрика
+// живая независимо от трафика.
 func (r *Receiver) RunPolling(ctx context.Context, fn func(context.Context, tgbotapi.Update)) error {
 	if err := r.DeleteWebhook(); err != nil {
 		r.log.Warn("delete webhook before polling (continuing)", "err", err)
 	}
 
 	timeout := pollTimeoutSeconds() // из polling.go, env TELEGRAM_POLL_TIMEOUT_SECONDS
-	u := tgbotapi.NewUpdate(0)
-	u.Timeout = timeout
-	updates := r.api.GetUpdatesChan(u)
 	r.log.Info("polling started (getUpdates)", "timeout_s", timeout)
 
+	// Тот же ретрай-интервал, что у GetUpdatesChan внутри tgbotapi.
+	const errorBackoff = 3 * time.Second
+	offset := 0
 	for {
-		select {
-		case <-ctx.Done():
-			r.api.StopReceivingUpdates()
+		if ctx.Err() != nil {
 			r.log.Info("polling stopped")
 			return nil
-		case update, ok := <-updates:
-			if !ok {
-				return nil
+		}
+		u := tgbotapi.NewUpdate(offset)
+		u.Timeout = timeout
+		updates, err := r.api.GetUpdates(u)
+		if err != nil {
+			metrics.TelegramPollErrors.Inc()
+			r.log.Warn("getUpdates failed, retrying", "err", err)
+			select {
+			case <-ctx.Done():
+			case <-time.After(errorBackoff):
+			}
+			continue
+		}
+		metrics.TelegramPollLastSuccess.SetToCurrentTime()
+		for _, update := range updates {
+			if update.UpdateID >= offset {
+				offset = update.UpdateID + 1
 			}
 			fn(ctx, update)
 		}

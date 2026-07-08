@@ -163,7 +163,7 @@ func run(log *slog.Logger) error {
 	)
 
 	// getMe ходит наружу (через HTTPS_PROXY). Ретраим старт.
-	bot, err := initWithRetry(ctx, log, func() (*telegram.Bot, error) {
+	bot, err := telegram.InitWithRetry(ctx, log, func() (*telegram.Bot, error) {
 		return telegram.NewBot(
 			botToken, log, userRepo, subRepo, prodRepo, priceHistoryRepo, registry,
 			searchQueryRepo, searchSubRepo, promoRepo, referralRepo, redisClient, parseAdminIDs(getEnv("ADMIN_IDS", "")),
@@ -276,34 +276,6 @@ func run(log *slog.Logger) error {
 
 	log.Info("bot-worker started, consuming telegram-updates...", "group", groupID)
 	return consumer.Run(ctx, handler)
-}
-
-func initWithRetry[T any](ctx context.Context, log *slog.Logger, build func() (T, error)) (T, error) {
-	const maxBackoff = 30 * time.Second
-	backoff := time.Second
-	for attempt := 1; ; attempt++ {
-		v, err := build()
-		if err == nil {
-			if attempt > 1 {
-				log.Info("telegram init ok after retries", "attempts", attempt)
-			}
-			return v, nil
-		}
-		log.Warn("telegram init failed (getMe), retrying",
-			"attempt", attempt, "backoff", backoff.String(), "err", err)
-		select {
-		case <-ctx.Done():
-			var zero T
-			return zero, fmt.Errorf("cancelled after %d attempts: %w", attempt, err)
-		case <-time.After(backoff):
-		}
-		if backoff < maxBackoff {
-			backoff *= 2
-			if backoff > maxBackoff {
-				backoff = maxBackoff
-			}
-		}
-	}
 }
 
 func getEnv(key, fallback string) string {
