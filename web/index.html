@@ -153,6 +153,16 @@ nav.scrolled{
 .phone{position:relative;width:min(380px,84vw);margin:0 auto;aspect-ratio:1080/1920;container-type:inline-size}
 .phone-render{position:absolute;inset:0;width:100%;height:100%;object-fit:contain;
   filter:drop-shadow(0 42px 80px rgba(0,0,0,.55)) drop-shadow(0 10px 26px rgba(160,22,81,.22))}
+/* 3D-интро: разворот с крышки (альфа-WebM, последний кадр == hero-iphone.png).
+   Пока .phone.intro — виден только <video>; экран и PNG ждут. Анимации экрана
+   (Face ID/unlock/бабблы) стоят на паузе (пауза держит и delay-фазу) и стартуют
+   с нуля, когда JS снимет .intro по ended. Safari (нет VP9-альфы) отсекает JS. */
+.phone-turn{display:none}
+.phone.intro .phone-turn{display:block}
+.phone-screen{transition:opacity .4s ease}
+.phone.intro picture{visibility:hidden}
+.phone.intro .phone-screen{opacity:0}
+.phone.intro .phone-screen,.phone.intro .phone-screen *{animation-play-state:paused!important}
 /* экран позиционируется по screen_rect.json (проекция дисплея в кадре рендера) */
 /* экран: позиция по замеру пикселей экрана в рендере (measure_screen.py);
    размеры контента в em, база = cqw контейнера .phone → масштаб под любой размер */
@@ -462,12 +472,22 @@ footer{background:var(--plum-deep);padding:70px 0 40px;border-top:1px solid var(
   [data-reveal]{opacity:1;transform:none}
   .hero h1 .kline > span{transform:none;animation:none}
   .lockscreen{display:none}
+  .phone.intro .phone-turn{display:none}
+  .phone.intro picture{visibility:visible}
+  .phone.intro .phone-screen{opacity:1}
   .bubble{opacity:1;transform:none;animation:none}
   .accent{animation:none}
   .mp-track{animation:none;flex-wrap:wrap;justify-content:center}
   html{scroll-behavior:auto}
 }
 </style>
+<noscript><style>
+/* без JS некому снять .intro — показываем статичный композит */
+.phone.intro .phone-turn{display:none}
+.phone.intro picture{visibility:visible}
+.phone.intro .phone-screen{opacity:1}
+.phone.intro .phone-screen,.phone.intro .phone-screen *{animation-play-state:running!important}
+</style></noscript>
 
 <script type="application/ld+json">
 {
@@ -540,7 +560,9 @@ footer{background:var(--plum-deep);padding:70px 0 40px;border-top:1px solid var(
       <div class="hero-note" data-reveal style="--d:.35s"><b>Бесплатный план</b> навсегда · триал 10 дней · без карты</div>
     </div>
     <div data-reveal="scale" style="--d:.2s">
-      <div class="phone">
+      <div class="phone intro">
+        <video class="phone-render phone-turn" muted playsinline preload="auto"
+               src="/hero-iphone-turn.webm" aria-hidden="true"></video>
         <picture>
           <source type="image/webp" srcset="/hero-iphone.webp">
           <img class="phone-render" src="/hero-iphone.png" width="1080" height="1920"
@@ -586,6 +608,26 @@ footer{background:var(--plum-deep);padding:70px 0 40px;border-top:1px solid var(
     </div>
   </div>
 </header>
+
+<script>
+/* 3D-интро разворота: играем альфа-WebM, по ended снимаем .intro — появляется
+   PNG (кадр 1-в-1) и стартуют анимации экрана. Отсекаем: Safari (VP9-альфу не
+   умеет — чёрный фон), reduced-motion, нет vp9, сеть не успела (4с) или видео
+   зависло (5с после старта). В любом отсеве — сразу статичный композит. */
+(()=>{
+  const ph=document.querySelector('.phone.intro');if(!ph)return;
+  const v=ph.querySelector('.phone-turn');
+  const end=()=>{ph.classList.remove('intro');if(v)try{v.pause()}catch(e){}};
+  const rm=matchMedia('(prefers-reduced-motion:reduce)').matches;
+  const saf=/apple/i.test(navigator.vendor||'');
+  if(rm||saf||!v||!v.canPlayType('video/webm; codecs="vp9"'))return end();
+  let t=setTimeout(end,4000);
+  v.addEventListener('playing',()=>{clearTimeout(t);t=setTimeout(end,5000)},{once:true});
+  v.addEventListener('ended',()=>{clearTimeout(t);end()},{once:true});
+  v.addEventListener('error',end,{once:true});
+  v.play().catch(end);
+})();
+</script>
 
 <!-- MARKETPLACES STRIP (под hero) -->
 <section class="mp-strip" aria-label="Поддерживаемые маркетплейсы">
