@@ -104,7 +104,9 @@ func run(log *slog.Logger) error {
 
 	wbCard := scraper.NewWildberriesScraper(rpsWB)
 	if redisClient != nil {
-		wbCard.SetBasketResolver(redisrepo.NewBasketCache(redisClient))
+		bc := redisrepo.NewBasketCache(redisClient)
+		wbCard.SetBasketResolver(bc)
+		wbCard.SetCondCache(bc) // 304 вместо полного скрейпа карточек, попавших в выдачу повторно
 	}
 	wbSearch := scraper.NewWildberriesSearchScraper(
 		wbCard,

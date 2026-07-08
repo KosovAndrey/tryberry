@@ -31,11 +31,34 @@ type BasketResolver interface {
 	MarkNoBasket(ctx context.Context, id int64)
 }
 
+// CondEntry — снимок последнего успешного basket-скрейпа: HTTP-валидаторы
+// price-history.json (ETag/Last-Modified) + распарсенный результат. Валидаторы
+// дают дешёвый change-detection (conditional GET → 304 без тела вместо двух
+// полных GET), а снимок позволяет на 304 вернуть полноценный Result, не трогая
+// ни card.json, ни даунстрим (notifier получает событие как обычно).
+type CondEntry struct {
+	ETag         string  `json:"etag,omitempty"`
+	LastModified string  `json:"lm,omitempty"`
+	Price        float64 `json:"price"`
+	Name         string  `json:"name"`
+	ImageURL     string  `json:"img"`
+}
+
+// CondCache — хранилище CondEntry по артикулу. Реализуется redisrepo.BasketCache.
+// Контракт TTL: запись живёт ограниченно и НЕ продлевается при 304 — истечение
+// ключа принудительно возвращает товар на полный скрейп (свежие имя/картинка/
+// валидаторы), иначе стабильный по цене товар не перечитывался бы никогда.
+type CondCache interface {
+	GetCond(ctx context.Context, id int64) (CondEntry, bool)
+	PutCond(ctx context.Context, id int64, e CondEntry)
+}
+
 type WildberriesScraper struct {
 	http    *http.Client
 	ucard   *http.Client // клиент для u-card-fallback; по умолчанию = http
 	limiter *rate.Limiter
 	baskets BasketResolver // nilable
+	cond    CondCache      // nilable
 }
 
 func NewWildberriesScraper(rps float64) *WildberriesScraper {
@@ -55,6 +78,10 @@ func NewWildberriesScraper(rps float64) *WildberriesScraper {
 // SetBasketResolver подключает кэш vol→basket (опционально; сервисы передают
 // redisrepo.BasketCache). Без него скрейпер всё равно работает — пробой формулы+соседей.
 func (s *WildberriesScraper) SetBasketResolver(r BasketResolver) { s.baskets = r }
+
+// SetCondCache подключает кэш снимков для conditional GET (опционально; сервисы
+// передают redisrepo.BasketCache). Без него каждый скрейп полный, как раньше.
+func (s *WildberriesScraper) SetCondCache(c CondCache) { s.cond = c }
 
 // SetUCardProxy направляет запросы u-card-fallback через прокси. Нужно там, где
 // прямой egress 403-ится антиботом u-card (датацентровый RU-IP воркера): прокси
@@ -230,9 +257,21 @@ func (s *WildberriesScraper) fetchFromBasket(ctx context.Context, articleID stri
 	// Метрика wb_basket_resolve_total{outcome} → видно дрейф формулы и всплески not_found.
 	candidate := wbBasketNumber(id)
 
+	// Снимок прошлого скрейпа для conditional GET читаем один раз (не в tryBasket:
+	// проба соседних шардов дёргала бы Redis на каждый кандидат). Без валидаторов
+	// или с битой ценой снимок бесполезен — идём полным путём.
+	var cond *CondEntry
+	if s.cond != nil {
+		if e, ok := s.cond.GetCond(ctx, id); ok && e.Price > 0 && (e.ETag != "" || e.LastModified != "") {
+			cond = &e
+		} else {
+			metrics.WBCondGet.WithLabelValues("miss").Inc()
+		}
+	}
+
 	if s.baskets != nil {
 		if cached, ok := s.baskets.Get(ctx, vol); ok {
-			if r, err := s.tryBasket(ctx, vol, part, articleID, cached); err == nil {
+			if r, err := s.tryBasket(ctx, id, vol, part, articleID, cached, cond); err == nil {
 				metrics.WBBasketResolve.WithLabelValues("cache").Inc()
 				return r, nil
 			}
@@ -241,7 +280,7 @@ func (s *WildberriesScraper) fetchFromBasket(ctx context.Context, articleID stri
 	}
 
 	for _, basket := range basketCandidates(candidate, 12) {
-		r, err := s.tryBasket(ctx, vol, part, articleID, basket)
+		r, err := s.tryBasket(ctx, id, vol, part, articleID, basket, cond)
 		if err != nil {
 			continue // 404 (не тот шард) / сетевая / нет хоста → следующий
 		}
@@ -266,31 +305,73 @@ func (s *WildberriesScraper) fetchFromBasket(ctx context.Context, articleID stri
 	return nil, fmt.Errorf("basket price: %w", ErrProductNotFound)
 }
 
-// tryBasket — попытка получить цену (+ карточку) с конкретного шарда. Цену и
-// карточку тянем ПАРАЛЛЕЛЬНО (два независимых запроса) — это вдвое срезает
-// латентность скрейпа на горячем пути (резолв из кэша), а значит и пропускную
-// последовательного консьюмера. Для проигрышных шардов карточка бежит параллельно
-// с price-404, так что по времени не дороже.
-func (s *WildberriesScraper) tryBasket(ctx context.Context, vol, part int64, articleID string, basket int64) (*Result, error) {
+// tryBasket — попытка получить цену (+ карточку) с конкретного шарда.
+//
+// Со снимком прошлого скрейпа (cond != nil) сначала спрашиваем price-history
+// условным GET: 304 → цена не менялась, Result восстанавливается из снимка, а
+// card.json не запрашивается вовсе — два полных GET превращаются в один ответ
+// без тела. Это дешёвый change-detection: на стабильной цене (норма — ради неё
+// же волатильностный бэкофф) WB-трафик падает вдвое по запросам и почти в ноль
+// по байтам. Здесь пути последовательны (карточка нужна только при 200), зато
+// частый случай 304 — один RTT.
+//
+// Без снимка цену и карточку тянем ПАРАЛЛЕЛЬНО (два независимых запроса) — это
+// вдвое срезает латентность скрейпа на горячем пути (резолв из кэша). Для
+// проигрышных шардов карточка бежит параллельно с price-404, так что по времени
+// не дороже.
+func (s *WildberriesScraper) tryBasket(ctx context.Context, id, vol, part int64, articleID string, basket int64, cond *CondEntry) (*Result, error) {
 	base := fmt.Sprintf("https://basket-%02d.wbbasket.ru/vol%d/part%d/%s/info",
 		basket, vol, part, articleID)
 
+	if cond != nil {
+		pr, err := s.fetchBasketPriceHistory(ctx, base, cond)
+		if err != nil {
+			return nil, err
+		}
+		if pr.notModified {
+			metrics.WBCondGet.WithLabelValues("not_modified").Inc()
+			// History пуст: бэкфилл уже случился на полном скрейпе, который
+			// и записал этот снимок.
+			return &Result{Name: cond.Name, Price: cond.Price, ImageURL: cond.ImageURL, InStock: true}, nil
+		}
+		metrics.WBCondGet.WithLabelValues("modified").Inc()
+		name, imageURL := s.fetchBasketCard(ctx, base, articleID, basket, vol, part)
+		s.putCond(ctx, id, pr, name, imageURL)
+		return &Result{Name: name, Price: pr.price, ImageURL: imageURL, InStock: true, History: pr.history}, nil
+	}
+
 	var (
-		price          float64
-		history        []PriceHistoryPoint
+		pr             *basketPriceResp
 		priceErr       error
 		name, imageURL string
 		wg             sync.WaitGroup
 	)
 	wg.Add(2)
-	go func() { defer wg.Done(); price, history, priceErr = s.fetchBasketPriceHistory(ctx, base) }()
+	go func() { defer wg.Done(); pr, priceErr = s.fetchBasketPriceHistory(ctx, base, nil) }()
 	go func() { defer wg.Done(); name, imageURL = s.fetchBasketCard(ctx, base, articleID, basket, vol, part) }()
 	wg.Wait()
 
 	if priceErr != nil {
 		return nil, priceErr
 	}
-	return &Result{Name: name, Price: price, ImageURL: imageURL, InStock: true, History: history}, nil
+	s.putCond(ctx, id, pr, name, imageURL)
+	return &Result{Name: name, Price: pr.price, ImageURL: imageURL, InStock: true, History: pr.history}, nil
+}
+
+// putCond — запомнить снимок успешного скрейпа для будущих conditional GET.
+// Без валидаторов или цены запись бессмысленна (нечем спрашивать / нечего
+// возвращать на 304) — пропускаем, следующий скрейп снова будет полным.
+func (s *WildberriesScraper) putCond(ctx context.Context, id int64, pr *basketPriceResp, name, imageURL string) {
+	if s.cond == nil || pr.price <= 0 || (pr.etag == "" && pr.lastModified == "") {
+		return
+	}
+	s.cond.PutCond(ctx, id, CondEntry{
+		ETag:         pr.etag,
+		LastModified: pr.lastModified,
+		Price:        pr.price,
+		Name:         name,
+		ImageURL:     imageURL,
+	})
 }
 
 // basketCandidates — порядок проб номеров шарда вокруг кандидата формулы: кандидат
@@ -342,32 +423,66 @@ func (s *WildberriesScraper) fetchBasketCard(ctx context.Context, base, articleI
 // своих месячных партиций — ограничиваем глубину, чтобы не плодить их без меры.
 const wbHistoryMaxAge = 180 * 24 * time.Hour
 
+// basketPriceResp — ответ price-history.json: либо notModified (304 на
+// conditional GET — цена не менялась), либо распарсенная цена+серия и свежие
+// HTTP-валидаторы для следующего conditional GET.
+type basketPriceResp struct {
+	notModified  bool
+	price        float64
+	history      []PriceHistoryPoint
+	etag         string
+	lastModified string
+}
+
 // fetchBasketPriceHistory возвращает текущую цену (последняя точка) И всю
 // историческую серию из price-history.json для бэкфилла. Серия — точки строго в
 // прошлом (моложе wbHistoryMaxAge), отсортированы по времени; нулевые цены
 // пропускаем. Текущую точку в History НЕ включаем — её добавит обычный путь.
-func (s *WildberriesScraper) fetchBasketPriceHistory(ctx context.Context, base string) (float64, []PriceHistoryPoint, error) {
+// cond != nil → conditional GET с валидаторами прошлого ответа: CDN честно
+// отвечает 304 без тела, пока файл не перегенерирован (проверено живой пробой
+// 2026-07-08). 304 сигналит и «шард верный» — на чужом шарде был бы 404.
+func (s *WildberriesScraper) fetchBasketPriceHistory(ctx context.Context, base string, cond *CondEntry) (*basketPriceResp, error) {
 	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, base+"/price-history.json", nil)
 	req.Header.Set("User-Agent", wbUserAgent)
+	if cond != nil {
+		if cond.ETag != "" {
+			req.Header.Set("If-None-Match", cond.ETag)
+		}
+		if cond.LastModified != "" {
+			req.Header.Set("If-Modified-Since", cond.LastModified)
+		}
+	}
 	resp, err := s.http.Do(req)
 	if err != nil {
-		return 0, nil, err
+		return nil, err
 	}
 	defer resp.Body.Close()
 
+	if cond != nil && resp.StatusCode == http.StatusNotModified {
+		return &basketPriceResp{notModified: true}, nil
+	}
 	// 404 на price-history = товара нет в CDN (несуществующий/удалённый артикул)
 	if resp.StatusCode == http.StatusNotFound {
-		return 0, nil, ErrProductNotFound
+		return nil, ErrProductNotFound
 	}
 	if resp.StatusCode != http.StatusOK {
-		return 0, nil, fmt.Errorf("price-history status %d", resp.StatusCode)
+		return nil, fmt.Errorf("price-history status %d", resp.StatusCode)
 	}
 
 	body, err := io.ReadAll(resp.Body)
 	if err != nil {
-		return 0, nil, err
+		return nil, err
 	}
-	return parseWBHistory(body, time.Now())
+	price, history, err := parseWBHistory(body, time.Now())
+	if err != nil {
+		return nil, err
+	}
+	return &basketPriceResp{
+		price:        price,
+		history:      history,
+		etag:         resp.Header.Get("Etag"),
+		lastModified: resp.Header.Get("Last-Modified"),
+	}, nil
 }
 
 // parseWBHistory разбирает price-history.json: текущая цена = последняя точка;

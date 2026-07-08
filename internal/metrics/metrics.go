@@ -315,6 +315,22 @@ var (
 		[]string{"outcome"},
 	)
 
+	// WBCondGet — исход conditional GET price-history.json на basket-CDN
+	// (дешёвый change-detection перед полным скрейпом). not_modified — 304,
+	// цена не менялась, card.json не запрашивался (сэкономленный полный скрейп);
+	// modified — 200, файл перегенерирован (обычно смена цены, реже — тот же
+	// контент с новым mtime); miss — снимка в кэше нет/битый → полный скрейп.
+	// Доля not_modified = КПД фичи; ожидаемо высока из-за недельного каданса
+	// файла у WB.
+	WBCondGet = promauto.NewCounterVec(
+		prometheus.CounterOpts{
+			Namespace: namespace,
+			Name:      "wb_cond_get_total",
+			Help:      "Outcome of conditional GET on WB basket price-history (not_modified|modified|miss)",
+		},
+		[]string{"outcome"},
+	)
+
 	// WBPriceSource — каким источником взята цена WB-карточки. ucard — основной
 	// (u-card.wb.ru, real-time, без перебора баскетов, видит трансграничные);
 	// basket — fallback на basket-CDN price-history (u-card не ответил).

@@ -108,7 +108,9 @@ func run(log *slog.Logger) error {
 	// (FindByURL/NormalizeSearchURL), не ScrapeSearch. Идентично api.
 	wbCard := scraper.NewWildberriesScraper(5)
 	if redisClient != nil {
-		wbCard.SetBasketResolver(redisrepo.NewBasketCache(redisClient))
+		bc := redisrepo.NewBasketCache(redisClient)
+		wbCard.SetBasketResolver(bc)
+		wbCard.SetCondCache(bc) // 304 вместо полного скрейпа при /track уже известного артикула
 	}
 	wbSearch := scraper.NewWildberriesSearchScraper(wbCard, nil, nil, 5, 0)
 	// WB-витрина продавца: боту нужен разбор ссылки (MatchesSearch/Normalize) и

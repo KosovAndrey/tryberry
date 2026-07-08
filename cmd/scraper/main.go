@@ -176,7 +176,11 @@ func run(log *slog.Logger) error {
 	// ── Скрейперы (товарные карточки) ──────────────────────────────────────────
 	wbCard := scraper.NewWildberriesScraper(rpsWB)
 	if redisClient != nil {
-		wbCard.SetBasketResolver(redisrepo.NewBasketCache(redisClient))
+		bc := redisrepo.NewBasketCache(redisClient)
+		wbCard.SetBasketResolver(bc)
+		// Снимки для conditional GET: 304 вместо полного скрейпа на стабильной
+		// цене (метрика wb_cond_get_total). Без Redis — полный скрейп, как раньше.
+		wbCard.SetCondCache(bc)
 	}
 	// u-card-fallback (трансграничные товары) через прокси: с прямого RU-IP воркера
 	// u-card отдаёт 403, зарубежный/чистый выход (xray) — принимает.
