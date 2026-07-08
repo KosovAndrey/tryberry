@@ -15,6 +15,10 @@ import (
 // проверкой существования и CREATE TABLE.
 const pgDuplicateTable = "42P07"
 
+// pgUndefinedFunction — 42883: функции ensure_price_history_partition ещё нет
+// (миграция 028 не накатана) → фолбэк на прямой DDL.
+const pgUndefinedFunction = "42883"
+
 type Manager struct {
 	db *pgxpool.Pool
 }
@@ -78,7 +82,22 @@ func (m *Manager) ensureOne(ctx context.Context, t time.Time) error {
 		return nil
 	}
 
-	// Создаём партицию.
+	// Основной путь — SECURITY DEFINER-функция (миграция 028): роль приложения
+	// после хардинга 2026-07-03 DML-only, прямой CREATE ей запрещён (42501), а
+	// функция исполняется правами владельца-суперюзера и умеет ровно одно —
+	// создать месячную партицию price_history. Гонку 42P07 она гасит внутри.
+	if _, err := m.db.Exec(ctx, `SELECT ensure_price_history_partition($1::date)`, from); err != nil {
+		var pgErr *pgconn.PgError
+		if !errors.As(err, &pgErr) || pgErr.Code != pgUndefinedFunction {
+			return fmt.Errorf("create partition %s: %w", tableName, err)
+		}
+		// функции нет (база без миграции 028) → прямой DDL ниже
+	} else {
+		return nil
+	}
+
+	// Фолбэк: прямой DDL — работает там, где у роли есть права (локалка/тесты
+	// под суперюзером).
 	//
 	// ВАЖНО: `CREATE TABLE IF NOT EXISTS ... PARTITION OF` НЕ идемпотентна под
 	// гонкой. Если между нашим SELECT EXISTS и этим CREATE другой процесс
