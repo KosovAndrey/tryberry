@@ -610,6 +610,11 @@ footer{background:var(--plum-deep);padding:70px 0 40px;border-top:1px solid var(
 </header>
 
 <script>
+/* дата на мок-локскрине — всегда сегодняшняя (ролики/скрины не устаревают) */
+(()=>{
+  const ld=document.querySelector('.lock-date');
+  if(ld)ld.textContent=new Date().toLocaleDateString('ru-RU',{weekday:'long',day:'numeric',month:'long'});
+})();
 /* 3D-интро разворота: играем альфа-WebM, по ended снимаем .intro — появляется
    PNG (кадр 1-в-1) и стартуют анимации экрана. Отсекаем: Safari (VP9-альфу не
    умеет — чёрный фон), reduced-motion, нет vp9, сеть не успела (4с) или видео
