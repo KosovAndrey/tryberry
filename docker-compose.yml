@@ -196,6 +196,9 @@ services:
       VK_BOT_URL: "${VK_BOT_URL:-}"
       # VK-операторы для админ-команд (vk_id через запятую; пусто = админа в VK нет).
       VK_ADMIN_IDS: "${VK_ADMIN_IDS:-}"
+      # TG-бот: ссылка для одноклик-кнопки «Привязать в Telegram» из MAX
+      # (пусто = кнопки нет, работает ручной ввод кода).
+      TG_BOT_URL: "${TG_BOT_URL:-}"
       # MAX-бот (пусто = выключено): токен + ссылка для приглашений + операторы.
       MAX_BOT_TOKEN: "${MAX_BOT_TOKEN:-}"
       MAX_BOT_URL: "${MAX_BOT_URL:-}"
