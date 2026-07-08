@@ -49,10 +49,15 @@ blender --background --python render/iphone/scene.py
 `web/index.html` (lockscreen → Face ID unlock → бабблы пуша, всё на DOM).
 
 **Текущая стадия — 3D-разворот-интро** (последняя):
-1. На Windows: `git pull`, в `scene.py` поставить `CONFIG["turn"] = True`,
-   Run Script → PNG-секвенция разворота (крышка 180° → анфас) в `out/turn/`
-   (~84 кадра, 2.8s @ 30fps; телефон крутится, камера/свет стоят —
-   последний кадр 1-в-1 `still_front`).
+1. На Windows: `git pull`, в Blender открыть **`turn.py`** (Scripting → Open)
+   и Run — он сам исполнит свежий `scene.py` с диска в режиме разворота
+   (ничего редактировать не надо; рендер идёт прямо во время Run, F12 не нужен,
+   прогресс в System Console). Итог: PNG-секвенция (крышка 180° → анфас)
+   в `out/turn/` (~84 кадра, 2.8s @ 30fps; телефон крутится, камера/свет
+   стоят — последний кадр 1-в-1 `still_front`).
+   ⚠️ Blender держит копию открытого файла: после pull открытый в Scripting
+   `scene.py` сам НЕ обновится (Text → Reload). `turn.py` не меняется и
+   всегда берёт scene.py с диска — поэтому запускаем через него.
 2. В WSL: `bash render/iphone/encode_turn.sh /mnt/c/<путь к out/turn>` —
    альфа-WebM → `web/hero-iphone-turn.webm`.
 3. Подключение на сайте (после п.2): `<video>` поверх `.phone` → по `ended`
