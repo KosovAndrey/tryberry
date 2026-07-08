@@ -41,10 +41,11 @@ CONFIG = {
 
     # ── 3D-разворот-интро (анимация: с крышки 180° → анфас) ──
     "turn": False,          # True = рендерим PNG-секвенцию разворота вместо стиллов
-    "turn_seconds": 2.8,    # длительность разворота
-    "turn_fps": 30,
+    "turn_seconds": 2.0,    # длительность разворота
+    "turn_fps": 60,         # 60 — плавность на быстрой фазе вращения (30 дёргалось)
     "turn_samples": 48,     # на кадр анимации хватает меньше (есть denoise)
     "turn_reverse": False,  # True = крутить в другую сторону
+    "turn_shutter": 0.35,   # моушен-блюр (0 = выкл): смаз на быстрой фазе, киношно
 }
 # Запуск через turn.py ставит одноразовый env-флаг — редактировать CONFIG не нужно
 # (pop: флаг не «залипает» на следующие Run scene.py в той же сессии Blender).
@@ -662,7 +663,8 @@ def animate_turn(pivot):
     pivot.keyframe_insert("rotation_euler", index=2, frame=1)
     pivot.rotation_euler = (0.0, 0.0, 0.0)
     pivot.keyframe_insert("rotation_euler", index=2, frame=n)
-    # ease-in-out: новые ключи и так Bezier/auto-clamped, но проставим явно.
+    # CUBIC ease-in-out: мягкий разгон и мягкая остановка выраженнее, чем у
+    # дефолтного Bezier auto-clamped (тот почти линеен в середине).
     # Blender 5.x: у Action больше нет .fcurves (layered actions) — идём через
     # layers→strips→channelbags; если API снова сменится — не падаем (дефолт ок).
     try:
@@ -673,8 +675,8 @@ def animate_turn(pivot):
                    for cb in strip.channelbags for fc in cb.fcurves]
         for fc in fcs:
             for kp in fc.keyframe_points:
-                kp.interpolation = "BEZIER"
-                kp.handle_left_type = kp.handle_right_type = "AUTO_CLAMPED"
+                kp.interpolation = "CUBIC"
+                kp.easing = "EASE_IN_OUT"
     except Exception as e:
         print(f"[turn] не выставил интерполяцию ключей ({e}) — дефолт тоже плавный, едем дальше")
     return 1, n
@@ -689,8 +691,13 @@ def render_turn(cam, tgt, center, size, pivot):
     f0, f1 = animate_turn(pivot)
     sc = bpy.context.scene
     sc.cycles.samples = CONFIG["turn_samples"]
+    if CONFIG.get("turn_shutter"):
+        sc.render.use_motion_blur = True
+        sc.render.motion_blur_shutter = CONFIG["turn_shutter"]
     turn_dir = os.path.join(OUT_DIR, "turn")
     os.makedirs(turn_dir, exist_ok=True)
+    for old in glob.glob(os.path.join(turn_dir, "turn_*.png")):
+        os.remove(old)                           # стейл-кадры прошлых длительностей — вон
     sc.render.filepath = os.path.join(turn_dir, "turn_")
     print(f"[turn] рендерю {f1} кадров ({CONFIG['turn_seconds']}s @ {CONFIG['turn_fps']}fps, "
           f"{CONFIG['turn_samples']} samples) → {turn_dir}")
