@@ -252,3 +252,57 @@ groups:
         annotations:
           summary: "Очередь доставки уведомлений не разгребается"
           description: "Недоставленных pending_alerts: {{ $value }} (>100) дольше 10 мин. Флашер не успевает: проверь egress в Telegram (xray/wg-proxy) и долю failed — docker logs pt_notifier | grep flusher; rate(tryberrybot_pending_alerts_delivered_total{outcome=\"failed\"}[5m])."
+
+  # ── «Бот молчит» — урок инцидента 2026-07-08 ──────────────────────────────
+  # Битый TELEGRAM_BOT_TOKEN в .env → api/bot-worker 2 часа крутили getMe
+  # Unauthorized, нотифаер дропал алерты после 10 попыток — и НИ ОДИН алерт не
+  # сработал: контейнеры Up (/metrics отвечает → ServiceDown молчит), глубина
+  # outbox не росла (flusher дропал → PendingAlertsBacklog молчит),
+  # notifications_sent_total считает enqueue, не доставку. Эти три правила
+  # закрывают дыру с трёх сторон: init, живость поллинга, исход отправок.
+  - name: tryberrybot_bot_silence
+    interval: 30s
+    rules:
+      # getMe не проходит: битый/отозванный токен или мёртвый egress. Gauge
+      # экспортируют все бинари (promauto), поэтому фильтр по job — Telegram
+      # инициализируют только api и bot-worker. for: 5m переживает штатный
+      # деплой (init проходит за секунды).
+      - alert: TelegramInitFailing
+        expr: tryberrybot_telegram_connected{job=~"tryberrybot-(api|bot-worker)"} == 0
+        for: 5m
+        labels:
+          severity: critical
+        annotations:
+          summary: "{{ $labels.job }} не может инициализировать Telegram (getMe)"
+          description: "getMe падает >5 мин — бот не принимает команды. Проверь токен: TOKEN=$(grep '^TELEGRAM_BOT_TOKEN=' .env | cut -d= -f2-); curl -s \"https://api.telegram.org/bot$TOKEN/getMe\". Если 401 — токен битый/отозван (.env, BotFather). Логи: docker logs pt_bot_worker | grep 'telegram init'."
+
+      # Поллинг застыл ПОСЛЕ успешного старта: токен отозвали на лету / egress
+      # умер. Здоровый long-poll двигает метку каждые ~10с даже без апдейтов,
+      # поэтому 5 мин тишины = ~30 подряд неудачных поллов, не флап. Гард > 0
+      # отсекает старт до первого успеха и webhook-режим (метка там всегда 0).
+      - alert: TelegramPollingStale
+        expr: |
+          (time() - tryberrybot_telegram_poll_last_success_timestamp_seconds{job="tryberrybot-api"} > 300)
+          and tryberrybot_telegram_poll_last_success_timestamp_seconds{job="tryberrybot-api"} > 0
+        for: 2m
+        labels:
+          severity: critical
+        annotations:
+          summary: "api: getUpdates не проходит >5 мин — бот не принимает команды"
+          description: "Последний успешный long-poll был {{ $value | humanizeDuration }} назад. Причина в ошибках поллинга: rate(tryberrybot_telegram_poll_errors_total[5m]); токен — curl getMe; egress — dcp logs xray."
+
+      # Все отправки канала падают (а не «нет трафика»): error>0 БЕЗ ok за 15м.
+      # unless вместо and — если ok-серия за окно пуста, and не сматчился бы и
+      # алерт молчал бы ровно тогда, когда всё лежит. Ловит и per-channel отказ
+      # (отозвали только VK-токен), TG/VK/MAX — отдельными алертами.
+      - alert: NotificationChannelFailing
+        expr: |
+          sum by (channel) (increase(tryberrybot_notifications_delivered_total{status="error"}[15m])) > 0
+          unless
+          sum by (channel) (increase(tryberrybot_notifications_delivered_total{status="ok"}[15m])) > 0
+        for: 5m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Доставка в {{ $labels.channel }} полностью падает"
+          description: "За 15 мин все отправки в {{ $labels.channel }} с ошибкой, ни одной успешной. 401 = битый токен канала (.env/ЛК); иначе egress. Логи: docker logs pt_notifier --since 30m | grep -iE 'error|unauthorized'."

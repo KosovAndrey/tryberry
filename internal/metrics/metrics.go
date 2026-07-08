@@ -401,6 +401,41 @@ var (
 		},
 		[]string{"outcome"}, // sent | failed
 	)
+
+	// TelegramConnected — 1 после успешного getMe, 0 пока InitWithRetry ретраится.
+	// Урок инцидента 2026-07-08: битый токен в .env → бот 2 часа крутил getMe
+	// Unauthorized, а ServiceDown молчал (контейнер жив, /metrics отвечает).
+	// Экспортируется всеми бинарями (promauto), поэтому алерт фильтрует по job
+	// api/bot-worker — только они инициализируют Telegram.
+	TelegramConnected = promauto.NewGauge(
+		prometheus.GaugeOpts{
+			Namespace: namespace,
+			Name:      "telegram_connected",
+			Help:      "1 when Telegram getMe succeeded, 0 while init is retrying",
+		},
+	)
+
+	// TelegramPollLastSuccess — unix-время последнего успешного getUpdates в api.
+	// Long-poll возвращается каждые ~poll-timeout секунд даже без апдейтов, поэтому
+	// застывшее значение = поллинг мёртв (токен отозван на лету / egress лёг),
+	// независимо от того, пишут ли юзеры. 0 до первого успеха (webhook-режим —
+	// всегда 0, алерт это учитывает).
+	TelegramPollLastSuccess = promauto.NewGauge(
+		prometheus.GaugeOpts{
+			Namespace: namespace,
+			Name:      "telegram_poll_last_success_timestamp_seconds",
+			Help:      "Unix time of the last successful getUpdates long-poll",
+		},
+	)
+
+	// TelegramPollErrors — ошибки getUpdates (диагностика к TelegramPollingStale).
+	TelegramPollErrors = promauto.NewCounter(
+		prometheus.CounterOpts{
+			Namespace: namespace,
+			Name:      "telegram_poll_errors_total",
+			Help:      "Failed getUpdates long-poll requests",
+		},
+	)
 )
 
 // ── Kafka ────────────────────────────────────────────────────────────────────
