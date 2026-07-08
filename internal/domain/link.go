@@ -109,6 +109,17 @@ func MaxStartLink(botURL, payload string) string {
 	return botURL + "?start=" + payload
 }
 
+// TGStartLink — deep-link на Telegram-бота с start-payload: t.me/<bot>?start=<payload>.
+// TG отдаёт payload в аргументах /start (CommandArguments) → бот редимит link_<код>
+// без ручного ввода «привязать <код>». Формат совпадает с MaxStartLink, но держим
+// отдельно ради читаемости места вызова. "" если ссылка на бота не задана.
+func TGStartLink(botURL, payload string) string {
+	if botURL == "" || payload == "" {
+		return ""
+	}
+	return botURL + "?start=" + payload
+}
+
 // VKRefLink — ссылка на VK-бота с ref-параметром: https://vk.me/club<id>?ref=<payload>.
 // VK кладёт payload в message_new.object.message.ref первого сообщения после
 // перехода (юзеру достаточно нажать «Начать») → VK-бот редимит link_<код> без

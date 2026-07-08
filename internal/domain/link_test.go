@@ -49,6 +49,17 @@ func TestMaxStartLink(t *testing.T) {
 	}
 }
 
+func TestTGStartLink(t *testing.T) {
+	got := TGStartLink("https://t.me/TryBerryBot", "link_ABCD2345")
+	want := "https://t.me/TryBerryBot?start=link_ABCD2345"
+	if got != want {
+		t.Errorf("TGStartLink = %q, want %q", got, want)
+	}
+	if TGStartLink("", "link_x") != "" || TGStartLink("https://t.me/b", "") != "" {
+		t.Error("empty botURL/payload must give empty link")
+	}
+}
+
 func TestVKRefLink(t *testing.T) {
 	got := VKRefLink("https://vk.me/club239474122", "link_ABCD2345")
 	want := "https://vk.me/club239474122?ref=link_ABCD2345"
