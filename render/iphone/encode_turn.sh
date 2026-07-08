@@ -11,7 +11,7 @@
 set -euo pipefail
 SDIR="$(cd "$(dirname "$0")" && pwd)"
 SEQ_DIR="${1:-$SDIR/out/turn}"
-FPS="${FPS:-30}"
+FPS="${FPS:-60}"   # держать = turn_fps в scene.py
 CRF="${CRF:-32}"      # 28 качественнее/тяжелее, 36 легче
 OUT="$SDIR/../../web/hero-iphone-turn.webm"
 
