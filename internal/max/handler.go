@@ -101,6 +101,8 @@ type Bot struct {
 	linkCodes       *redisrepo.LinkCodeStore
 	rdb             *redis.Client
 	botURL          string // ссылка на MAX-бота для приглашений
+	tgBotURL        string // ссылка на TG-бота для одноклик-привязки ("" — не показывать)
+	vkBotURL        string // ссылка на VK-бота для одноклик-привязки ("" — не показывать)
 	chartBaseURL    string
 	adminIDs        map[int64]bool
 
@@ -128,6 +130,8 @@ func NewBot(
 	linkCodes *redisrepo.LinkCodeStore,
 	rdb *redis.Client,
 	botURL string,
+	tgBotURL string,
+	vkBotURL string,
 	chartBaseURL string,
 	adminIDs map[int64]bool,
 ) *Bot {
@@ -151,6 +155,8 @@ func NewBot(
 		linkCodes:       linkCodes,
 		rdb:             rdb,
 		botURL:          botURL,
+		tgBotURL:        tgBotURL,
+		vkBotURL:        vkBotURL,
 		chartBaseURL:    chartBaseURL,
 		adminIDs:        adminIDs,
 		discounts:       discounts,
@@ -656,13 +662,40 @@ func (b *Bot) issueLinkCode(ctx context.Context, maxID int64, u *domain.User, di
 		return
 	}
 	ttlMin := int(domain.LinkCodeTTL.Minutes())
+	// Одноклик-кнопка (TG deep-link ?start=link_<код> / VK ref-link ?ref=link_<код>)
+	// передаёт код целевому боту сама; ручной ввод «привязать <код>» оставляем
+	// фолбэком (и единственным путём, если ссылка на бота не задана).
+	kb := menuKeyboard(u)
+	steps := "1. Открой " + botMention + "\n2. Отправь ему сообщение:"
+	if btn, ok := b.linkButtonFor(dir, code); ok {
+		steps = "Нажми «Привязать в " + target + "» — код передастся автоматически.\n" +
+			"Если не сработало — отправь боту вручную:"
+		kb = &Keyboard{Buttons: append([][]Button{{btn}}, kb.Buttons...)}
+	}
 	b.send(ctx, maxID, fmt.Sprintf(
 		"🔗 Привязка %s\n\n"+
-			"1. Открой %s\n"+
-			"2. Отправь ему сообщение:\n\nпривязать %s\n\n"+
+			"%s\n\nпривязать %s\n\n"+
 			"Код действует %d минут и работает один раз. Никому его не пересылай — "+
 			"это ключ к твоему аккаунту.",
-		target, botMention, code, ttlMin), menuKeyboard(u))
+		target, steps, code, ttlMin), kb)
+}
+
+// linkButtonFor — одноклик-кнопка привязки из MAX: для max2tg ведёт на TG
+// deep-link t.me/<bot>?start=link_<код>, для max2vk — на VK ref-link
+// vk.me/...?ref=link_<код>. ok=false, если ссылка на нужного бота не задана.
+func (b *Bot) linkButtonFor(dir, code string) (Button, bool) {
+	var link, label string
+	if dir == domain.LinkDirMax2VK {
+		link = domain.VKRefLink(b.vkBotURL, "link_"+code)
+		label = "🔗 Привязать в VK"
+	} else {
+		link = domain.TGStartLink(b.tgBotURL, "link_"+code)
+		label = "🔗 Привязать в Telegram"
+	}
+	if link == "" {
+		return Button{}, false
+	}
+	return LinkButton(label, link), true
 }
 
 // handleUnlink — отвязка Telegram/VK из MAX (с подтверждением).

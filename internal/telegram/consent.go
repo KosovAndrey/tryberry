@@ -117,5 +117,9 @@ func (b *Bot) handlePDConsentAccept(ctx context.Context, cb *tgbotapi.CallbackQu
 			b.handleRefStart(ctx, chatID, user, ref)
 			return
 		}
+		if code, ok := strings.CutPrefix(payload, "link_"); ok {
+			b.handleLinkCode(ctx, chatID, user, cb.From.UserName, code)
+			return
+		}
 	}
 }

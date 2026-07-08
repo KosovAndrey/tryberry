@@ -329,6 +329,12 @@ func (b *Bot) handleCommand(ctx context.Context, msg *tgbotapi.Message) {
 			b.handleRefStart(ctx, msg.Chat.ID, user, ref)
 			return
 		}
+		// Одноклик-привязка из VK/MAX: кнопка «Привязать Telegram» ведёт на
+		// t.me/bot?start=link_<код> → гасим код тем же путём, что «привязать <код>».
+		if code, ok := strings.CutPrefix(payload, "link_"); ok {
+			b.handleLinkCode(ctx, msg.Chat.ID, user, msg.From.UserName, code)
+			return
+		}
 		b.sendMainMenu(ctx, msg.Chat.ID, 0, false)
 	case "menu":
 		b.sendMainMenu(ctx, msg.Chat.ID, 0, false)
