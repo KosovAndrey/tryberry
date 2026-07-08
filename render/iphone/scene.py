@@ -662,10 +662,21 @@ def animate_turn(pivot):
     pivot.keyframe_insert("rotation_euler", index=2, frame=1)
     pivot.rotation_euler = (0.0, 0.0, 0.0)
     pivot.keyframe_insert("rotation_euler", index=2, frame=n)
-    for fc in pivot.animation_data.action.fcurves:
-        for kp in fc.keyframe_points:
-            kp.interpolation = "BEZIER"
-            kp.handle_left_type = kp.handle_right_type = "AUTO_CLAMPED"
+    # ease-in-out: новые ключи и так Bezier/auto-clamped, но проставим явно.
+    # Blender 5.x: у Action больше нет .fcurves (layered actions) — идём через
+    # layers→strips→channelbags; если API снова сменится — не падаем (дефолт ок).
+    try:
+        act = pivot.animation_data.action
+        fcs = getattr(act, "fcurves", None)
+        if fcs is None:
+            fcs = [fc for layer in act.layers for strip in layer.strips
+                   for cb in strip.channelbags for fc in cb.fcurves]
+        for fc in fcs:
+            for kp in fc.keyframe_points:
+                kp.interpolation = "BEZIER"
+                kp.handle_left_type = kp.handle_right_type = "AUTO_CLAMPED"
+    except Exception as e:
+        print(f"[turn] не выставил интерполяцию ключей ({e}) — дефолт тоже плавный, едем дальше")
     return 1, n
 
 
