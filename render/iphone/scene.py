@@ -16,8 +16,11 @@ scene.py — импорт реальной модели айфона из assets
 ВКЛЮЧИ КОНСОЛЬ: Window → Toggle System Console (там инвентарь и логи).
 
 Экран специально выключен: живой UI бота (бабблы) кладём HTML-оверлеем поверх
-рендера на сайте — по координатам из screen_rect.json. 3D-разворот — отдельным
-проходом позже (это и есть анимация-интро; последний кадр = этот фронт-рендер).
+рендера на сайте — по координатам из screen_rect.json.
+
+3D-РАЗВОРОТ (интро): поставь CONFIG["turn"]=True и Run — отрендерится
+PNG-секвенция разворота 180° (крышка → анфас) в out/turn/. Последний кадр
+совпадает со still_front (та же камера). Потом в WSL: bash render/iphone/encode_turn.sh.
 """
 
 import os
@@ -35,6 +38,13 @@ CONFIG = {
     "rainbow": False,       # DEBUG: каждый материал в свой цвет (для опознания деталей)
     "screen_off": True,     # экран = выключенное тёмное стекло (UI кладём HTML-оверлеем на сайте)
     "transparent": True,    # прозрачный фон (film) — корпус «парит» поверх hero-фона сайта
+
+    # ── 3D-разворот-интро (анимация: с крышки 180° → анфас) ──
+    "turn": False,          # True = рендерим PNG-секвенцию разворота вместо стиллов
+    "turn_seconds": 2.8,    # длительность разворота
+    "turn_fps": 30,
+    "turn_samples": 48,     # на кадр анимации хватает меньше (есть denoise)
+    "turn_reverse": False,  # True = крутить в другую сторону
 }
 
 # Палитра различимых цветов для debug-радуги (имя, RGB 0-255):
@@ -615,6 +625,66 @@ def export_screen_rect(cam, view):
         print(f"[screen] не записал screen_rect.json: {e}")
 
 
+# ─────────────────────── 3D-РАЗВОРОТ (turn) ───────────────────
+def setup_turn_pivot(center):
+    """Пустышка-пивот в центре модели; ВСЕ корневые объекты модели — под неё.
+    Вызывать ДО создания камеры/света (в сцене только импортированная модель).
+    Крутим сам телефон, а не камеру: свет/софтбоксы остаются в мире → блики
+    «текут» по корпусу при повороте (кинематографично), а финальный кадр
+    гарантированно совпадает со still_front (та же камера-анфас)."""
+    pivot = bpy.data.objects.new("TurnPivot", None)
+    pivot.location = center
+    bpy.context.collection.objects.link(pivot)
+    for o in list(bpy.context.scene.objects):
+        if o is pivot or o.parent is not None:
+            continue
+        o.parent = pivot
+        o.matrix_parent_inverse = pivot.matrix_world.inverted()
+    return pivot
+
+
+def animate_turn(pivot):
+    """Ключи: кадр 1 = крышка к нам (180°), последний = 0° (анфас, якорный кадр).
+    Bezier auto-clamped даёт плавный ease-in-out — медленный старт и мягкую
+    остановку. Возвращает (frame_start, frame_end)."""
+    sc = bpy.context.scene
+    n = max(2, round(CONFIG["turn_seconds"] * CONFIG["turn_fps"]))
+    sc.frame_start, sc.frame_end = 1, n
+    sc.render.fps = CONFIG["turn_fps"]
+
+    sign = -1.0 if CONFIG.get("turn_reverse") else 1.0
+    pivot.rotation_mode = "XYZ"
+    pivot.rotation_euler = (0.0, 0.0, sign * math.pi)
+    pivot.keyframe_insert("rotation_euler", index=2, frame=1)
+    pivot.rotation_euler = (0.0, 0.0, 0.0)
+    pivot.keyframe_insert("rotation_euler", index=2, frame=n)
+    for fc in pivot.animation_data.action.fcurves:
+        for kp in fc.keyframe_points:
+            kp.interpolation = "BEZIER"
+            kp.handle_left_type = kp.handle_right_type = "AUTO_CLAMPED"
+    return 1, n
+
+
+def render_turn(cam, tgt, center, size, pivot):
+    """PNG-секвенция разворота (RGBA, прозрачный фон) → out/turn/turn_####.png.
+    Камера — СТРОГО анфас (как still_front): последний кадр == still_front,
+    на сайте видео подменяется на PNG без скачка. Дальше энкод: encode_turn.sh."""
+    place_camera(cam, tgt, center, size, "front")
+    bpy.context.view_layer.update()
+    f0, f1 = animate_turn(pivot)
+    sc = bpy.context.scene
+    sc.cycles.samples = CONFIG["turn_samples"]
+    turn_dir = os.path.join(OUT_DIR, "turn")
+    os.makedirs(turn_dir, exist_ok=True)
+    sc.render.filepath = os.path.join(turn_dir, "turn_")
+    print(f"[turn] рендерю {f1} кадров ({CONFIG['turn_seconds']}s @ {CONFIG['turn_fps']}fps, "
+          f"{CONFIG['turn_samples']} samples) → {turn_dir}")
+    bpy.ops.render.render(animation=True)
+    print(f"[turn] готово: {turn_dir}/turn_0001.png .. turn_{f1:04d}.png")
+    print("[turn] дальше в WSL: bash render/iphone/encode_turn.sh "
+          "(альфа-WebM → web/hero-iphone-turn.webm)")
+
+
 # ──────────────────────────── MAIN ────────────────────────────
 def main():
     model = find_model()
@@ -635,10 +705,15 @@ def main():
 
     center, size = world_bounds(meshes)
     print(f"[scene] центр={tuple(round(c,3) for c in center)} размер={round(size,3)}")
+    pivot = setup_turn_pivot(center) if CONFIG.get("turn") else None   # до камеры/света!
     setup_world()
     setup_render()
     cam, tgt = create_camera()
     setup_lights(center, size, tgt)              # софтбоксы позиционируются вокруг center
+
+    if pivot is not None:
+        render_turn(cam, tgt, center, size, pivot)
+        return
 
     # рендерим сразу оба вида — front и back — за один Run
     sc = bpy.context.scene

@@ -541,8 +541,11 @@ footer{background:var(--plum-deep);padding:70px 0 40px;border-top:1px solid var(
     </div>
     <div data-reveal="scale" style="--d:.2s">
       <div class="phone">
-        <img class="phone-render" src="/hero-iphone.png" width="1080" height="1920"
-             alt="TryBerry в Telegram" fetchpriority="high" decoding="async">
+        <picture>
+          <source type="image/webp" srcset="/hero-iphone.webp">
+          <img class="phone-render" src="/hero-iphone.png" width="1080" height="1920"
+               alt="TryBerry в Telegram" fetchpriority="high" decoding="async">
+        </picture>
         <div class="phone-screen">
           <div class="phone-notch"></div>
           <div class="lockscreen" aria-hidden="true">
