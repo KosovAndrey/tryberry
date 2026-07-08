@@ -98,6 +98,14 @@ BLACK_MATS = {
 }
 # Не трогаем: экран + переднее стекло (заменим UI отдельно):
 KEEP_MATS = {"BsXHDwLKqtDOfrW", "LqxrKBoiOXSOFqs"}
+# Выключенный экран: ГЛУБОКИЙ чёрный, не серый. Серая пелена была отражением
+# софтбоксов во всём стекле (roughness 0.06 + coat 1.0 размазывали блик по
+# экрану). Гасим силу отражения (Specular IOR Level) и лак — у камер/острова
+# (BLACK_MATS) глянец остаётся полный, поэтому они читаются ПОВЕРХ чёрного экрана.
+SCREEN_BLACK = (0.0, 0.0, 0.0)   # база экрана
+SCREEN_ROUGH = 0.05              # стекло остаётся гладким
+SCREEN_SPEC  = 0.2               # 1.0 = серая пелена; 0.2 = лёгкий живой отблеск
+SCREEN_COAT  = 0.15              # лак почти убран (у камер остаётся 1.0)
 SCREEN_DISPLAY_MAT = "BsXHDwLKqtDOfrW"   # именно дисплей (активная область) — для screen_rect
 # Задняя панель вокруг яблока = «старый основной» цвет PLUM_SRGB (светлее корпуса,
 # как на реальном айфоне). Корпус/рамку делаем чуть ТЕМНЕЕ через BODY_MUL.
@@ -285,9 +293,9 @@ def recolor_to_plum():
         is_black = mat.name in BLACK_MATS
         is_glass = mat.name in KEEP_MATS         # экран/переднее стекло
         if is_glass:
-            # выключенный экран: почти-чёрное глянцевое стекло с бликом.
+            # выключенный экран: глубокий чёрный (см. SCREEN_* над BLACK_MATS).
             # Реальный UI кладём HTML-оверлеем на сайте (screen_rect.json).
-            target = [0.004, 0.004, 0.006, 1.0] if CONFIG.get("screen_off") else None
+            target = list(SCREEN_BLACK) + [1.0] if CONFIG.get("screen_off") else None
         elif is_black:
             target = [0.0, 0.0, 0.0, 1.0]        # линзы/сенсоры/dynamic island
         elif mat.name in BACK_PANEL_MATS:
@@ -304,7 +312,7 @@ def recolor_to_plum():
                 p.inputs["Metallic"].default_value = 0.0 if (is_black or is_glass) else 0.85
             if "Roughness" in p.inputs:
                 if is_glass:
-                    p.inputs["Roughness"].default_value = 0.06     # экран — зеркальное стекло, чёткий блик
+                    p.inputs["Roughness"].default_value = SCREEN_ROUGH
                 elif is_black:
                     # снова глянцевое чёрное стекло: раньше серело из-за ярких обоев
                     # ВКЛючённого экрана — теперь экран выключен, глянец безопасен
@@ -312,14 +320,19 @@ def recolor_to_plum():
                 else:
                     r = p.inputs["Roughness"].default_value or 0.3
                     p.inputs["Roughness"].default_value = min(0.45, max(0.15, r))
-            # «мокрый» лак поверх стекла/чёрного — глубокий чёрный + резкие блики (Coat, Principled v2)
+            # «мокрый» лак: камерам/острову полный (читаются поверх чёрного
+            # экрана), экрану почти нет + гасим силу отражения — иначе серая пелена
             if is_glass or is_black:
                 coat = p.inputs.get("Coat Weight")
                 if coat is not None:
-                    coat.default_value = 1.0
+                    coat.default_value = SCREEN_COAT if is_glass else 1.0
                     cr = p.inputs.get("Coat Roughness")
                     if cr is not None:
                         cr.default_value = 0.03
+            if is_glass:
+                spec = p.inputs.get("Specular IOR Level")
+                if spec is not None:
+                    spec.default_value = SCREEN_SPEC
             # гасим оранжевое свечение, если цвет шёл из emission
             em = p.inputs.get("Emission Color") or p.inputs.get("Emission")
             if em:
