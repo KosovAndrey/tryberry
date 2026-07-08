@@ -67,6 +67,22 @@ eff × множитель от длительности непрерывной �
 капится потолком 12 ч. Данные: `products.last_price_change_at` (тач в scraper при
 change-only INSERT), `search_queries.last_change_at` (смена мин. цены топ-N).
 
+## Дешёвый change-detection WB (conditional GET, 2026-07-08)
+
+Перед полным скрейпом WB-карточки скрейпер спрашивает basket-CDN
+price-history.json **условным GET** (If-None-Match/If-Modified-Since по
+валидаторам прошлого ответа). `304` → цена не менялась: Result восстанавливается
+из снимка в Redis (`wb:cond:nm:*`), card.json не запрашивается, даунстрим
+(событие в notifier, change-only история) работает как обычно. Живая проба
+2026-07-08 подтвердила: CDN отдаёт ETag/Last-Modified и честный 304 без тела.
+
+- Снимок пишется только на полном скрейпе, TTL 7 дней БЕЗ продления на 304 →
+  стабильный товар полностью перечитывается ~раз в неделю (свежие имя/картинка).
+- Кадансы выше НЕ меняются — дешевеет каждый опрос (2 полных GET → один 304),
+  а не частота. Это резерв для будущего подъёма RPS/частоты WB.
+- Метрика: `wb_cond_get_total{outcome=not_modified|modified|miss}` — доля
+  not_modified = КПД фичи. Код: `internal/scraper/wildberries.go` (tryBasket).
+
 ## Пропускная (throughput) — где искать
 
 Маршрутизация топиков и параллелизм консюмеров — не здесь, а в

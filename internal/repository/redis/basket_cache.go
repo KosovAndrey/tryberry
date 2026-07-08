@@ -2,12 +2,15 @@ package redis
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"strconv"
 	"time"
 
 	"github.com/redis/go-redis/v9"
+
+	"gitlab.com/KosovAndrey/tryberrybot/internal/scraper"
 )
 
 // basketTTL — WB basket-шарды стабильны (меняются только когда WB добавляет новые),
@@ -65,4 +68,38 @@ func (c *BasketCache) NoBasket(ctx context.Context, id int64) bool {
 // MarkNoBasket — запомнить, что товара нет в basket-CDN (best-effort).
 func (c *BasketCache) MarkNoBasket(ctx context.Context, id int64) {
 	_ = c.client.Set(ctx, noBasketKey(id), "1", noBasketTTL).Err()
+}
+
+// condTTL — сколько живёт снимок для conditional GET (scraper.CondEntry).
+// Продления при 304 НЕТ (Get не трогает TTL, Put бывает только на полном
+// скрейпе): истечение ключа — принудительный полный рескрейп, который
+// обновляет имя/картинку и валидаторы. Так стабильный по цене товар
+// полностью перечитывается ~раз в неделю, а не никогда.
+const condTTL = 7 * 24 * time.Hour
+
+func condKey(id int64) string {
+	return fmt.Sprintf("wb:cond:nm:%d", id)
+}
+
+// GetCond — снимок прошлого basket-скрейпа для conditional GET. ok=false —
+// нет в кэше, битый JSON или Redis недоступен → полный скрейп.
+func (c *BasketCache) GetCond(ctx context.Context, id int64) (scraper.CondEntry, bool) {
+	var e scraper.CondEntry
+	val, err := c.client.Get(ctx, condKey(id)).Bytes()
+	if err != nil {
+		return e, false
+	}
+	if err := json.Unmarshal(val, &e); err != nil {
+		return e, false
+	}
+	return e, true
+}
+
+// PutCond — запомнить снимок успешного полного скрейпа (best-effort).
+func (c *BasketCache) PutCond(ctx context.Context, id int64, e scraper.CondEntry) {
+	b, err := json.Marshal(e)
+	if err != nil {
+		return
+	}
+	_ = c.client.Set(ctx, condKey(id), b, condTTL).Err()
 }
