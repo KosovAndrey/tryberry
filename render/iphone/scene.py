@@ -46,6 +46,10 @@ CONFIG = {
     "turn_samples": 48,     # на кадр анимации хватает меньше (есть denoise)
     "turn_reverse": False,  # True = крутить в другую сторону
 }
+# Запуск через turn.py ставит одноразовый env-флаг — редактировать CONFIG не нужно
+# (pop: флаг не «залипает» на следующие Run scene.py в той же сессии Blender).
+if os.environ.pop("TRYBERRY_TURN", None):
+    CONFIG["turn"] = True
 
 # Палитра различимых цветов для debug-радуги (имя, RGB 0-255):
 PALETTE = [
