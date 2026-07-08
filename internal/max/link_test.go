@@ -32,7 +32,7 @@ func TestLinkButtonFor(t *testing.T) {
 func TestLinkButtonForMissingURL(t *testing.T) {
 	b := &Bot{} // URL-ы не заданы
 	if _, ok := b.linkButtonFor(domain.LinkDirMax2TG, "ABCD2345"); ok {
-		t.Error("max2tg без TG_BOT_URL: кнопки быть не должно")
+		t.Error("max2tg без TELEGRAM_BOT_URL: кнопки быть не должно")
 	}
 	if _, ok := b.linkButtonFor(domain.LinkDirMax2VK, "ABCD2345"); ok {
 		t.Error("max2vk без VK_BOT_URL: кнопки быть не должно")

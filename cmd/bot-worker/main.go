@@ -226,7 +226,7 @@ func run(log *slog.Logger) error {
 			maxBot = max.NewBot(maxClient, log, userRepo, subRepo, prodRepo, priceHistoryRepo,
 				searchQueryRepo, searchSubRepo, promoRepo, referralRepo, registry, linkCodes, redisClient,
 				getEnv("MAX_BOT_URL", ""),
-				getEnv("TG_BOT_URL", ""),
+				getEnv("TELEGRAM_BOT_URL", ""),
 				getEnv("VK_BOT_URL", ""),
 				getEnv("PUBLIC_BASE_URL", "https://tryberry.ru"),
 				parseAdminIDs(getEnv("MAX_ADMIN_IDS", "")))

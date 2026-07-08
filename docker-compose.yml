@@ -198,7 +198,7 @@ services:
       VK_ADMIN_IDS: "${VK_ADMIN_IDS:-}"
       # TG-бот: ссылка для одноклик-кнопки «Привязать в Telegram» из MAX
       # (пусто = кнопки нет, работает ручной ввод кода).
-      TG_BOT_URL: "${TG_BOT_URL:-}"
+      TELEGRAM_BOT_URL: "${TELEGRAM_BOT_URL:-}"
       # MAX-бот (пусто = выключено): токен + ссылка для приглашений + операторы.
       MAX_BOT_TOKEN: "${MAX_BOT_TOKEN:-}"
       MAX_BOT_URL: "${MAX_BOT_URL:-}"
@@ -290,8 +290,14 @@ services:
       # чтобы медленные браузерные скрейпы не занимали слоты пула WB/YM.
       # docs/THROUGHPUT-ROADMAP.md №2.
       OZON_CONSUMER_CONCURRENCY: "${OZON_CONSUMER_CONCURRENCY:-6}"
-      SCRAPER_RATE_LIMIT_RPS: "5"
-      SCRAPER_RATE_LIMIT_RPS_OZON: "1"
+      # Per-МП потолки RPS (НА РЕПЛИКУ; prod = 3 реплики → умножай на 3).
+      # Это консервативные «потолки вежливости», не измеренные лимиты; поднимать
+      # РЕАКТИВНО по сигналу lag/pending, сторожа — метрики капчи/403/not_found.
+      # WB терпит сильно больше (basket-CDN, с cond-GET большинство ответов 304);
+      # Ozon упирается в сайдкар (~1 rps на 4 дорожки) — поднимать вместе с
+      # OZON_POOL_SIZE; Ali — осторожность X5SEC.
+      SCRAPER_RATE_LIMIT_RPS_WB: "${SCRAPER_RATE_LIMIT_RPS_WB:-5}"
+      SCRAPER_RATE_LIMIT_RPS_OZON: "${SCRAPER_RATE_LIMIT_RPS_OZON:-1}"
       # u-card-fallback (трансграничные WB-товары, basket-CDN их не видит) через
       # xray: u-card 403-ит прямой RU-IP воркера, зарубежный exit принимает. Нагрузка
       # копеечная — только редкие трансграничные. Пусто → fallback идёт напрямую (403).
@@ -349,6 +355,8 @@ services:
       SEARCH_TASKS_TOPIC: "search-tasks"
       WB_TOKEN_POOL_PREFIX: "wb:search:"
       WB_TOKEN_POOL_SIZE: "5"
+      # тот же WB-потолок, что у scraper (карточки в обогащении выдачи)
+      SCRAPER_RATE_LIMIT_RPS_WB: "${SCRAPER_RATE_LIMIT_RPS_WB:-5}"
       # 403-фолбэк WB-поиска в браузер-сайдкар: wbaas режет ГОРЯЧИЕ запросы direct
       # (различие в транспорте, не в токене/IP). Горячие уходят в прогретый
       # браузер wb-search-miner (in-page fetch к тому же u-search).
