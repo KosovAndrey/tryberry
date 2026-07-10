@@ -35,6 +35,11 @@ CONFIG = {
     "res_y":   1920,
     "samples": 96,          # превью; для финала поднимем
     "use_gpu": True,
+    # Сжатие корпуса по ширине: стекло модели (аспект 0.479) шире реального
+    # дисплея iPhone (1320:2868 = 0.460), из-за этого видео экрана на сайте
+    # жило с чёрными полями или растяжением. Сужаем ВЕСЬ телефон на ~4% —
+    # на глаз незаметно, а видео ложится в стекло 1:1 без хаков.
+    "slim_x": 0.961,
     "rainbow": False,       # DEBUG: каждый материал в свой цвет (для опознания деталей)
     "screen_off": True,     # экран = выключенное тёмное стекло (UI кладём HTML-оверлеем на сайте)
     "transparent": True,    # прозрачный фон (film) — корпус «парит» поверх hero-фона сайта
@@ -643,6 +648,29 @@ def export_screen_rect(cam, view):
         print(f"[screen] не записал screen_rect.json: {e}")
 
 
+# ─────────────────── СЖАТИЕ КОРПУСА ПОД АСПЕКТ ВИДЕО ───────────
+def apply_slim(meshes):
+    """Сужает модель по мировой X (ширина телефона в анфас) на CONFIG["slim_x"].
+    Через пустышку-родителя в центре модели: при развороте (TurnPivot выше по
+    иерархии) сжатие крутится вместе с телефоном — как физически узкий корпус.
+    Вызывать ПОСЛЕ импорта, ДО setup_turn_pivot/камеры/света."""
+    f = float(CONFIG.get("slim_x") or 1.0)
+    if abs(f - 1.0) < 1e-6:
+        return
+    center, _ = world_bounds(meshes)
+    piv = bpy.data.objects.new("SlimPivot", None)
+    piv.location = center
+    bpy.context.collection.objects.link(piv)
+    for o in list(bpy.context.scene.objects):
+        if o is piv or o.parent is not None:
+            continue
+        o.parent = piv
+        o.matrix_parent_inverse = piv.matrix_world.inverted()
+    piv.scale = (f, 1.0, 1.0)
+    bpy.context.view_layer.update()              # обновить матрицы до замера bounds
+    print(f"[slim] корпус сужен по X: {f} (стекло → аспект видео 1320:2868)")
+
+
 # ─────────────────────── 3D-РАЗВОРОТ (turn) ───────────────────
 def setup_turn_pivot(center):
     """Пустышка-пивот в центре модели; ВСЕ корневые объекты модели — под неё.
@@ -738,6 +766,7 @@ def main():
     else:
         recolor_to_plum()
 
+    apply_slim(meshes)                           # сузить корпус под аспект видео
     center, size = world_bounds(meshes)
     print(f"[scene] центр={tuple(round(c,3) for c in center)} размер={round(size,3)}")
     pivot = setup_turn_pivot(center) if CONFIG.get("turn") else None   # до камеры/света!
