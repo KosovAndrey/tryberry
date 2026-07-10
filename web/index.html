@@ -162,27 +162,31 @@ nav.scrolled{
 .phone-screen{transition:opacity .4s ease}
 .phone.intro picture{visibility:hidden}
 .phone.intro .phone-screen{opacity:0}
-/* экран: СТЕКЛО дисплея по пиксель-замеру рендера hero-iphone.png: x 203..882,
-   y 254..1672 из 1080×1920 (не путать с силуэтом корпуса 194..884 — старый замер
-   по нему давал перекос видео влево); размеры в cqw → масштаб под любой размер */
-.phone-screen{position:absolute;left:18.8%;top:13.23%;width:62.87%;height:73.85%;
-  border-radius:15% / 7.2%;overflow:hidden;background:#050308}
-/* dynamic island (≈28% ширины экрана, пилюля); в видео остров стёрт — рисуем DOM */
-.phone-notch{position:absolute;top:2.1%;left:50%;transform:translateX(-50%);width:28%;height:4.8cqw;background:#050308;border-radius:99px;z-index:7}
-/* видео чата (запись приложения 1320×2868, вычищена в AE): fill — проекция
-   3D-экрана на 4% шире реального дисплея; тянем по ширине (1.04x по X глазу
-   не видно), иначе contain оставляет заметные чёрные поля по бокам */
+/* экран: прямоугольник ДИСПЛЕЯ из screen_rect.json (проекция материала
+   BsXHDwLKqtDOfrW через камеру). Аспект 0.4617 ≈ видео 1320:2868 (0.4602,
+   0.33% добирается fill). Вокруг — родная чёрная рамка стекла из рендера.
+   НЕ мерить по пикселям стекла — оно шире дисплея, будет перекос! */
+.phone-screen{position:absolute;left:20.324%;top:13.842%;width:59.352%;height:72.315%;
+  border-radius:15% / 6.9%;overflow:hidden;background:#050308}
+/* dynamic island (пилюля); в видео остров стёрт — рисуем DOM, блик линзы
+   фронталки добавляет .phone-gloss (настоящий рендер) поверх */
+.phone-notch{position:absolute;top:2.1%;left:50%;transform:translateX(-50%);width:28%;height:5.1cqw;background:#050308;border-radius:99px;z-index:7}
+/* видео чата (запись приложения 1320×2868, вычищена в AE) — 1:1 в дисплей */
 .phone-chat{position:absolute;inset:0;width:100%;height:100%;object-fit:fill;z-index:1}
+/* стекло: кроп дисплея из рендера (hero-gloss.webp) в blend screen поверх видео —
+   чёрное не влияет, остаются блик линзы и шин стекла (экран ≠ наклейка) */
+.phone-gloss{position:absolute;inset:0;width:100%;height:100%;z-index:8;
+  mix-blend-mode:screen;pointer-events:none}
 /* кликабельные копии бейджей TG/VK/MAX — ровно поверх запечённых в видео
-   (координаты = замер финального кадра в долях 1320×2868; fill — без офсетов;
+   (координаты = замер финального кадра в долях 1320×2868; box == видео;
    стиль пилюль = render/iphone/out/badges.html). Появляются по ended (.done) */
-.phone-links{position:absolute;inset:0;z-index:6;pointer-events:none;font-size:2.2cqw}
+.phone-links{position:absolute;inset:0;z-index:6;pointer-events:none;font-size:2.16cqw}
 .pl{position:absolute;top:6.77%;height:3.7%;box-sizing:border-box;
-  display:flex;align-items:center;justify-content:center;gap:.96cqw;
-  background:#241021;border:.14cqw solid rgba(255,255,255,.10);border-radius:99em;
+  display:flex;align-items:center;justify-content:center;gap:.94cqw;
+  background:#241021;border:.13cqw solid rgba(255,255,255,.10);border-radius:99em;
   color:rgba(255,255,255,.92);font-weight:500;text-decoration:none;white-space:nowrap;
   opacity:0;pointer-events:none;transition:opacity .3s ease,transform .2s ease,border-color .2s ease}
-.pl i{width:.87cqw;height:.87cqw;border-radius:50%;flex:none}
+.pl i{width:.85cqw;height:.85cqw;border-radius:50%;flex:none}
 .pl-tg{left:7.8%;width:26.06%}    .pl-tg i{background:#2aabee}
 .pl-vk{left:39.32%;width:28.94%}  .pl-vk i{background:#0077ff}
 .pl-max{left:73.64%;width:18.41%} .pl-max i{background:#8b5cf6}
@@ -541,6 +545,7 @@ footer{background:var(--plum-deep);padding:70px 0 40px;border-top:1px solid var(
           <video class="phone-chat" muted playsinline preload="auto"
                  poster="/hero-chat-poster.webp" src="/hero-chat.mp4"
                  aria-label="Демо: бот присылает уведомление о снижении цены"></video>
+          <img class="phone-gloss" src="/hero-gloss.webp" alt="" aria-hidden="true" decoding="async">
           <nav class="phone-links" aria-label="Бот доступен в мессенджерах">
             <a class="pl pl-tg" href="https://t.me/TryBerryBot" target="_blank" rel="noopener" tabindex="-1"><i></i>Telegram</a>
             <a class="pl pl-vk" href="https://vk.me/tryberrybot" target="_blank" rel="noopener" tabindex="-1"><i></i>ВКонтакте</a>
