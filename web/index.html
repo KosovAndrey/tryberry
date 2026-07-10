@@ -154,74 +154,44 @@ nav.scrolled{
 .phone-render{position:absolute;inset:0;width:100%;height:100%;object-fit:contain;
   filter:drop-shadow(0 42px 80px rgba(0,0,0,.55)) drop-shadow(0 10px 26px rgba(160,22,81,.22))}
 /* 3D-интро: разворот с крышки (альфа-WebM, последний кадр == hero-iphone.png).
-   Пока .phone.intro — виден только <video>; экран и PNG ждут. Анимации экрана
-   (Face ID/unlock/бабблы) стоят на паузе (пауза держит и delay-фазу) и стартуют
-   с нуля, когда JS снимет .intro по ended. Safari (нет VP9-альфы) отсекает JS. */
+   Пока .phone.intro — виден только <video> разворота; экран и PNG ждут.
+   По ended JS снимает .intro и запускает видео чата в экране.
+   Safari (нет VP9-альфы) отсекает JS — сразу статичный композит + видео чата. */
 .phone-turn{display:none}
 .phone.intro .phone-turn{display:block}
 .phone-screen{transition:opacity .4s ease}
 .phone.intro picture{visibility:hidden}
 .phone.intro .phone-screen{opacity:0}
-.phone.intro .phone-screen,.phone.intro .phone-screen *{animation-play-state:paused!important}
 /* экран позиционируется по screen_rect.json (проекция дисплея в кадре рендера) */
 /* экран: позиция по замеру пикселей экрана в рендере (measure_screen.py);
-   размеры контента в em, база = cqw контейнера .phone → масштаб под любой размер */
+   размеры в cqw от контейнера .phone → масштаб под любой размер */
 .phone-screen{position:absolute;left:18.06%;top:13.23%;width:63.8%;height:73.85%;
-  border-radius:15% / 7.2%;overflow:hidden;background:linear-gradient(180deg,#1d0815,#120510);
-  font-size:2.8cqw;padding:3.4em 1.15em 1em}
-/* dynamic island (≈28% ширины экрана, пилюля) */
-.phone-notch{position:absolute;top:1.9%;left:50%;transform:translateX(-50%);width:28%;height:1.75em;background:#050308;border-radius:99px;z-index:7}
-/* lock screen: реалистичный iOS-экран (обои+часы) → авто Face ID → уезжает вверх */
-.lockscreen{position:absolute;inset:0;z-index:5;overflow:hidden;color:#fff;
-  background:
-    radial-gradient(90% 60% at 22% 12%, rgba(255,130,180,.55), transparent 60%),
-    radial-gradient(85% 70% at 86% 26%, rgba(160,22,81,.8), transparent 55%),
-    radial-gradient(130% 85% at 50% 112%, #2a0a1f, transparent 70%),
-    linear-gradient(158deg,#5c1542,#210a18);
-  animation:unlock .75s var(--ease) 2.2s both}
-.lock-lockicon{position:absolute;top:8.5%;left:50%;transform:translateX(-50%);width:1.6em;height:1.6em;opacity:.92}
-.lock-lockicon svg{position:absolute;inset:0;width:100%;height:100%}
-.lk-closed{animation:lkOut .3s ease 1.5s both}
-.lk-open{opacity:0;animation:lkIn .38s var(--ease) 1.6s both}
-.lock-clock{position:absolute;top:23%;left:0;right:0;text-align:center;text-shadow:0 2px 20px rgba(0,0,0,.25)}
-.lock-date{font-size:.95em;font-weight:600;opacity:.92;margin-bottom:.15em}
-.lock-time{font-family:var(--font-display);font-weight:600;font-size:4.6em;line-height:.95;letter-spacing:-.02em}
-.lock-actions{position:absolute;bottom:5.5%;left:9%;right:9%;display:flex;justify-content:space-between}
-.lock-actions i{width:2.4em;height:2.4em;border-radius:50%;background:rgba(0,0,0,.3);display:flex;align-items:center;justify-content:center}
-.lock-actions svg{width:1.2em;height:1.2em}
-@keyframes unlock{0%,60%{transform:translateY(0);opacity:1}100%{transform:translateY(-16%);opacity:0;visibility:hidden}}
-@keyframes lkOut{to{opacity:0;transform:scale(.7)}}
-@keyframes lkIn{0%{opacity:0;transform:scale(.5)}60%{transform:scale(1.12)}100%{opacity:1;transform:scale(1)}}
-.tg-header{display:flex;align-items:center;gap:.7em;padding-bottom:1em;border-bottom:1px solid rgba(255,255,255,.06)}
-.tg-ava{width:2.4em;height:2.4em;object-fit:contain;flex:none}
-.tg-header .nm{font-weight:600;font-size:1.05em}
-.tg-header .st{font-size:.8em;color:var(--muted)}
-.bubble{
-  background:#26102a;border-radius:1.15em 1.15em 1.15em .3em;padding:1em;margin-top:1em;
-  border:1px solid rgba(255,93,143,.14);opacity:0;transform:translateY(1em);
-  animation:bubbleIn .7s var(--ease) 3.1s forwards;   /* после разблокировки (unlock ~2.95s) */
-}
-.bubble.b2{animation-delay:4s;background:#1f0c2a}
-.bubble .ttl{font-size:.92em;color:var(--berry-bright);font-weight:600;display:flex;align-items:center;gap:.45em;margin-bottom:.6em}
-.bubble .prod{font-size:.95em;color:#e7d3dd;line-height:1.35;margin-bottom:.7em}
-.price-row{display:flex;align-items:baseline;gap:.55em}
-.price-old{font-size:.9em;color:var(--muted);text-decoration:line-through}
-.price-new{font-family:var(--font-display);font-weight:700;font-size:1.55em;color:#fff;white-space:nowrap}
-.price-badge{margin-left:auto;font-size:.8em;font-weight:600;color:#fff;background:linear-gradient(120deg,var(--berry),var(--berry-deep));padding:.2em .6em;border-radius:.5em;white-space:nowrap}
-.bubble .meta{font-size:.78em;color:var(--muted);margin-top:.6em;line-height:1.3}
-@keyframes bubbleIn{to{opacity:1;transform:translateY(0)}}
-/* honest / fake verdict accents */
-.ttl.good{color:var(--good)}
-.ttl.warn{color:var(--warn)}
-.price-badge.good{background:linear-gradient(120deg,var(--good),#1c9d72)}
-.price-badge.warn{background:linear-gradient(120deg,var(--warn),#d97a16);color:#1f0e00}
-.spark{margin:4px 0 11px}
-.spark svg{width:100%;height:50px;display:block;overflow:visible}
-.spark .area{fill:url(#spark-fill)}
-.spark .ln{fill:none;stroke:var(--good);stroke-width:2.4;stroke-linecap:round;stroke-linejoin:round}
-.spark .now{fill:var(--good);stroke:#160710;stroke-width:2}
-.spark .nowring{fill:none;stroke:var(--good);stroke-width:1.5;opacity:.5}
-.spark .fakedrop{fill:none;stroke:var(--warn);stroke-width:2.2;stroke-dasharray:3 3;stroke-linecap:round}
+  border-radius:15% / 7.2%;overflow:hidden;background:#050308}
+/* dynamic island (≈27% ширины видео-кадра, пилюля); в видео остров стёрт — рисуем DOM */
+.phone-notch{position:absolute;top:2.1%;left:50%;transform:translateX(-50%);width:26.9%;height:4.8cqw;background:#050308;border-radius:99px;z-index:7}
+/* видео чата (запись приложения 1320×2868, вычищена в AE): contain — целиком по
+   высоте экрана; проекция 3D-экрана чуть шире дисплея, боковые поля ~2.65%
+   сливаются с чёрным фоном .phone-screen (читаются как рамка) */
+.phone-chat{position:absolute;inset:0;width:100%;height:100%;object-fit:contain;z-index:1}
+/* кликабельные копии бейджей TG/VK/MAX — ровно поверх запечённых в видео
+   (координаты замерены по финальному кадру + учтён contain-офсет 2.652%;
+   стиль пилюль = render/iphone/out/badges.html). Появляются по ended (.done) */
+.phone-links{position:absolute;inset:0;z-index:6;pointer-events:none;font-size:2.2cqw}
+.pl{position:absolute;top:6.77%;height:3.7%;box-sizing:border-box;
+  display:flex;align-items:center;justify-content:center;gap:.96cqw;
+  background:#241021;border:.14cqw solid rgba(255,255,255,.10);border-radius:99em;
+  color:rgba(255,255,255,.92);font-weight:500;text-decoration:none;white-space:nowrap;
+  opacity:0;pointer-events:none;transition:opacity .3s ease,transform .2s ease,border-color .2s ease}
+.pl i{width:.87cqw;height:.87cqw;border-radius:50%;flex:none}
+.pl-tg{left:10.04%;width:24.68%}  .pl-tg i{background:#2aabee}
+.pl-vk{left:39.88%;width:27.41%}  .pl-vk i{background:#0077ff}
+.pl-max{left:72.38%;width:17.43%} .pl-max i{background:#8b5cf6}
+.phone.done .pl{opacity:1;pointer-events:auto;animation:plPulse 5s ease-in-out infinite}
+.phone.done .pl-tg{animation-delay:1s}
+.phone.done .pl-vk{animation-delay:1.35s}
+.phone.done .pl-max{animation-delay:1.7s}
+.phone.done .pl:hover,.phone.done .pl:focus-visible{animation:none;transform:scale(1.05);border-color:rgba(255,255,255,.30)}
+@keyframes plPulse{0%,9%,100%{transform:scale(1)}4.5%{transform:scale(1.06)}}
 
 /* ---------- reveal ---------- */
 [data-reveal]{opacity:0;transform:translateY(38px);transition:opacity 1s var(--ease),transform 1s var(--ease);transition-delay:var(--d,0s)}
@@ -471,22 +441,20 @@ footer{background:var(--plum-deep);padding:70px 0 40px;border-top:1px solid var(
   *{animation-duration:.001s!important;transition-duration:.1s!important}
   [data-reveal]{opacity:1;transform:none}
   .hero h1 .kline > span{transform:none;animation:none}
-  .lockscreen{display:none}
   .phone.intro .phone-turn{display:none}
   .phone.intro picture{visibility:visible}
   .phone.intro .phone-screen{opacity:1}
-  .bubble{opacity:1;transform:none;animation:none}
+  .phone.done .pl{animation:none}
   .accent{animation:none}
   .mp-track{animation:none;flex-wrap:wrap;justify-content:center}
   html{scroll-behavior:auto}
 }
 </style>
 <noscript><style>
-/* без JS некому снять .intro — показываем статичный композит */
+/* без JS некому снять .intro — статичный композит: PNG + постер видео (локскрин) */
 .phone.intro .phone-turn{display:none}
 .phone.intro picture{visibility:visible}
 .phone.intro .phone-screen{opacity:1}
-.phone.intro .phone-screen,.phone.intro .phone-screen *{animation-play-state:running!important}
 </style></noscript>
 
 <script type="application/ld+json">
@@ -570,39 +538,14 @@ footer{background:var(--plum-deep);padding:70px 0 40px;border-top:1px solid var(
         </picture>
         <div class="phone-screen">
           <div class="phone-notch"></div>
-          <div class="lockscreen" aria-hidden="true">
-            <div class="lock-lockicon">
-              <svg class="lk-closed" viewBox="0 0 24 24" fill="#fff"><rect x="5" y="11" width="14" height="9.5" rx="2.6"/><path d="M8 11V7.6a4 4 0 0 1 8 0V11" fill="none" stroke="#fff" stroke-width="2"/></svg>
-              <svg class="lk-open" viewBox="0 0 24 24" fill="#fff"><rect x="5" y="11" width="14" height="9.5" rx="2.6"/><path d="M8 11V7.6a4 4 0 0 1 7.7-1.6" fill="none" stroke="#fff" stroke-width="2"/></svg>
-            </div>
-            <div class="lock-clock">
-              <div class="lock-date">среда, 1 июля</div>
-              <div class="lock-time">9:41</div>
-            </div>
-            <div class="lock-actions">
-              <i><svg viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="1.8"><path d="M9 3h6l-1.2 5.5a2.8 2.8 0 0 1-5.6 0z"/><path d="M12 14v5" stroke-linecap="round"/></svg></i>
-              <i><svg viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="1.8"><rect x="4" y="7.5" width="16" height="11.5" rx="3"/><circle cx="12" cy="13.2" r="3"/><path d="M9 7.5 10 5.5h4L15 7.5" stroke-linejoin="round"/></svg></i>
-            </div>
-          </div>
-          <div class="tg-header">
-            <img src="/logo.png" class="tg-ava" alt="TryBerry">
-            <div><div class="nm">TryBerry</div><div class="st">bot · онлайн</div></div>
-          </div>
-          <div class="bubble">
-            <div class="ttl">📉 Цена снизилась</div>
-            <div class="prod">Наушники беспроводные TWS, чёрные</div>
-            <div class="price-row">
-              <span class="price-old">2 490 ₽</span>
-              <span class="price-new">1 690 ₽</span>
-              <span class="price-badge">−32%</span>
-            </div>
-            <div class="meta">С учётом баллов за отзыв · ваш порог 1 800 ₽</div>
-          </div>
-          <div class="bubble b2">
-            <div class="ttl">🔎 В вашей выдаче</div>
-            <div class="prod">«кроссовки мужские» — 3 товара подешевели</div>
-            <div class="meta">Слежу за всей страницей результатов</div>
-          </div>
+          <video class="phone-chat" muted playsinline preload="auto"
+                 poster="/hero-chat-poster.webp" src="/hero-chat.mp4"
+                 aria-label="Демо: бот присылает уведомление о снижении цены"></video>
+          <nav class="phone-links" aria-label="Бот доступен в мессенджерах">
+            <a class="pl pl-tg" href="https://t.me/TryBerryBot" target="_blank" rel="noopener" tabindex="-1"><i></i>Telegram</a>
+            <a class="pl pl-vk" href="https://vk.me/tryberrybot" target="_blank" rel="noopener" tabindex="-1"><i></i>ВКонтакте</a>
+            <a class="pl pl-max" href="https://max.ru/se13426918_bot" target="_blank" rel="noopener" tabindex="-1"><i></i>MAX</a>
+          </nav>
         </div>
       </div>
     </div>
@@ -610,27 +553,39 @@ footer{background:var(--plum-deep);padding:70px 0 40px;border-top:1px solid var(
 </header>
 
 <script>
-/* дата на мок-локскрине — всегда сегодняшняя (ролики/скрины не устаревают) */
-(()=>{
-  const ld=document.querySelector('.lock-date');
-  if(ld)ld.textContent=new Date().toLocaleDateString('ru-RU',{weekday:'long',day:'numeric',month:'long'});
-})();
-/* 3D-интро разворота: играем альфа-WebM, по ended снимаем .intro — появляется
-   PNG (кадр 1-в-1) и стартуют анимации экрана. Отсекаем: Safari (VP9-альфу не
-   умеет — чёрный фон), reduced-motion, нет vp9, сеть не успела (4с) или видео
-   зависло (5с после старта). В любом отсеве — сразу статичный композит. */
+/* Хореография hero-телефона:
+   1) 3D-интро разворота (альфа-WebM) — Safari (нет VP9-альфы), reduced-motion,
+      таймауты сети/зависания отсекаются сразу к шагу 2 без интро.
+   2) снимаем .intro → PNG-рендер + экран, в экране играет видео чата (MP4).
+   3) по ended видео замирает на финальном кадре, класс .done включает
+      кликабельные DOM-бейджи TG/VK/MAX поверх запечённых (пульс волной).
+   reduced-motion: видео не играем — сразу финальный кадр с бейджами. */
 (()=>{
   const ph=document.querySelector('.phone.intro');if(!ph)return;
   const v=ph.querySelector('.phone-turn');
-  const end=()=>{ph.classList.remove('intro');if(v)try{v.pause()}catch(e){}};
+  const chat=ph.querySelector('.phone-chat');
   const rm=matchMedia('(prefers-reduced-motion:reduce)').matches;
+  const done=()=>{ph.classList.add('done');
+    ph.querySelectorAll('.pl').forEach(a=>a.removeAttribute('tabindex'))};
+  let started=false;
+  const start=()=>{if(started)return;started=true;
+    ph.classList.remove('intro');if(v)try{v.pause()}catch(e){}
+    if(!chat)return done();
+    chat.addEventListener('ended',done,{once:true});
+    chat.addEventListener('error',done,{once:true});
+    /* стало и не кончилось (сеть) — показываем бейджи поверх, done идемпотентен */
+    chat.addEventListener('playing',()=>setTimeout(done,12000),{once:true});
+    if(rm){const seek=()=>{try{chat.currentTime=Math.max(0,chat.duration-.05)}catch(e){}done()};
+      chat.readyState>0?seek():chat.addEventListener('loadedmetadata',seek,{once:true});
+      return}
+    chat.play().catch(done)};
   const saf=/apple/i.test(navigator.vendor||'');
-  if(rm||saf||!v||!v.canPlayType('video/webm; codecs="vp9"'))return end();
-  let t=setTimeout(end,4000);
-  v.addEventListener('playing',()=>{clearTimeout(t);t=setTimeout(end,5000)},{once:true});
-  v.addEventListener('ended',()=>{clearTimeout(t);end()},{once:true});
-  v.addEventListener('error',end,{once:true});
-  v.play().catch(end);
+  if(rm||saf||!v||!v.canPlayType('video/webm; codecs="vp9"'))return start();
+  let t=setTimeout(start,4000);
+  v.addEventListener('playing',()=>{clearTimeout(t);t=setTimeout(start,5000)},{once:true});
+  v.addEventListener('ended',()=>{clearTimeout(t);start()},{once:true});
+  v.addEventListener('error',start,{once:true});
+  v.play().catch(start);
 })();
 </script>
 
