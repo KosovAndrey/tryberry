@@ -43,7 +43,17 @@ blender --background --python render/iphone/scene.py
 - `samples`: 128 (превью). Для финала — 512.
 - `use_gpu`: пытается OptiX/CUDA, иначе CPU.
 
-## Где мы сейчас
+## Где мы сейчас (обновлено 2026-07-10)
+**Видео чата ГОТОВО и на сайте**: запись PWA (IMG_0944) вычищена в After Effects
+(дата/оператор/остров/название сайта — CAF; композер пересобран из ассетов
+`send-button.png`/`send-field.png`; бейджи платформ `badge-1..3.png` запечены
+с pop-анимацией). Мастер — ProRes `out/hero-chat.mov` (503МБ, у Андрея),
+веб — `web/hero-chat.mp4` (1МБ, H.264) + постер `web/hero-chat-poster.webp`.
+На сайте: экран = `<video>` (object-fit:contain), поверх DOM-остров и
+кликабельные DOM-бейджи TG/VK/MAX с пульсом (класс .done по ended).
+Проверка совмещения: `out/overlay-test.html?half` (скрин через headless Chrome).
+
+## Историческое (DOM-экран, заменён видео)
 Стиллы ГОТОВЫ и на сайте: `web/hero-iphone.png`/`.webp` (прозрачный фон, экран
 выключен) + живой HTML-экран оверлеем по `out/screen_rect.json` — композит в
 `web/index.html` (lockscreen → Face ID unlock → бабблы пуша, всё на DOM).
