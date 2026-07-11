@@ -53,29 +53,26 @@ CONFIG = {
     "turn_reverse": False,  # True = крутить в другую сторону
     "turn_shutter": 0.35,   # моушен-блюр (0 = выкл): смаз на быстрой фазе, киношно
 
-    # ── Полоса-блик на стекле экрана (place_glare_band) ──
-    # Диагональный мягкий блик как в продуктовых рендерах Apple. Все координаты
-    # в ДОЛЯХ ДИСПЛЕЯ — куда полоса ляжет НА ЭКРАНЕ, позицию светильника в мире
-    # скрипт считает сам (зеркальная геометрия от front-камеры). Итерируем числами.
-    #
-    # БЛИК ТОЛЬКО В ДВИЖЕНИИ: center_u=1.30 — «место» полосы ЗА правым краем
-    # экрана, финальный кадр (анфас) чистый. Во время разворота отражение
-    # физически едет по экрану слева направо и уходит за край на ease-out
-    # (последние ~10° занимают ~0.7s — медленный красивый вайп).
-    "glare": {
-        "enabled":  True,
-        "center_u": 1.30,   # центр полосы по ширине экрана: 0=лево, 1=право, >1 = за краем
-        "center_v": 0.20,   # по высоте: 0=верх, 1=низ
-        "angle_deg": 20.0,  # наклон от вертикали, «+» = верх полосы уходит вправо
-        "width":    0.45,   # ширина полосы в долях ширины экрана
-        "length":   1.8,    # длина в долях высоты экрана (>1 = края уходят за экран)
-        "dist":     1.6,    # расстояние плоскости света от стекла (в size модели)
-        "energy":   400.0,  # ⚙ яркость: 1200 выжигало в белое, крутить 150..800
-        # Пробные кадры для итераций БЕЗ рендера всей секвенции: телефон
-        # повёрнут на N° до финала — видно, как полоса едет по экрану.
-        # Рендерятся при обычном Run scene.py → out/still_probe_NN.png.
-        "probe_deg": [2, 5, 10],
+    # ── Студийные стрипы (пара вертикальных софтбоксов, place_strips) ──
+    # ЕДИНСТВЕННЫЙ источник бликов и на корпусе, и на стекле — как в реальной
+    # продуктовой съёмке телефонов: два стрипа слева/справа от камеры.
+    # Азимут ±20° выбран так, что В ФИНАЛЬНОМ АНФАСЕ отражения лежат ЗА краями
+    # экрана (экран чистый, бликов нет), а при развороте правый стрип физически
+    # проезжает по стеклу и уходит за край на ease-out (блик только в движении);
+    # левый так же обтекает крышку в первой половине разворота.
+    "strips": {
+        "azimuth_deg": 20.0,  # угол пары от оси камеры; меньше = вайп позже/ближе к финалу,
+                              # НО < ~16° полоса останется на экране в статике
+        "dist":   1.6,        # расстояние стрипов от центра модели (в size)
+        "width":  0.5,        # ширина стрипа (в size) = ширина полосы блика
+        "length": 3.0,        # высота стрипа (в size) — полоса на всю высоту корпуса
+        "tilt_deg": 8.0,      # наклон длинной оси от вертикали (лёгкая диагональ блика)
+        "energy": 1200.0,     # ⚙ яркость пары (крутить 500..2500)
     },
+    # Пробные кадры БЕЗ рендера секвенции: телефон за N° до финала разворота —
+    # видно, как блик едет по стеклу (5..20) и обтекает крышку (90/170).
+    # Рендерятся при обычном Run scene.py → out/still_probe_NNN.png. [] = выкл.
+    "probe_deg": [5, 10, 20, 90, 170],
 }
 # Запуск через turn.py ставит одноразовый env-флаг — редактировать CONFIG не нужно
 # (pop: флаг не «залипает» на следующие Run scene.py в той же сессии Blender).
@@ -500,138 +497,47 @@ def add_sun(name, rot, energy):
     bpy.context.collection.objects.link(obj)
 
 
-# Софтбокс: вытянутый area-светильник — отражается в глянцевом стекле/камерах
-# продуктовой «полосой-бликом» (bliki). Энергию масштабируем по size², чтобы
-# яркость не зависела от масштаба импортированной модели.
-SOFTBOX_ENERGY = 1800.0   # ⚙ ЯРКОСТЬ БЛИКА — крутить после первого рендера (600..4000)
-
-def add_softbox(name, offset, center, size, target):
-    la = bpy.data.lights.new(name, "AREA")
-    la.shape = "RECTANGLE"
-    la.size = size * 1.2                        # ширина полосы
-    la.size_y = size * 3.2                      # длина — вытянутый блик
-    la.energy = SOFTBOX_ENERGY * max(size, 1e-4) ** 2
-    obj = bpy.data.objects.new(name, la)
-    obj.location = center + offset
-    bpy.context.collection.objects.link(obj)
-    c = obj.constraints.new("TRACK_TO")         # всегда смотрит в центр модели
-    c.target = target
-    c.track_axis = "TRACK_NEGATIVE_Z"
-    c.up_axis = "UP_Y"
-    return obj
-
-
-def display_world_bbox():
-    """Мировой bbox граней ДИСПЛЕЯ (SCREEN_DISPLAY_MAT): X=ширина, Z=высота,
-    тонкая ось Y = нормаль (перед = min Y, камера-анфас со стороны -Y)."""
-    wmin = [1e18] * 3
-    wmax = [-1e18] * 3
-    found = False
-    for o in bpy.data.objects:
-        if o.type != "MESH":
-            continue
-        slots = {i for i, s in enumerate(o.material_slots)
-                 if s.material and s.material.name == SCREEN_DISPLAY_MAT}
-        if not slots:
-            continue
-        me, mw = o.data, o.matrix_world
-        for poly in me.polygons:
-            if poly.material_index in slots:
-                for vi in poly.vertices:
-                    wv = mw @ me.vertices[vi].co
-                    found = True
-                    for k in range(3):
-                        wmin[k] = min(wmin[k], wv[k])
-                        wmax[k] = max(wmax[k], wv[k])
-    return (Vector(wmin), Vector(wmax)) if found else None
-
-
-def _link_glare_to_glass(light_obj):
-    """Cycles light linking (Blender 4.0+): полоса светит ТОЛЬКО в меши со
-    стеклом/дисплеем — корпус не пересвечивает. Нет API — светим на всё (ок,
-    просто чуть ярче фронт, компенсируется energy)."""
-    try:
-        glass = KEEP_MATS | {SCREEN_DISPLAY_MAT}
-        targets = [o for o in bpy.data.objects if o.type == "MESH" and any(
-            s.material and s.material.name in glass for s in o.material_slots)]
-        if not targets:
-            return
-        coll = bpy.data.collections.new("GlareReceivers")
-        for o in targets:
-            coll.objects.link(o)
-        light_obj.light_linking.receiver_collection = coll
-        print(f"[glare] light-linking: полоса светит только в стекло ({len(targets)} мешей)")
-    except Exception as e:
-        print(f"[glare] light-linking недоступен ({e}) — полоса светит на всё, едем дальше")
-
-
-def place_glare_band(center, size):
-    """Area-светильник, чьё ОТРАЖЕНИЕ в стекле экрана — диагональная полоса-блик
-    в заданном месте экрана (CONFIG["glare"], всё в долях дисплея).
-
-    Геометрия: отражение точки света в плоскости стекла (y=y0) видно из камеры
-    там, где луч камера→зеркальный-образ пересекает плоскость. Идём в обратную
-    сторону: от желаемой точки P на экране строим луч камера→P, продолжаем его
-    за стекло на глубину D и зеркалим обратно — там ставим центр светильника.
-    Отражение уменьшается в t = L/(L+D) раз (L = камера→стекло), поэтому
-    габариты светильника = желаемые-на-экране / t.
-
-    Светильник ПАРАЛЛЕЛЕН стеклу (без TRACK_TO — наклон исказил бы полосу)
-    и стоит в мире неподвижно: при развороте блик «течёт» по корпусу,
-    а на финальном кадре (анфас) ложится ровно куда задано."""
-    g = CONFIG.get("glare") or {}
-    if not g.get("enabled"):
+# Пара студийных стрипов (см. CONFIG["strips"]): вертикальные area-панели
+# слева/справа от камеры — единый источник бликов на корпусе И стекле.
+# Стоят в мире неподвижно: при развороте отражения «текут» по телефону,
+# в финальном анфасе лежат за краями экрана (экран чистый).
+def place_strips(center, size):
+    s = CONFIG.get("strips") or {}
+    if not s:
         return
-    bb = display_world_bbox()
-    if not bb:
-        print("[glare] дисплей не найден — полоса-блик пропущена")
-        return
-    mn, mx = bb
-    W, H = mx.x - mn.x, mx.z - mn.z
-    y0 = mn.y                                     # плоскость стекла (перед = min Y)
-    cam = center + Vector((0.0, -1.0, 0.0)) * size * 3.2   # == place_camera "front"
-    L = y0 - cam.y
-    D = float(g["dist"]) * size
-    t = L / (L + D)
-    P = Vector((mn.x + g["center_u"] * W, y0, mx.z - g["center_v"] * H))
-    M = cam + (P - cam) * ((L + D) / L)           # образ центра за стеклом
-    pos = Vector((M.x, y0 - D, M.z))              # зеркалим в наше полупространство
-
-    la = bpy.data.lights.new("GlareBand", "AREA")
-    la.shape = "RECTANGLE"
-    la.size = g["width"] * W / t                  # ширина полосы (короткая ось X)
-    la.size_y = g["length"] * H / t               # длина полосы (длинная ось Y)
-    la.energy = float(g["energy"]) * max(size, 1e-4) ** 2
-    obj = bpy.data.objects.new("GlareBand", la)
-    bpy.context.collection.objects.link(obj)
-    th = math.radians(float(g["angle_deg"]))
-    ax = Vector((math.cos(th), 0.0, -math.sin(th)))   # короткая ось
-    ay = Vector((math.sin(th), 0.0, math.cos(th)))    # длинная ось (θ=0 — вертикаль)
-    az = Vector((0.0, -1.0, 0.0))                     # -Z светильника → +Y (на телефон)
-    obj.matrix_world = Matrix((
-        (ax.x, ay.x, az.x, pos.x),
-        (ax.y, ay.y, az.y, pos.y),
-        (ax.z, ay.z, az.z, pos.z),
-        (0.0, 0.0, 0.0, 1.0)))
-    _link_glare_to_glass(obj)
-    print(f"[glare] полоса: uv=({g['center_u']},{g['center_v']}) angle={g['angle_deg']}° "
-          f"w={g['width']}W len={g['length']}H dist={g['dist']} E={g['energy']}")
+    az_deg = float(s["azimuth_deg"])
+    tilt = math.radians(float(s["tilt_deg"]))
+    for name, sgn in (("StripR", 1.0), ("StripL", -1.0)):
+        a = math.radians(az_deg) * sgn
+        d = Vector((math.sin(a), -math.cos(a), 0.0))       # от центра к стрипу (перед = -Y)
+        pos = center + d * float(s["dist"]) * size
+        la = bpy.data.lights.new(name, "AREA")
+        la.shape = "RECTANGLE"
+        la.size = float(s["width"]) * size
+        la.size_y = float(s["length"]) * size
+        la.energy = float(s["energy"]) * max(size, 1e-4) ** 2
+        obj = bpy.data.objects.new(name, la)
+        bpy.context.collection.objects.link(obj)
+        # ориентация: панель смотрит в центр (-Z_local = -d), длинная ось —
+        # вертикаль с лёгким наклоном tilt (зеркально для L/R)
+        p = Vector((math.cos(a), math.sin(a), 0.0))        # горизонталь ⊥ направлению
+        ay = (Vector((0.0, 0.0, 1.0)) * math.cos(tilt) + p * math.sin(tilt) * sgn).normalized()
+        az = d.normalized()
+        ax = ay.cross(az)
+        obj.matrix_world = Matrix((
+            (ax.x, ay.x, az.x, pos.x),
+            (ax.y, ay.y, az.y, pos.y),
+            (ax.z, ay.z, az.z, pos.z),
+            (0.0, 0.0, 0.0, 1.0)))
+    print(f"[strips] пара стрипов: азимут ±{az_deg}°, dist={s['dist']}×size, "
+          f"{s['width']}×{s['length']}×size, tilt={s['tilt_deg']}°, E={s['energy']}")
 
 
-def glare_probes():
-    """Список углов (°) пробных кадров из CONFIG["glare"]["probe_deg"] —
-    пусто, если блик выключен или пробы не заданы."""
-    g = CONFIG.get("glare") or {}
-    if not g.get("enabled"):
-        return []
-    return list(g.get("probe_deg") or [])
-
-
-def render_glare_probes(cam, tgt, center, size, pivot):
-    """Стиллы «за N° до финала разворота»: показывают, где полоса-блик лежит
-    во время финального вайпа, без рендера всей секвенции. Камера — анфас,
-    самплы как у анимации (быстро). → out/still_probe_NN.png"""
-    degs = glare_probes()
+def render_probes(cam, tgt, center, size, pivot):
+    """Стиллы «за N° до финала разворота» (CONFIG["probe_deg"]): видно, как блик
+    едет по стеклу/крышке, БЕЗ рендера секвенции. Камера — анфас, самплы как у
+    анимации (быстро). → out/still_probe_NNN.png"""
+    degs = list(CONFIG.get("probe_deg") or [])
     if not degs:
         return
     place_camera(cam, tgt, center, size, "front")
@@ -642,11 +548,11 @@ def render_glare_probes(cam, tgt, center, size, pivot):
     for deg in degs:
         pivot.rotation_euler = (0.0, 0.0, sign * math.radians(float(deg)))
         bpy.context.view_layer.update()
-        out = os.path.join(OUT_DIR, f"still_probe_{int(deg):02d}.png")
+        out = os.path.join(OUT_DIR, f"still_probe_{int(deg):03d}.png")
         sc.render.filepath = out
-        print(f"[glare] проба {deg}° до финала…")
+        print(f"[probe] {deg}° до финала…")
         bpy.ops.render.render(write_still=True)
-        print(f"[glare]   готово: {out}")
+        print(f"[probe]   готово: {out}")
     pivot.rotation_euler = (0.0, 0.0, 0.0)
     bpy.context.view_layer.update()
     sc.cycles.samples = keep
@@ -656,13 +562,8 @@ def setup_lights(center, size, target):
     add_sun("Key",  (math.radians(55), math.radians(10), math.radians(-40)), 4.0)
     add_sun("Fill", (math.radians(70), 0,                math.radians(60)),  1.5)
     add_sun("Rim",  (math.radians(120), 0,               math.radians(150)), 3.0)
-    # софтбоксы для чётких бликов на стекле/камерах — со стороны экрана и крышки
-    add_softbox("SoftFront", Vector(( 0.55, -1.0, 1.3)).normalized() * size * 2.4,
-                center, size, target)
-    add_softbox("SoftBack",  Vector((-0.55,  1.0, 1.3)).normalized() * size * 2.4,
-                center, size, target)
-    # полоса-блик на стекле экрана (управляется CONFIG["glare"])
-    place_glare_band(center, size)
+    # пара студийных стрипов — все блики (корпус + стекло) из одного источника
+    place_strips(center, size)
 
 
 def setup_world():
@@ -942,14 +843,17 @@ def main():
     center, size = world_bounds(meshes)
     print(f"[scene] центр={tuple(round(c,3) for c in center)} размер={round(size,3)}")
     # пивот нужен и для разворота, и для пробных кадров блика — до камеры/света!
-    need_pivot = CONFIG.get("turn") or glare_probes()
+    need_pivot = CONFIG.get("turn") or CONFIG.get("probe_deg")
     pivot = setup_turn_pivot(center) if need_pivot else None
     setup_world()
     setup_render()
     cam, tgt = create_camera()
-    setup_lights(center, size, tgt)              # софтбоксы позиционируются вокруг center
+    setup_lights(center, size, tgt)              # стрипы позиционируются вокруг center
 
-    if pivot is not None:
+    # СЕКВЕНЦИЯ — ТОЛЬКО по флагу turn (его ставит turn.py); наличие пивота
+    # само по себе — НЕ повод рендерить 120 кадров (был такой баг: пробы
+    # создавали пивот → обычный Run уходил в полный рендер разворота)
+    if CONFIG.get("turn"):
         render_turn(cam, tgt, center, size, pivot)
         return
 
@@ -966,6 +870,6 @@ def main():
         print(f"[scene]   готово: {out}")
     print("[scene] оба вида готовы: out/still_front.png и out/still_back.png")
     if pivot is not None:
-        render_glare_probes(cam, tgt, center, size, pivot)
+        render_probes(cam, tgt, center, size, pivot)
 
 main()
