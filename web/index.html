@@ -161,30 +161,28 @@ nav.scrolled{
    Пока .phone.intro — виден только <video> разворота; экран и PNG ждут.
    По ended JS снимает .intro и запускает видео чата в экране.
    Safari (нет VP9-альфы) отсекает JS — сразу статичный композит + видео чата. */
-.phone-turn{display:none;
-  /* подгонка кадра разворота к стиллу: bbox телефона в webm 678×1400 (центр 539.5,987.5),
-     в hero-iphone.png 692×1430 (центр 539.5,959.5) — рендеры разных сессий камеры.
-     Масштаб 692/678×1430/1400 вокруг центра телефона + подъём на 28px/1920.
-     После перерендера стилла из текущей сцены (кадр == turn last) — убрать. */
-  transform-origin:49.95% 51.43%;
-  transform:translateY(-1.458%) scale(1.0206,1.0214)}
+/* стилл и webm рендерятся ОДНОЙ сессией (turn.py) — стык 1:1 по построению,
+   bbox сверен до пикселя (678×1400 @ x201 y288), CSS-подгонка больше не нужна */
+.phone-turn{display:none}
 .phone.intro .phone-turn{display:block}
 .phone-screen{transition:opacity .4s ease}
 .phone.intro picture{visibility:hidden}
 .phone.intro .phone-screen{opacity:0}
 /* экран: прямоугольник ДИСПЛЕЯ из screen_rect.json (проекция материала
-   BsXHDwLKqtDOfrW через камеру). Аспект 0.4617 ≈ видео 1320:2868 (0.4602,
-   0.33% добирается fill). Вокруг — родная чёрная рамка стекла из рендера.
+   BsXHDwLKqtDOfrW через камеру; сессия 2026-07-11 с новым светом). Аспект
+   0.4617 ≈ видео 1320:2868 (0.4602, 0.33% добирается fill). Вокруг — родная
+   чёрная рамка стекла из рендера.
    НЕ мерить по пикселям стекла — оно шире дисплея, будет перекос! */
-.phone-screen{position:absolute;left:20.324%;top:13.842%;width:59.352%;height:72.315%;
+.phone-screen{position:absolute;left:20.967%;top:16.083%;width:58.099%;height:70.787%;
   border-radius:15% / 6.9%;overflow:hidden;background:#050308}
 /* dynamic island (пилюля); в видео остров стёрт — рисуем DOM. При включённом
-   экране остров = ровная чёрная пилюля: железные камера/динамик рендера
-   вычищены из hero-gloss.webp (зона x[220,422] y[10,82] залита чёрным —
-   в blend screen это «не добавлять ничего»). Геометрия пилюли = замер
-   запечённого юнита пилюля+камера: x[231,411] y[20,71] в дисплее 641×1388
-   → top 20/1388, height 51px=4.72cqw, width 180/641=28%. */
-.phone-notch{position:absolute;top:1.44%;left:50%;transform:translateX(-50%);width:28%;height:4.72cqw;background:#050308;border-radius:99px;z-index:7}
+   экране остров = ровная чёрная пилюля: зона острова в hero-gloss.webp залита
+   чёрным скриптом encode_turn.sh (в blend screen это «не добавлять ничего»).
+   Геометрия пилюли = замер юнита пилюля+камера в долях дисплея (x 0.3603-0.6412,
+   y 0.0144-0.0512; сверено по блику линзы в новом рендере): в кропе 627×1359 →
+   x[226,402] (width 176/627=28%, центр 314≈центр экрана), y[20,70] →
+   top 1.44%, height 49.9px=4.62cqw. */
+.phone-notch{position:absolute;top:1.44%;left:50%;transform:translateX(-50%);width:28%;height:4.62cqw;background:#050308;border-radius:99px;z-index:7}
 /* видео чата (запись приложения 1320×2868, вычищена в AE) — 1:1 в дисплей */
 .phone-chat{position:absolute;inset:0;width:100%;height:100%;object-fit:fill;z-index:1}
 /* стекло: кроп дисплея из рендера (hero-gloss.webp) в blend screen поверх видео —
