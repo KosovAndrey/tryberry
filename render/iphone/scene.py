@@ -53,23 +53,23 @@ CONFIG = {
     "turn_reverse": False,  # True = крутить в другую сторону
     "turn_shutter": 0.35,   # моушен-блюр (0 = выкл): смаз на быстрой фазе, киношно
 
-    # ── Полоса-блик на стекле (place_glare_band) — «первый вариант» за основу ──
-    # Та самая сочная диагональная полоса из первого рендера (energy 1200,
-    # light linking только в стекло — корпус остаётся тёмным пламом), но:
-    #  • ШИРЕ (width 0.45 → 0.60) и
-    #  • СМЕЩЕНА за правый край экрана (center_u 0.55 → 1.35): финальный анфас
-    #    чистый, при развороте полоса физически проезжает по стеклу и уходит
-    #    за край на ease-out — блик только в движении.
-    # Все координаты в ДОЛЯХ ДИСПЛЕЯ; светильник в мире считается сам.
+    # ── Мягкое пятно-блик на стекле (place_glare_glow) ──
+    # Эмиссивная плоскость с РАДИАЛЬНЫМ ГРАДИЕНТОМ (яркое ядро → плавный ноль
+    # к краям): отражение на стекле — бесформенное световое пятно без единой
+    # прямой границы (фикс «просто прямая полоса»). Затухание до нуля также
+    # гарантирует чистый финальный анфас: у света нет края, который мог бы
+    # остаться на экране (прошлая полоса торчала наклонным хвостом).
+    # Координаты в ДОЛЯХ ДИСПЛЕЯ, геометрия светильника в мире считается сама.
     "glare": {
         "enabled":  True,
-        "center_u": 1.35,   # центр полосы: 0=лево, 1=право, >1 = за краем (чистый финал)
+        "center_u": 1.35,   # центр пятна: 0=лево, 1=право, >1 = за краем (чистый финал)
         "center_v": 0.20,   # по высоте: 0=верх, 1=низ
-        "angle_deg": 20.0,  # наклон от вертикали, «+» = верх полосы уходит вправо
-        "width":    0.60,   # ширина полосы в долях ширины экрана
-        "length":   1.8,    # длина в долях высоты экрана (>1 = края уходят за экран)
+        "angle_deg": 20.0,  # наклон длинной оси от вертикали («+» = верх вправо)
+        "width":    0.90,   # полный след пятна по ширине экрана (видимое ядро ~вдвое уже)
+        "length":   2.2,    # полный след по высоте экрана (>1 = хвосты за краями)
+        "softness": 2.0,    # степень затухания: 1 = линейно, 2-3 = мягче/ядро компактнее
         "dist":     1.6,    # расстояние плоскости света от стекла (в size модели)
-        "energy":   1200.0, # ⚙ яркость первого варианта
+        "energy":   1200.0, # ⚙ яркость ядра (сила эмиссии шейдера, крутить 400..3000)
     },
     # Пробные кадры БЕЗ рендера секвенции: телефон за N° до финала разворота —
     # видно, как блик едет по стеклу (5..20) и крышку (90/170).
@@ -564,26 +564,58 @@ def _link_glare_to_glass(light_obj):
         print(f"[glare] light-linking недоступен ({e}) — полоса светит на всё, едем дальше")
 
 
-def place_glare_band(center, size):
-    """Area-светильник, чьё ОТРАЖЕНИЕ в стекле экрана — диагональная полоса-блик
-    (CONFIG["glare"], координаты в долях дисплея).
+def _glow_material(energy, softness):
+    """Эмиссия с радиальным затуханием до нуля: Generated-координаты плоскости
+    (0..1) → в -1..1 (Z зануляем — иначе сферический градиент занулит ВСЁ) →
+    Gradient SPHERICAL (1 в центре, 0 на краях) → power(softness) → strength."""
+    mat = bpy.data.materials.new("GlareGlowMat")
+    mat.use_nodes = True
+    nt = mat.node_tree
+    nt.nodes.clear()
+    out = nt.nodes.new("ShaderNodeOutputMaterial")
+    em = nt.nodes.new("ShaderNodeEmission")
+    tex = nt.nodes.new("ShaderNodeTexCoord")
+    mp = nt.nodes.new("ShaderNodeMapping")
+    mp.inputs["Location"].default_value = (-1.0, -1.0, 0.0)
+    mp.inputs["Scale"].default_value = (2.0, 2.0, 0.0)     # Z→0 обязательно
+    grad = nt.nodes.new("ShaderNodeTexGradient")
+    grad.gradient_type = "SPHERICAL"
+    pw = nt.nodes.new("ShaderNodeMath")
+    pw.operation = "POWER"
+    pw.inputs[1].default_value = float(softness)
+    mul = nt.nodes.new("ShaderNodeMath")
+    mul.operation = "MULTIPLY"
+    mul.inputs[1].default_value = float(energy)
+    nt.links.new(tex.outputs["Generated"], mp.inputs["Vector"])
+    nt.links.new(mp.outputs["Vector"], grad.inputs["Vector"])
+    nt.links.new(grad.outputs["Fac"], pw.inputs[0])
+    nt.links.new(pw.outputs["Value"], mul.inputs[0])
+    nt.links.new(mul.outputs["Value"], em.inputs["Strength"])
+    nt.links.new(em.outputs["Emission"], out.inputs["Surface"])
+    return mat
+
+
+def place_glare_glow(center, size):
+    """Эмиссивная плоскость, чьё ОТРАЖЕНИЕ в стекле экрана — мягкое бесформенное
+    пятно света (CONFIG["glare"], координаты в долях дисплея).
 
     Геометрия: отражение точки света в плоскости стекла (y=y0) видно из камеры
     там, где луч камера→зеркальный-образ пересекает плоскость. Идём в обратную
     сторону: от желаемой точки P на экране строим луч камера→P, продолжаем его
-    за стекло на глубину D и зеркалим обратно — там ставим центр светильника.
+    за стекло на глубину D и зеркалим обратно — там ставим центр плоскости.
     Отражение уменьшается в t = L/(L+D) раз (L = камера→стекло), поэтому
-    габариты светильника = желаемые-на-экране / t.
+    габариты плоскости = желаемые-на-экране / t.
 
-    Светильник ПАРАЛЛЕЛЕН стеклу (без TRACK_TO — наклон исказил бы полосу)
-    и стоит в мире неподвижно: при развороте блик «течёт» по стеклу,
-    а на финальном кадре (анфас) уходит в заданное место (за край)."""
+    Плоскость ПАРАЛЛЕЛЬНА стеклу и стоит в мире неподвижно: при развороте
+    пятно «течёт» по стеклу, в финальном анфасе — за краем (экран чистый).
+    Из камеры и теней плоскость исключена (иначе заслонит солнца),
+    в отражениях (glossy) участвует."""
     g = CONFIG.get("glare") or {}
     if not g.get("enabled"):
         return
     bb = display_world_bbox()
     if not bb:
-        print("[glare] дисплей не найден — полоса-блик пропущена")
+        print("[glare] дисплей не найден — пятно-блик пропущено")
         return
     mn, mx = bb
     W, H = mx.x - mn.x, mx.z - mn.z
@@ -596,25 +628,33 @@ def place_glare_band(center, size):
     M = cam + (P - cam) * ((L + D) / L)           # образ центра за стеклом
     pos = Vector((M.x, y0 - D, M.z))              # зеркалим в наше полупространство
 
-    la = bpy.data.lights.new("GlareBand", "AREA")
-    la.shape = "RECTANGLE"
-    la.size = g["width"] * W / t                  # ширина полосы (короткая ось X)
-    la.size_y = g["length"] * H / t               # длина полосы (длинная ось Y)
-    la.energy = float(g["energy"]) * max(size, 1e-4) ** 2
-    obj = bpy.data.objects.new("GlareBand", la)
+    me = bpy.data.meshes.new("GlareGlow")         # плоскость -1..1 (Generated 0..1)
+    me.from_pydata([(-1.0, -1.0, 0.0), (1.0, -1.0, 0.0),
+                    (1.0, 1.0, 0.0), (-1.0, 1.0, 0.0)], [], [(0, 1, 2, 3)])
+    me.update()
+    me.materials.append(_glow_material(g["energy"], g.get("softness", 2.0)))
+    obj = bpy.data.objects.new("GlareGlow", me)
     bpy.context.collection.objects.link(obj)
     th = math.radians(float(g["angle_deg"]))
-    ax = Vector((math.cos(th), 0.0, -math.sin(th)))   # короткая ось
-    ay = Vector((math.sin(th), 0.0, math.cos(th)))    # длинная ось (θ=0 — вертикаль)
-    az = Vector((0.0, -1.0, 0.0))                     # -Z светильника → +Y (на телефон)
+    hw = g["width"] * W / t / 2.0                 # полуоси (меш от -1 до 1)
+    hl = g["length"] * H / t / 2.0
+    ax = Vector((math.cos(th), 0.0, -math.sin(th))) * hw   # короткая ось
+    ay = Vector((math.sin(th), 0.0, math.cos(th))) * hl    # длинная ось (θ=0 — вертикаль)
+    az = Vector((0.0, -1.0, 0.0))                          # нормаль (эмиссия двусторонняя)
     obj.matrix_world = Matrix((
         (ax.x, ay.x, az.x, pos.x),
         (ax.y, ay.y, az.y, pos.y),
         (ax.z, ay.z, az.z, pos.z),
         (0.0, 0.0, 0.0, 1.0)))
+    # из камеры и теней — вон (геометрия заслонила бы солнца); glossy остаётся
+    for attr in ("visible_camera", "visible_shadow", "visible_diffuse"):
+        try:
+            setattr(obj, attr, False)
+        except Exception:
+            pass
     _link_glare_to_glass(obj)
-    print(f"[glare] полоса: uv=({g['center_u']},{g['center_v']}) angle={g['angle_deg']}° "
-          f"w={g['width']}W len={g['length']}H dist={g['dist']} E={g['energy']}")
+    print(f"[glare] пятно: uv=({g['center_u']},{g['center_v']}) angle={g['angle_deg']}° "
+          f"w={g['width']}W len={g['length']}H soft={g.get('softness')} E={g['energy']}")
 
 
 def render_probes(cam, tgt, center, size, pivot):
@@ -651,8 +691,8 @@ def setup_lights(center, size, target):
                 center, size, target)
     add_softbox("SoftBack",  Vector((-0.55,  1.0, 1.3)).normalized() * size * 2.4,
                 center, size, target)
-    # полоса-блик на стекле (первый вариант, шире и смещена за край экрана)
-    place_glare_band(center, size)
+    # мягкое пятно-блик на стекле (градиентная эмиссия, чистый финальный анфас)
+    place_glare_glow(center, size)
 
 
 def setup_world():
