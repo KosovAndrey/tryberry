@@ -76,3 +76,13 @@ blender --background --python render/iphone/scene.py
 
 Ручки: `turn_seconds` / `turn_fps` / `turn_samples` / `turn_reverse` в CONFIG;
 яркость бликов — `SOFTBOX_ENERGY`.
+
+## Стык разворот→стилл (2026-07-11)
+Текущие `hero-iphone.png` и `hero-iphone-turn.webm` — рендеры разных сессий:
+телефон в стилле на ~2.1% крупнее и на 28px выше (bbox 692×1430 @cy959 против
+678×1400 @cy987). На сайте это скомпенсировано CSS-трансформом на `.phone-turn`
+(см. комментарий в `web/index.html`). При следующем перерендере стилла из той же
+сцены, что и turn (последний кадр == still_front), трансформ УБРАТЬ и пересчитать
+`screen_rect.json` → `.phone-screen` + перекроп `hero-gloss.webp`.
+DOM-остров выровнен по замеру запечённого юнита пилюля+камера в gloss:
+x[231,411] y[20,71] в дисплее 641×1388.
