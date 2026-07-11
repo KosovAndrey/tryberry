@@ -151,6 +151,10 @@ nav.scrolled{
 
 /* phone: 3D-рендер корпуса (Blender) + живой HTML-экран поверх */
 .phone{position:relative;width:min(380px,84vw);margin:0 auto;aspect-ratio:1080/1920;container-type:inline-size}
+/* мягкое berry-свечение позади корпуса — отделяет тёмный низ телефона от фона;
+   первый пейнт в .phone => позади всех слоёв, деликатно (не неон) */
+.phone::before{content:"";position:absolute;inset:-6% -18%;pointer-events:none;
+  background:radial-gradient(48% 42% at 50% 54%,rgba(232,51,108,.30),rgba(160,22,81,.14) 55%,transparent 78%)}
 .phone-render{position:absolute;inset:0;width:100%;height:100%;object-fit:contain;
   filter:drop-shadow(0 42px 80px rgba(0,0,0,.55)) drop-shadow(0 10px 26px rgba(160,22,81,.22))}
 /* 3D-интро: разворот с крышки (альфа-WebM, последний кадр == hero-iphone.png).
@@ -213,6 +217,9 @@ nav.scrolled{
 [data-reveal].in{opacity:1;transform:none}
 [data-reveal="scale"]{transform:translateY(38px) scale(.96)}
 [data-reveal="scale"].in{transform:none}
+/* появление hero-айфона: подъём снизу как у строк заголовка, ход больше и дольше */
+[data-reveal="rise"]{transform:translateY(110px) scale(.94);transition-duration:1.25s,1.25s}
+[data-reveal="rise"].in{transform:none}
 
 /* ---------- section base ---------- */
 section{position:relative}
@@ -400,7 +407,9 @@ footer{background:var(--plum-deep);padding:70px 0 40px;border-top:1px solid var(
   .payinfo-grid{grid-template-columns:1fr}
   .reseller-head{flex-direction:column}
 }
-@media(max-width:680px){
+/* бургер до 1080px: полной строке нав-меню (6 ссылок + CTA + лого) надо ~900px+,
+   между 680 и 1080 (телефон в ландшафте, планшет в портрете) она не влезала */
+@media(max-width:1080px){
   .nav-links{
     position:fixed;inset:0 0 0 auto;width:78%;max-width:320px;background:var(--plum-deep);z-index:1095;
     flex-direction:column;justify-content:center;align-items:flex-start;gap:26px;padding:0 40px;
@@ -409,6 +418,8 @@ footer{background:var(--plum-deep);padding:70px 0 40px;border-top:1px solid var(
   .nav-links.show{transform:none}
   .nav-links .nav-cta{margin-top:10px}
   .burger{display:block}
+}
+@media(max-width:680px){
   .plan-grid{grid-template-columns:1fr}
 }
 /* ---------- MARKETPLACES (бегущая строка) ---------- */
@@ -470,6 +481,8 @@ footer{background:var(--plum-deep);padding:70px 0 40px;border-top:1px solid var(
 .phone.intro .phone-turn{display:none}
 .phone.intro picture{visibility:visible}
 .phone.intro .phone-screen{opacity:1}
+/* и некому добавить .in — контент с reveal-анимацией показываем сразу */
+[data-reveal]{opacity:1!important;transform:none!important}
 </style></noscript>
 
 <script type="application/ld+json">
@@ -542,7 +555,7 @@ footer{background:var(--plum-deep);padding:70px 0 40px;border-top:1px solid var(
       </div>
       <div class="hero-note" data-reveal style="--d:.35s"><b>Бесплатный план</b> навсегда · триал 10 дней · без карты</div>
     </div>
-    <div data-reveal="scale" style="--d:.2s">
+    <div data-reveal="rise" style="--d:.3s">
       <div class="phone intro">
         <video class="phone-render phone-turn" muted playsinline preload="auto"
                poster="/hero-iphone-turn-poster.webp"
@@ -571,9 +584,14 @@ footer{background:var(--plum-deep);padding:70px 0 40px;border-top:1px solid var(
 
 <script>
 /* Хореография hero-телефона:
+   0) видео стартуют, только когда телефон реально виден (IntersectionObserver):
+      на мобиле он ниже сгиба — иначе интро проигрывалось до скролла. До этого
+      висит постер (крышка). После появления в кадре ждём ~550ms — телефон
+      сначала доезжает подъёмом (data-reveal="rise"), потом крутится.
    1) 3D-интро разворота (альфа-WebM) — Safari (нет VP9-альфы), reduced-motion,
       таймауты сети/зависания отсекаются сразу к шагу 2 без интро.
-   2) снимаем .intro → PNG-рендер + экран, в экране играет видео чата (MP4).
+   2) снимаем .intro → PNG-рендер + экран, в экране играет видео чата (MP4),
+      его старт тоже ждёт видимости (актуально для Safari-фолбэка).
    3) по ended видео замирает на финальном кадре, класс .done включает
       кликабельные DOM-бейджи TG/VK/MAX поверх запечённых (пульс волной).
    reduced-motion: видео не играем — сразу финальный кадр с бейджами. */
@@ -584,6 +602,11 @@ footer{background:var(--plum-deep);padding:70px 0 40px;border-top:1px solid var(
   /* декодим стилл заранее — иначе на стыке intro→still возможен пустой кадр */
   const im=ph.querySelector('picture img');if(im&&im.decode)im.decode().catch(()=>{});
   const rm=matchMedia('(prefers-reduced-motion:reduce)').matches;
+  const whenVisible=(fn)=>{
+    if(!('IntersectionObserver' in window))return fn();
+    const io=new IntersectionObserver(es=>{
+      if(es.some(e=>e.isIntersecting)){io.disconnect();fn()}},{threshold:.35});
+    io.observe(ph)};
   const done=()=>{ph.classList.add('done');
     ph.querySelectorAll('.pl').forEach(a=>a.removeAttribute('tabindex'))};
   let started=false;
@@ -597,14 +620,16 @@ footer{background:var(--plum-deep);padding:70px 0 40px;border-top:1px solid var(
     if(rm){const seek=()=>{try{chat.currentTime=Math.max(0,chat.duration-.05)}catch(e){}done()};
       chat.readyState>0?seek():chat.addEventListener('loadedmetadata',seek,{once:true});
       return}
-    chat.play().catch(done)};
+    whenVisible(()=>chat.play().catch(done))};
   const saf=/apple/i.test(navigator.vendor||'');
   if(rm||saf||!v||!v.canPlayType('video/webm; codecs="vp9"'))return start();
-  let t=setTimeout(start,4000);
-  v.addEventListener('playing',()=>{clearTimeout(t);t=setTimeout(start,5000)},{once:true});
-  v.addEventListener('ended',()=>{clearTimeout(t);start()},{once:true});
-  v.addEventListener('error',start,{once:true});
-  v.play().catch(start);
+  whenVisible(()=>setTimeout(()=>{
+    let t=setTimeout(start,4000);
+    v.addEventListener('playing',()=>{clearTimeout(t);t=setTimeout(start,5000)},{once:true});
+    v.addEventListener('ended',()=>{clearTimeout(t);start()},{once:true});
+    v.addEventListener('error',start,{once:true});
+    v.play().catch(start);
+  },550));
 })();
 </script>
 
