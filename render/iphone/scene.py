@@ -27,7 +27,7 @@ import os
 import glob
 import math
 import bpy
-from mathutils import Vector
+from mathutils import Vector, Matrix
 
 # ─────────────────────────── КОНФИГ ───────────────────────────
 CONFIG = {
@@ -52,6 +52,30 @@ CONFIG = {
     "turn_samples": 48,     # на кадр анимации хватает меньше (есть denoise)
     "turn_reverse": False,  # True = крутить в другую сторону
     "turn_shutter": 0.35,   # моушен-блюр (0 = выкл): смаз на быстрой фазе, киношно
+
+    # ── Мягкое пятно-блик на стекле (place_glare_glow) ──
+    # ТРИ вложенные эллиптические area-ЛАМПЫ (не меш! у мешей-эмиттеров Cycles
+    # игнорирует light linking — светили в остров) с одним центром: радиальное
+    # затухание 100→66→33→0%, глянец размывает ступени в бесформенное пятно.
+    # Координаты в ДОЛЯХ ДИСПЛЕЯ, геометрия ламп в мире считается сама.
+    "glare": {
+        "enabled":  True,
+        # center_u: 0=лево, 1=право, >1 = за краем. НЕ МЕНЬШЕ 2.2! Полный след
+        # пятна по горизонтали ±1.24 ширины экрана (width/2·cosθ + length·(H/W)/2·sinθ),
+        # видимая часть хвоста ~±1.03 — при 1.35 хвост лежал на экране в статике.
+        "center_u": 2.30,
+        "center_v": 0.20,   # по высоте: 0=верх, 1=низ
+        "angle_deg": 20.0,  # наклон длинной оси от вертикали («+» = верх вправо)
+        "width":    0.90,   # полный след пятна по ширине экрана (яркое ядро ~вдвое уже)
+        "length":   2.2,    # полный след по высоте экрана (>1 = хвосты за краями)
+        "dist":     1.6,    # расстояние плоскости ламп от стекла (в size модели)
+        "energy":   1200.0, # ⚙ пиковая яркость центра (как у v1-полосы, крутить 400..3000)
+    },
+    # Пробные кадры БЕЗ рендера секвенции: телефон за N° до финала разворота —
+    # видно, как блик едет по стеклу (при center_u=2.3 проезд ~5..16°:
+    # на 8° пятно у правого края, на 12° — центр/лево) и крышку (90/170).
+    # Рендерятся при обычном Run scene.py → out/still_probe_NNN.png. [] = выкл.
+    "probe_deg": [5, 8, 12, 20, 90, 170],
 }
 # Запуск через turn.py ставит одноразовый env-флаг — редактировать CONFIG не нужно
 # (pop: флаг не «залипает» на следующие Run scene.py в той же сессии Blender).
@@ -477,9 +501,9 @@ def add_sun(name, rot, energy):
 
 
 # Софтбокс: вытянутый area-светильник — отражается в глянцевом стекле/камерах
-# продуктовой «полосой-бликом» (bliki). Энергию масштабируем по size², чтобы
+# продуктовой «полосой-бликом». Энергию масштабируем по size², чтобы
 # яркость не зависела от масштаба импортированной модели.
-SOFTBOX_ENERGY = 1800.0   # ⚙ ЯРКОСТЬ БЛИКА — крутить после первого рендера (600..4000)
+SOFTBOX_ENERGY = 1800.0   # ⚙ ЯРКОСТЬ БЛИКОВ КОРПУСА (600..4000)
 
 def add_softbox(name, offset, center, size, target):
     la = bpy.data.lights.new(name, "AREA")
@@ -497,15 +521,174 @@ def add_softbox(name, offset, center, size, target):
     return obj
 
 
+def display_world_bbox():
+    """Мировой bbox граней ДИСПЛЕЯ (SCREEN_DISPLAY_MAT): X=ширина, Z=высота,
+    тонкая ось Y = нормаль (перед = min Y, камера-анфас со стороны -Y)."""
+    wmin = [1e18] * 3
+    wmax = [-1e18] * 3
+    found = False
+    for o in bpy.data.objects:
+        if o.type != "MESH":
+            continue
+        slots = {i for i, s in enumerate(o.material_slots)
+                 if s.material and s.material.name == SCREEN_DISPLAY_MAT}
+        if not slots:
+            continue
+        me, mw = o.data, o.matrix_world
+        for poly in me.polygons:
+            if poly.material_index in slots:
+                for vi in poly.vertices:
+                    wv = mw @ me.vertices[vi].co
+                    found = True
+                    for k in range(3):
+                        wmin[k] = min(wmin[k], wv[k])
+                        wmax[k] = max(wmax[k], wv[k])
+    return (Vector(wmin), Vector(wmax)) if found else None
+
+
+def _light_link(light_obj, to_glass, label, skip_front_black_of=None):
+    """Cycles light linking (Blender 4.0+). to_glass=True — светит ТОЛЬКО в
+    стекло/дисплей (пятно-блик, корпус не трогает); False — во всё КРОМЕ
+    стекла (свет корпуса/крышки, в экране не отражается никогда).
+    skip_front_black_of=центр модели: дополнительно выкинуть ЧЁРНЫЕ детали
+    ПЕРЕДНЕЙ половины (остров/фронталка/сенсоры, bbox-центр y < центра модели,
+    перед = -Y) — их плоский глянец на ~8-12° поворота встаёт в зеркальное
+    положение к софтбоксу и вспыхивает белым на чёрном экране; задние линзы
+    (bbox-центр сзади) остаются — им блики нужны, когда крышка к камере.
+    glTF нарезал модель по материалам — режется чисто. Нет API — светим на всё."""
+    try:
+        glass = KEEP_MATS | {SCREEN_DISPLAY_MAT}
+        def is_glass(o):
+            return any(s.material and s.material.name in glass for s in o.material_slots)
+        targets = [o for o in bpy.data.objects if o.type == "MESH"
+                   and is_glass(o) == to_glass]
+        if skip_front_black_of is not None:
+            cy = skip_front_black_of.y
+            def front_black(o):
+                if not any(s.material and s.material.name in BLACK_MATS
+                           for s in o.material_slots):
+                    return False
+                pts = [o.matrix_world @ Vector(c) for c in o.bound_box]
+                return sum(p.y for p in pts) / 8.0 < cy
+            skipped = [o for o in targets if front_black(o)]
+            targets = [o for o in targets if o not in skipped]
+            print(f"[light] {label}: исключены чёрные детали фронта: "
+                  f"{[o.name for o in skipped]}")
+        if not targets:
+            print(f"[light] {label}: целей для linking нет — светит на всё")
+            return
+        coll = bpy.data.collections.new(f"LL_{label}")
+        for o in targets:
+            coll.objects.link(o)
+        light_obj.light_linking.receiver_collection = coll
+        where = "только стекло" if to_glass else "всё кроме стекла"
+        print(f"[light] {label}: light-linking → {where} ({len(targets)} мешей)")
+    except Exception as e:
+        print(f"[light] {label}: light-linking недоступен ({e}) — светит на всё!")
+
+
+def place_glare_glow(center, size):
+    """Мягкое бесформенное пятно-блик на стекле (CONFIG["glare"], доли дисплея).
+
+    ВАЖНО: это ЛАМПЫ, а не эмиссивный меш — Cycles light linking работает
+    только с лампами; меш-эмиттер игнорировал linking и светил в глянец
+    острова/фронталки напрямую (белые вспышки на пробах). Проверено.
+
+    Бесформенность: ТРИ вложенные ЭЛЛИПТИЧЕСКИЕ area-лампы с одним центром
+    и убывающими размерами — радиальное затухание ступенями 100→66→33→0%,
+    глянец стекла (rough ~0.06) размывает ступени в гладкое пятно без единой
+    прямой границы. Пиковая яркость в центре = energy (как у v1-полосы).
+
+    Геометрия прежняя: от желаемой точки P на экране строим луч камера→P,
+    продолжаем за стекло на глубину D и зеркалим — там центр ламп. Отражение
+    уменьшается в t = L/(L+D) раз, габариты ламп = желаемые-на-экране / t.
+    Лампы неподвижны в мире: при развороте пятно «течёт» по стеклу,
+    в финальном анфасе — за краем (экран чистый)."""
+    g = CONFIG.get("glare") or {}
+    if not g.get("enabled"):
+        return
+    bb = display_world_bbox()
+    if not bb:
+        print("[glare] дисплей не найден — пятно-блик пропущено")
+        return
+    mn, mx = bb
+    W, H = mx.x - mn.x, mx.z - mn.z
+    y0 = mn.y                                     # плоскость стекла (перед = min Y)
+    cam = center + Vector((0.0, -1.0, 0.0)) * size * 3.2   # == place_camera "front"
+    L = y0 - cam.y
+    D = float(g["dist"]) * size
+    t = L / (L + D)
+    P = Vector((mn.x + g["center_u"] * W, y0, mx.z - g["center_v"] * H))
+    M = cam + (P - cam) * ((L + D) / L)           # образ центра за стеклом
+    pos = Vector((M.x, y0 - D, M.z))              # зеркалим в наше полупространство
+
+    th = math.radians(float(g["angle_deg"]))
+    ax = Vector((math.cos(th), 0.0, -math.sin(th)))   # короткая ось (единичная)
+    ay = Vector((math.sin(th), 0.0, math.cos(th)))    # длинная ось (θ=0 — вертикаль)
+    az = Vector((0.0, -1.0, 0.0))                     # -Z ламп → +Y (на телефон)
+    rot = Matrix((
+        (ax.x, ay.x, az.x, pos.x),
+        (ax.y, ay.y, az.y, pos.y),
+        (ax.z, ay.z, az.z, pos.z),
+        (0.0, 0.0, 0.0, 1.0)))
+    w = g["width"] * W / t                        # полный след пятна в мире
+    l = g["length"] * H / t
+    # энергия ~ f² держит РАВНУЮ светимость всех колец → в перекрытии радиансы
+    # складываются: центр 3/3, середина 2/3, край 1/3 пиковой яркости
+    for i, f in enumerate((0.45, 0.75, 1.0)):
+        la = bpy.data.lights.new(f"GlareGlow{i}", "AREA")
+        la.shape = "ELLIPSE"
+        la.size = w * f
+        la.size_y = l * f
+        la.energy = float(g["energy"]) * max(size, 1e-4) ** 2 * f * f / 3.0
+        obj = bpy.data.objects.new(f"GlareGlow{i}", la)
+        bpy.context.collection.objects.link(obj)
+        obj.matrix_world = rot
+        _light_link(obj, to_glass=True, label=f"GlareGlow{i}")
+    print(f"[glare] пятно (3 эллипса): uv=({g['center_u']},{g['center_v']}) "
+          f"angle={g['angle_deg']}° w={g['width']}W len={g['length']}H E={g['energy']}")
+
+
+def render_probes(cam, tgt, center, size, pivot):
+    """Стиллы «за N° до финала разворота» (CONFIG["probe_deg"]): видно, как блик
+    едет по стеклу/крышке, БЕЗ рендера секвенции. Камера — анфас, самплы как у
+    анимации (быстро). → out/still_probe_NNN.png"""
+    degs = list(CONFIG.get("probe_deg") or [])
+    if not degs:
+        return
+    place_camera(cam, tgt, center, size, "front")
+    sc = bpy.context.scene
+    keep = sc.cycles.samples
+    sc.cycles.samples = CONFIG["turn_samples"]
+    sign = -1.0 if CONFIG.get("turn_reverse") else 1.0
+    for deg in degs:
+        pivot.rotation_euler = (0.0, 0.0, sign * math.radians(float(deg)))
+        bpy.context.view_layer.update()
+        out = os.path.join(OUT_DIR, f"still_probe_{int(deg):03d}.png")
+        sc.render.filepath = out
+        print(f"[probe] {deg}° до финала…")
+        bpy.ops.render.render(write_still=True)
+        print(f"[probe]   готово: {out}")
+    pivot.rotation_euler = (0.0, 0.0, 0.0)
+    bpy.context.view_layer.update()
+    sc.cycles.samples = keep
+
+
 def setup_lights(center, size, target):
     add_sun("Key",  (math.radians(55), math.radians(10), math.radians(-40)), 4.0)
     add_sun("Fill", (math.radians(70), 0,                math.radians(60)),  1.5)
     add_sun("Rim",  (math.radians(120), 0,               math.radians(150)), 3.0)
-    # софтбоксы для чётких бликов на стекле/камерах — со стороны экрана и крышки
-    add_softbox("SoftFront", Vector(( 0.55, -1.0, 1.3)).normalized() * size * 2.4,
-                center, size, target)
     add_softbox("SoftBack",  Vector((-0.55,  1.0, 1.3)).normalized() * size * 2.4,
                 center, size, target)
+    # свет КРЫШКИ со стороны камеры (крышка к нам в первой половине разворота).
+    # Это бывший SoftFront, но через light linking он светит во всё КРОМЕ
+    # стекла экрана: его горизонтальная полоса больше не появляется на стекле
+    # ни в наклоне, ни в статике — а крышка/грани освещены как раньше.
+    body = add_softbox("SoftFrontBody", Vector(( 0.55, -1.0, 1.3)).normalized() * size * 2.4,
+                       center, size, target)
+    _light_link(body, to_glass=False, label="SoftFrontBody", skip_front_black_of=center)
+    # мягкое пятно-блик на стекле (градиентная эмиссия, чистый финальный анфас)
+    place_glare_glow(center, size)
 
 
 def setup_world():
@@ -745,8 +928,22 @@ def render_turn(cam, tgt, center, size, pivot):
           f"{CONFIG['turn_samples']} samples) → {turn_dir}")
     bpy.ops.render.render(animation=True)
     print(f"[turn] готово: {turn_dir}/turn_0001.png .. turn_{f1:04d}.png")
+
+    # СТИЛЛ ИЗ ТОЙ ЖЕ СЕССИИ: hero-iphone.png/gloss/screen_rect обязаны совпадать
+    # с последним кадром видео 1:1. Раньше стилл рендерился отдельным Run — камера
+    # чуть отличалась, на сайте был скачок размера (компенсирован CSS-фаджем,
+    # после этого рендера фадж убираем). Кадр f1 = поворот 0° (анфас).
+    sc.frame_set(f1)
+    sc.render.use_motion_blur = False
+    sc.cycles.samples = CONFIG["samples"]
+    bpy.context.view_layer.update()
+    export_screen_rect(cam, "front")
+    sc.render.filepath = os.path.join(OUT_DIR, "still_front.png")
+    print(f"[turn] рендерю still_front (кадр {f1}, {CONFIG['samples']} samples) — якорь стыка…")
+    bpy.ops.render.render(write_still=True)
+    print(f"[turn] готово: {os.path.join(OUT_DIR, 'still_front.png')} + screen_rect.json")
     print("[turn] дальше в WSL: bash render/iphone/encode_turn.sh "
-          "(альфа-WebM → web/hero-iphone-turn.webm)")
+          "(альфа-WebM + все веб-ассеты из этой же сессии)")
 
 
 # ──────────────────────────── MAIN ────────────────────────────
@@ -770,13 +967,18 @@ def main():
     apply_slim(meshes)                           # сузить корпус под аспект видео
     center, size = world_bounds(meshes)
     print(f"[scene] центр={tuple(round(c,3) for c in center)} размер={round(size,3)}")
-    pivot = setup_turn_pivot(center) if CONFIG.get("turn") else None   # до камеры/света!
+    # пивот нужен и для разворота, и для пробных кадров блика — до камеры/света!
+    need_pivot = CONFIG.get("turn") or CONFIG.get("probe_deg")
+    pivot = setup_turn_pivot(center) if need_pivot else None
     setup_world()
     setup_render()
     cam, tgt = create_camera()
-    setup_lights(center, size, tgt)              # софтбоксы позиционируются вокруг center
+    setup_lights(center, size, tgt)              # стрипы позиционируются вокруг center
 
-    if pivot is not None:
+    # СЕКВЕНЦИЯ — ТОЛЬКО по флагу turn (его ставит turn.py); наличие пивота
+    # само по себе — НЕ повод рендерить 120 кадров (был такой баг: пробы
+    # создавали пивот → обычный Run уходил в полный рендер разворота)
+    if CONFIG.get("turn"):
         render_turn(cam, tgt, center, size, pivot)
         return
 
@@ -792,5 +994,7 @@ def main():
         bpy.ops.render.render(write_still=True)
         print(f"[scene]   готово: {out}")
     print("[scene] оба вида готовы: out/still_front.png и out/still_back.png")
+    if pivot is not None:
+        render_probes(cam, tgt, center, size, pivot)
 
 main()
