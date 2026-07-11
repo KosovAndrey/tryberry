@@ -251,7 +251,7 @@ groups:
           severity: warning
         annotations:
           summary: "Очередь доставки уведомлений не разгребается"
-          description: "Недоставленных pending_alerts: {{ $value }} (>100) дольше 10 мин. Флашер не успевает: проверь egress в Telegram (xray/wg-proxy) и долю failed — docker logs pt_notifier | grep flusher; rate(tryberrybot_pending_alerts_delivered_total{outcome=\"failed\"}[5m])."
+          description: "Недоставленных pending_alerts: {{ $value }} (>100) дольше 10 мин. Флашер не успевает: проверь egress в Telegram (xray) и долю failed — docker logs pt_notifier | grep flusher; rate(tryberrybot_pending_alerts_delivered_total{outcome=\"failed\"}[5m])."
 
   # ── «Бот молчит» — урок инцидента 2026-07-08 ──────────────────────────────
   # Битый TELEGRAM_BOT_TOKEN в .env → api/bot-worker 2 часа крутили getMe

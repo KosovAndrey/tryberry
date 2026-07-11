@@ -35,9 +35,9 @@ func NewReceiver(token string, log *slog.Logger) (*Receiver, error) {
 }
 
 // pollHTTPClient — HTTP-клиент для long-poll getUpdates через HTTPS_PROXY
-// (tinyproxy+WireGuard). КРИТИЧНО иметь таймаут: дефолтный tgbotapi.NewBotAPI
+// (xray/VLESS). КРИТИЧНО иметь таймаут: дефолтный tgbotapi.NewBotAPI
 // создаёт http.Client БЕЗ него, и тогда запрос по «полумёртвому» keep-alive
-// соединению к прокси висит до idle-таймаута tinyproxy (~10 мин). Цикл
+// соединению к прокси висит до idle-таймаута прокси (минуты). Цикл
 // GetUpdatesChan однопоточный — пока запрос висит, апдейты копятся на стороне
 // Telegram и бот отвечает с многоминутной задержкой.
 //
@@ -45,11 +45,11 @@ func NewReceiver(token string, log *slog.Logger) (*Receiver, error) {
 // поллы: берём poll timeout + запас.
 func pollHTTPClient() *http.Client {
 	// DisableKeepAlives: каждый getUpdates/Send открывает СВЕЖИЙ CONNECT-туннель
-	// через tinyproxy+WireGuard. Переиспользование keep-alive соединения в цикле
+	// через прокси (xray). Переиспользование keep-alive соединения в цикле
 	// long-poll'а ловит "unexpected EOF"/"context deadline exceeded" — прокси или
 	// туннель роняет удержанное соединение, а пул Go подсовывает его снова.
 	// Разовые запросы (wget, notifier) работают именно потому, что коннект свежий.
-	// Proxy берём из окружения (HTTPS_PROXY=http://wg-proxy:8888).
+	// Proxy берём из окружения (HTTPS_PROXY=http://xray:8888).
 	return &http.Client{
 		// Узкий запас над серверным long-poll timeout. На нестабильном egress'е к
 		// Telegram удержанный long-poll иногда тихо умирает — ответ не придёт, и

@@ -32,10 +32,6 @@ monitoring/alertmanager/alertmanager.yml
 nginx/.htpasswd
 nginx/certbot/
 
-# WireGuard — приватный клиентский конфиг туннеля (секрет), НЕ коммитить.
-# Шаблон wg0.conf.example и tinyproxy.conf коммитятся.
-wireguard/wg_confs/wg0.conf
-
 # Xray (VLESS) — клиентский конфиг с UUID/ключами (секрет), НЕ коммитить.
 # Шаблон config.json.example и README.md коммитятся.
 xray/config.json

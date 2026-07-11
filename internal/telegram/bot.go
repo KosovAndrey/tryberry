@@ -110,7 +110,7 @@ func NewBot(
 	// Тот же таймаут-клиент, что у Receiver: ответы bot-worker и (в монолитном
 	// режиме) Bot.RunPolling ходят к Telegram через HTTPS_PROXY — без таймаута
 	// запрос по мёртвому keep-alive соединению к прокси висит до idle-таймаута
-	// tinyproxy. См. pollHTTPClient в receiver.go.
+	// прокси. См. pollHTTPClient в receiver.go.
 	api, err := tgbotapi.NewBotAPIWithClient(token, tgbotapi.APIEndpoint, pollHTTPClient())
 	if err != nil {
 		return nil, fmt.Errorf("init bot api: %w", err)

@@ -1,84 +1,16 @@
 
 services:
 
-  # ── WireGuard-туннель — РЕЗЕРВНОЕ плечо выхода к Telegram ────────────────
-  # На RU-хостинге РКН режет Telegram. ОСНОВНОЙ выход теперь — VLESS (сервис
-  # xray ниже); WG оставлен как fallback, к которому xray уходит автоматически,
-  # если VLESS-узел отвалится. Сервисы НЕ ходят сюда напрямую — только через
-  # xray (http://xray:8888), который сам выбирает плечо vless|wg.
-  #   wg-proxy   — держит туннель wg0 (linuxserver/wireguard).
-  #   tinyproxy  — HTTP CONNECT прокси в netns wg-proxy, слушает :8888.
-  # Конфиг туннеля: ./wireguard/wg_confs/wg0.conf (секрет, см. wg0.conf.example).
-  wg-proxy:
-    image: lscr.io/linuxserver/wireguard:latest
-    container_name: pt_wg_proxy
-    cap_add:
-      - NET_ADMIN
-      - SYS_MODULE            # загрузка модуля wireguard, если не вкомпилен в ядро
-    sysctls:
-      - net.ipv4.conf.all.src_valid_mark=1
-    # DNS задаём на уровне docker, а не строкой DNS= в wg0.conf: в контейнере
-    # resolvconf часто не пишет /etc/resolv.conf → "bad address". tinyproxy
-    # делит netns (network_mode: service:wg-proxy) и наследует этот resolv.conf.
-    dns:
-      - 1.1.1.1
-      - 8.8.8.8
-    environment:
-      PUID: "1000"
-      PGID: "1000"
-      TZ: "Europe/Moscow"
-    volumes:
-      - ./wireguard:/config           # клиентский конфиг в ./wireguard/wg_confs/wg0.conf
-      - /lib/modules:/lib/modules:ro
-    restart: unless-stopped
-    healthcheck:
-      # Egress реально готов, только если: (1) с пиром есть handshake и
-      # (2) дефолтный маршрут идёт через wg0 (его ставит PostUp в wg0.conf,
-      # Table=off). Старая проверка "wg show wg0" зеленела даже при сломанной
-      # маршрутизации — из-за чего tinyproxy стартовал на нерабочем туннеле.
-      test:
-        - "CMD-SHELL"
-        - "wg show wg0 latest-handshakes | awk '{if($2+0>0) f=1} END{exit !f}' && ip route show default | grep -q 'dev wg0'"
-      interval: 15s
-      timeout: 5s
-      retries: 5
-      start_period: 30s
-    labels:
-      logging: "promtail"
-      service: "wg-proxy"
-
-  # HTTP CONNECT-прокси внутри netns wg-proxy → весь его исходящий идёт в туннель.
-  # Образ читает конфиг из /etc/tinyproxy/tinyproxy.conf.
-  tinyproxy:
-    image: vimagick/tinyproxy:latest
-    container_name: pt_tinyproxy
-    network_mode: "service:wg-proxy"  # делит сетевой стек с туннелем
-    volumes:
-      - ./wireguard/tinyproxy.conf:/etc/tinyproxy/tinyproxy.conf:ro
-    depends_on:
-      # Стартуем только когда туннель реально готов (handshake + маршрут).
-      # Так tinyproxy не поднимается на «мёртвом» netns после пересоздания wg-proxy.
-      wg-proxy:
-        condition: service_healthy
-    restart: unless-stopped
-    healthcheck:
-      # tinyproxy слушает :8888 в netns wg-proxy — зависимые сервисы ждут этого.
-      test: ["CMD-SHELL", "netstat -ltn 2>/dev/null | grep -q ':8888 ' || ss -ltn 2>/dev/null | grep -q ':8888 '"]
-      interval: 15s
-      timeout: 5s
-      retries: 5
-      start_period: 20s
-
-  # ── Выход к Telegram через VLESS (Xray), primary; WG — fallback ──────────
-  # Xray держит локальный HTTP-прокси на :8888 и сам выбирает плечо выхода:
-  #   outbound "vless" — основной не-RU exit (VLESS+Reality, TCP под HTTPS,
-  #     РКН его почти не троттлит — в отличие от UDP-WireGuard);
-  #   outbound "wg"    — резерв через http://wg-proxy:8888 (тот же WG-туннель).
-  # observatory пробит оба плеча, balancer (leastPing) держит трафик на живом
-  # и быстром. Сервисы ходят сюда как http://xray:8888 (HTTPS_PROXY).
+  # ── Выход к Telegram через VLESS (Xray) ──────────────────────────────────
+  # На RU-хостинге РКН режет Telegram. Xray держит локальный HTTP-прокси на
+  # :8888 и балансирует VLESS+Reality-узлы (TCP под HTTPS, РКН почти не
+  # троттлит): observatory пробит плечи, balancer (leastPing) держит трафик
+  # на живом и быстром. Сервисы ходят сюда как http://xray:8888 (HTTPS_PROXY).
+  # WG-fallback (wg-proxy + tinyproxy) выпилен 2026-07-11: UDP-WireGuard
+  # окончательно умер (handshake без ответа при живом хосте — DPI), а
+  # unhealthy wg-proxy обрывал каждый полный `up -d`.
   # Конфиг — СЕКРЕТ: ./xray/config.json (в .gitignore, см. config.json.example
   # и xray/README.md по заполнению из vless://-ссылки подписки).
-  # ВАЖНО: xray НЕ зависит от wg-proxy — если WG-плечо лежит, VLESS работает.
   xray:
     image: teddysun/xray:latest
     container_name: pt_xray
@@ -89,7 +21,7 @@ services:
     volumes:
       - ./xray/config.json:/etc/xray/config.json:ro
     healthcheck:
-      # Готовность = inbound :8888 слушает. Реальное здоровье плеч (vless/wg)
+      # Готовность = inbound :8888 слушает. Реальное здоровье vless-плеч
       # держит сам observatory внутри Xray, не healthcheck контейнера.
       test: ["CMD-SHELL", "netstat -ltn 2>/dev/null | grep -q ':8888 ' || ss -ltn 2>/dev/null | grep -q ':8888 '"]
       interval: 15s
@@ -129,8 +61,8 @@ services:
       PUBLIC_BASE_URL: "${PUBLIC_BASE_URL:-https://tryberry.ru}"
       ADMIN_IDS: "${ADMIN_IDS}"
       SCRAPE_INTERVAL_MINUTES: "10"
-      # Egress к Telegram через WireGuard (wg-proxy + tinyproxy). Внутренние
-      # сервисы — мимо прокси (NO_PROXY). TELEGRAM_PROXY_URL больше не используется.
+      # Egress к Telegram через xray (VLESS). Внутренние сервисы — мимо
+      # прокси (NO_PROXY). TELEGRAM_PROXY_URL больше не используется.
       HTTPS_PROXY: "http://xray:8888"
       TELEGRAM_POLL_TIMEOUT_SECONDS: "${TELEGRAM_POLL_TIMEOUT_SECONDS:-10}"
       # api.yookassa.ru — мимо прокси: платёжка РФ, пусть видит RU-IP сервера,
@@ -185,7 +117,7 @@ services:
       OTLP_ENDPOINT: "jaeger:4317"
       # Базовый публичный URL сайта — для кнопки «📈 График цены» (ссылка на /p/).
       PUBLIC_BASE_URL: "${PUBLIC_BASE_URL:-https://tryberry.ru}"
-      # Egress к Telegram (ответы) через WireGuard (wg-proxy + tinyproxy).
+      # Egress к Telegram (ответы) через xray (VLESS).
       # api.vk.com — мимо прокси: VK доступен с RU-VM напрямую.
       HTTPS_PROXY: "http://xray:8888"
       # api.yookassa.ru — мимо прокси (RU-IP сервера, см. api). Создание платежей.
@@ -468,7 +400,7 @@ services:
       OTLP_ENDPOINT: "jaeger:4317"
       # Базовый публичный URL сайта — для кнопки «📈 График цены» в пушах (/p/).
       PUBLIC_BASE_URL: "${PUBLIC_BASE_URL:-https://tryberry.ru}"
-      # Egress к Telegram (уведомления) через WireGuard (wg-proxy + tinyproxy).
+      # Egress к Telegram (уведомления) через xray (VLESS).
       # api.vk.com — мимо прокси: VK доступен напрямую.
       HTTPS_PROXY: "http://xray:8888"
       NO_PROXY: "postgres,redis,kafka,jaeger,localhost,127.0.0.1,api.vk.com,platform-api2.max.ru"
