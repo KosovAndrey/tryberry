@@ -549,23 +549,29 @@ def display_world_bbox():
     return (Vector(wmin), Vector(wmax)) if found else None
 
 
-def _link_glare_to_glass(light_obj):
-    """Cycles light linking (Blender 4.0+): полоса светит ТОЛЬКО в меши со
-    стеклом/дисплеем — корпус не пересвечивает (остаётся тёмный плам, как в
-    первом варианте). Нет API — светим на всё, компенсируется energy."""
+def _light_link(light_obj, to_glass, label):
+    """Cycles light linking (Blender 4.0+). to_glass=True — светит ТОЛЬКО в
+    стекло/дисплей (пятно-блик, корпус не трогает); False — во всё КРОМЕ
+    стекла (свет корпуса/крышки, в экране не отражается никогда).
+    glTF нарезал модель по материалам — стекло это отдельные меши, режется чисто.
+    Нет API — светим на всё, с предупреждением."""
     try:
         glass = KEEP_MATS | {SCREEN_DISPLAY_MAT}
-        targets = [o for o in bpy.data.objects if o.type == "MESH" and any(
-            s.material and s.material.name in glass for s in o.material_slots)]
+        def is_glass(o):
+            return any(s.material and s.material.name in glass for s in o.material_slots)
+        targets = [o for o in bpy.data.objects if o.type == "MESH"
+                   and o.data.name != "GlareGlow" and is_glass(o) == to_glass]
         if not targets:
+            print(f"[light] {label}: целей для linking нет — светит на всё")
             return
-        coll = bpy.data.collections.new("GlareReceivers")
+        coll = bpy.data.collections.new(f"LL_{label}")
         for o in targets:
             coll.objects.link(o)
         light_obj.light_linking.receiver_collection = coll
-        print(f"[glare] light-linking: полоса светит только в стекло ({len(targets)} мешей)")
+        where = "только стекло" if to_glass else "всё кроме стекла"
+        print(f"[light] {label}: light-linking → {where} ({len(targets)} мешей)")
     except Exception as e:
-        print(f"[glare] light-linking недоступен ({e}) — полоса светит на всё, едем дальше")
+        print(f"[light] {label}: light-linking недоступен ({e}) — светит на всё!")
 
 
 def _glow_material(energy, softness):
@@ -656,7 +662,7 @@ def place_glare_glow(center, size):
             setattr(obj, attr, False)
         except Exception:
             pass
-    _link_glare_to_glass(obj)
+    _light_link(obj, to_glass=True, label="GlareGlow")
     print(f"[glare] пятно: uv=({g['center_u']},{g['center_v']}) angle={g['angle_deg']}° "
           f"w={g['width']}W len={g['length']}H soft={g.get('softness')} E={g['energy']}")
 
@@ -690,12 +696,15 @@ def setup_lights(center, size, target):
     add_sun("Key",  (math.radians(55), math.radians(10), math.radians(-40)), 4.0)
     add_sun("Fill", (math.radians(70), 0,                math.radians(60)),  1.5)
     add_sun("Rim",  (math.radians(120), 0,               math.radians(150)), 3.0)
-    # софтбокс бликов КРЫШКИ (первая половина разворота). SoftFront убран:
-    # его отражение висело над экраном и при наклоне заезжало на стекло
-    # горизонтальной полосой поверх нашего пятна (фидбек: «маленькое
-    # горизонтальное сверху — убрать»); фронт теперь освещают суны + пятно.
     add_softbox("SoftBack",  Vector((-0.55,  1.0, 1.3)).normalized() * size * 2.4,
                 center, size, target)
+    # свет КРЫШКИ со стороны камеры (крышка к нам в первой половине разворота).
+    # Это бывший SoftFront, но через light linking он светит во всё КРОМЕ
+    # стекла экрана: его горизонтальная полоса больше не появляется на стекле
+    # ни в наклоне, ни в статике — а крышка/грани освещены как раньше.
+    body = add_softbox("SoftFrontBody", Vector(( 0.55, -1.0, 1.3)).normalized() * size * 2.4,
+                       center, size, target)
+    _light_link(body, to_glass=False, label="SoftFrontBody")
     # мягкое пятно-блик на стекле (градиентная эмиссия, чистый финальный анфас)
     place_glare_glow(center, size)
 
