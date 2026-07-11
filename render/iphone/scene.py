@@ -57,15 +57,24 @@ CONFIG = {
     # Диагональный мягкий блик как в продуктовых рендерах Apple. Все координаты
     # в ДОЛЯХ ДИСПЛЕЯ — куда полоса ляжет НА ЭКРАНЕ, позицию светильника в мире
     # скрипт считает сам (зеркальная геометрия от front-камеры). Итерируем числами.
+    #
+    # БЛИК ТОЛЬКО В ДВИЖЕНИИ: center_u=1.30 — «место» полосы ЗА правым краем
+    # экрана, финальный кадр (анфас) чистый. Во время разворота отражение
+    # физически едет по экрану слева направо и уходит за край на ease-out
+    # (последние ~10° занимают ~0.7s — медленный красивый вайп).
     "glare": {
         "enabled":  True,
-        "center_u": 0.55,   # центр полосы по ширине экрана: 0=левый край, 1=правый
-        "center_v": 0.20,   # по высоте: 0=верх, 1=низ (0.20 = верхняя треть, мимо бабблов)
+        "center_u": 1.30,   # центр полосы по ширине экрана: 0=лево, 1=право, >1 = за краем
+        "center_v": 0.20,   # по высоте: 0=верх, 1=низ
         "angle_deg": 20.0,  # наклон от вертикали, «+» = верх полосы уходит вправо
-        "width":    0.45,   # ширина полосы в долях ширины экрана (~40-50% покрытия)
-        "length":   1.6,    # длина в долях высоты экрана (>1 = края уходят за экран)
+        "width":    0.45,   # ширина полосы в долях ширины экрана
+        "length":   1.8,    # длина в долях высоты экрана (>1 = края уходят за экран)
         "dist":     1.6,    # расстояние плоскости света от стекла (в size модели)
-        "energy":   1200.0, # ⚙ яркость: крутить 400..3000 по первому рендеру
+        "energy":   400.0,  # ⚙ яркость: 1200 выжигало в белое, крутить 150..800
+        # Пробные кадры для итераций БЕЗ рендера всей секвенции: телефон
+        # повёрнут на N° до финала — видно, как полоса едет по экрану.
+        # Рендерятся при обычном Run scene.py → out/still_probe_NN.png.
+        "probe_deg": [2, 5, 10],
     },
 }
 # Запуск через turn.py ставит одноразовый env-флаг — редактировать CONFIG не нужно
@@ -609,6 +618,40 @@ def place_glare_band(center, size):
           f"w={g['width']}W len={g['length']}H dist={g['dist']} E={g['energy']}")
 
 
+def glare_probes():
+    """Список углов (°) пробных кадров из CONFIG["glare"]["probe_deg"] —
+    пусто, если блик выключен или пробы не заданы."""
+    g = CONFIG.get("glare") or {}
+    if not g.get("enabled"):
+        return []
+    return list(g.get("probe_deg") or [])
+
+
+def render_glare_probes(cam, tgt, center, size, pivot):
+    """Стиллы «за N° до финала разворота»: показывают, где полоса-блик лежит
+    во время финального вайпа, без рендера всей секвенции. Камера — анфас,
+    самплы как у анимации (быстро). → out/still_probe_NN.png"""
+    degs = glare_probes()
+    if not degs:
+        return
+    place_camera(cam, tgt, center, size, "front")
+    sc = bpy.context.scene
+    keep = sc.cycles.samples
+    sc.cycles.samples = CONFIG["turn_samples"]
+    sign = -1.0 if CONFIG.get("turn_reverse") else 1.0
+    for deg in degs:
+        pivot.rotation_euler = (0.0, 0.0, sign * math.radians(float(deg)))
+        bpy.context.view_layer.update()
+        out = os.path.join(OUT_DIR, f"still_probe_{int(deg):02d}.png")
+        sc.render.filepath = out
+        print(f"[glare] проба {deg}° до финала…")
+        bpy.ops.render.render(write_still=True)
+        print(f"[glare]   готово: {out}")
+    pivot.rotation_euler = (0.0, 0.0, 0.0)
+    bpy.context.view_layer.update()
+    sc.cycles.samples = keep
+
+
 def setup_lights(center, size, target):
     add_sun("Key",  (math.radians(55), math.radians(10), math.radians(-40)), 4.0)
     add_sun("Fill", (math.radians(70), 0,                math.radians(60)),  1.5)
@@ -898,7 +941,9 @@ def main():
     apply_slim(meshes)                           # сузить корпус под аспект видео
     center, size = world_bounds(meshes)
     print(f"[scene] центр={tuple(round(c,3) for c in center)} размер={round(size,3)}")
-    pivot = setup_turn_pivot(center) if CONFIG.get("turn") else None   # до камеры/света!
+    # пивот нужен и для разворота, и для пробных кадров блика — до камеры/света!
+    need_pivot = CONFIG.get("turn") or glare_probes()
+    pivot = setup_turn_pivot(center) if need_pivot else None
     setup_world()
     setup_render()
     cam, tgt = create_camera()
@@ -920,5 +965,7 @@ def main():
         bpy.ops.render.render(write_still=True)
         print(f"[scene]   готово: {out}")
     print("[scene] оба вида готовы: out/still_front.png и out/still_back.png")
+    if pivot is not None:
+        render_glare_probes(cam, tgt, center, size, pivot)
 
 main()
