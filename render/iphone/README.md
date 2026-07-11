@@ -47,8 +47,10 @@ blender --background --python render/iphone/scene.py
 **Видео чата ГОТОВО и на сайте**: запись PWA (IMG_0944) вычищена в After Effects
 (дата/оператор/остров/название сайта — CAF; композер пересобран из ассетов
 `send-button.png`/`send-field.png`; бейджи платформ `badge-1..3.png` запечены
-с pop-анимацией). Мастер — ProRes `out/hero-chat.mov` (503МБ, у Андрея),
-веб — `web/hero-chat.mp4` (1МБ, H.264) + постер `web/hero-chat-poster.webp`.
+с pop-анимацией). Мастер — ProRes `out/updated_time.mov` (2026-07-11: часы
+заморожены на 11:42 freeze-frame-патчем в AE, кадры 258–419; прежний мастер
+`out/hero-chat.mov` устарел). Веб — `web/hero-chat.mp4` (1МБ, H.264, crf22,
+`?v=2` в index.html) + постер `web/hero-chat-poster.webp` (кадр 0, не менялся).
 На сайте: экран = `<video>` (object-fit:contain), поверх DOM-остров и
 кликабельные DOM-бейджи TG/VK/MAX с пульсом (класс .done по ended).
 Проверка совмещения: `out/overlay-test.html?half` (скрин через headless Chrome).
