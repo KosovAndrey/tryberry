@@ -549,18 +549,34 @@ def display_world_bbox():
     return (Vector(wmin), Vector(wmax)) if found else None
 
 
-def _light_link(light_obj, to_glass, label):
+def _light_link(light_obj, to_glass, label, skip_front_black_of=None):
     """Cycles light linking (Blender 4.0+). to_glass=True — светит ТОЛЬКО в
     стекло/дисплей (пятно-блик, корпус не трогает); False — во всё КРОМЕ
     стекла (свет корпуса/крышки, в экране не отражается никогда).
-    glTF нарезал модель по материалам — стекло это отдельные меши, режется чисто.
-    Нет API — светим на всё, с предупреждением."""
+    skip_front_black_of=центр модели: дополнительно выкинуть ЧЁРНЫЕ детали
+    ПЕРЕДНЕЙ половины (остров/фронталка/сенсоры, bbox-центр y < центра модели,
+    перед = -Y) — их плоский глянец на ~8-12° поворота встаёт в зеркальное
+    положение к софтбоксу и вспыхивает белым на чёрном экране; задние линзы
+    (bbox-центр сзади) остаются — им блики нужны, когда крышка к камере.
+    glTF нарезал модель по материалам — режется чисто. Нет API — светим на всё."""
     try:
         glass = KEEP_MATS | {SCREEN_DISPLAY_MAT}
         def is_glass(o):
             return any(s.material and s.material.name in glass for s in o.material_slots)
         targets = [o for o in bpy.data.objects if o.type == "MESH"
                    and o.data.name != "GlareGlow" and is_glass(o) == to_glass]
+        if skip_front_black_of is not None:
+            cy = skip_front_black_of.y
+            def front_black(o):
+                if not any(s.material and s.material.name in BLACK_MATS
+                           for s in o.material_slots):
+                    return False
+                pts = [o.matrix_world @ Vector(c) for c in o.bound_box]
+                return sum(p.y for p in pts) / 8.0 < cy
+            skipped = [o for o in targets if front_black(o)]
+            targets = [o for o in targets if o not in skipped]
+            print(f"[light] {label}: исключены чёрные детали фронта: "
+                  f"{[o.name for o in skipped]}")
         if not targets:
             print(f"[light] {label}: целей для linking нет — светит на всё")
             return
@@ -704,7 +720,7 @@ def setup_lights(center, size, target):
     # ни в наклоне, ни в статике — а крышка/грани освещены как раньше.
     body = add_softbox("SoftFrontBody", Vector(( 0.55, -1.0, 1.3)).normalized() * size * 2.4,
                        center, size, target)
-    _light_link(body, to_glass=False, label="SoftFrontBody")
+    _light_link(body, to_glass=False, label="SoftFrontBody", skip_front_black_of=center)
     # мягкое пятно-блик на стекле (градиентная эмиссия, чистый финальный анфас)
     place_glare_glow(center, size)
 
