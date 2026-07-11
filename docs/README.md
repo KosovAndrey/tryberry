@@ -39,6 +39,7 @@
 
 | Док | Статус |
 |---|---|
+| `PROMO-SHORTS-PLAN.md` | 📌 Продвижение: план 30–60 shorts (VK Клипы/YT/IG/TT), тест-матрица форматов, бюджет $100, пайплайн. |
 | `TARIFF-FREE-SEARCH-LINK.md` | Тарифы v2 — в основном реализованы; каданс см. канон `SCRAPE-CADENCE.md`. |
 | `SCALING-NOTIFIER-DELIVERY.md` | Дизайн масштабирования notifier (Phase 2, код не тронут; §9 — замер нагрузки). |
 | `MAX-INTEGRATION-PLAN.md` | MAX-мессенджер: ветка feat/max-messenger, не задеплоено. |
