@@ -27,7 +27,7 @@ import os
 import glob
 import math
 import bpy
-from mathutils import Vector
+from mathutils import Vector, Matrix
 
 # ─────────────────────────── КОНФИГ ───────────────────────────
 CONFIG = {
@@ -52,6 +52,21 @@ CONFIG = {
     "turn_samples": 48,     # на кадр анимации хватает меньше (есть denoise)
     "turn_reverse": False,  # True = крутить в другую сторону
     "turn_shutter": 0.35,   # моушен-блюр (0 = выкл): смаз на быстрой фазе, киношно
+
+    # ── Полоса-блик на стекле экрана (place_glare_band) ──
+    # Диагональный мягкий блик как в продуктовых рендерах Apple. Все координаты
+    # в ДОЛЯХ ДИСПЛЕЯ — куда полоса ляжет НА ЭКРАНЕ, позицию светильника в мире
+    # скрипт считает сам (зеркальная геометрия от front-камеры). Итерируем числами.
+    "glare": {
+        "enabled":  True,
+        "center_u": 0.55,   # центр полосы по ширине экрана: 0=левый край, 1=правый
+        "center_v": 0.20,   # по высоте: 0=верх, 1=низ (0.20 = верхняя треть, мимо бабблов)
+        "angle_deg": 20.0,  # наклон от вертикали, «+» = верх полосы уходит вправо
+        "width":    0.45,   # ширина полосы в долях ширины экрана (~40-50% покрытия)
+        "length":   1.6,    # длина в долях высоты экрана (>1 = края уходят за экран)
+        "dist":     1.6,    # расстояние плоскости света от стекла (в size модели)
+        "energy":   1200.0, # ⚙ яркость: крутить 400..3000 по первому рендеру
+    },
 }
 # Запуск через turn.py ставит одноразовый env-флаг — редактировать CONFIG не нужно
 # (pop: флаг не «залипает» на следующие Run scene.py в той же сессии Blender).
@@ -497,6 +512,103 @@ def add_softbox(name, offset, center, size, target):
     return obj
 
 
+def display_world_bbox():
+    """Мировой bbox граней ДИСПЛЕЯ (SCREEN_DISPLAY_MAT): X=ширина, Z=высота,
+    тонкая ось Y = нормаль (перед = min Y, камера-анфас со стороны -Y)."""
+    wmin = [1e18] * 3
+    wmax = [-1e18] * 3
+    found = False
+    for o in bpy.data.objects:
+        if o.type != "MESH":
+            continue
+        slots = {i for i, s in enumerate(o.material_slots)
+                 if s.material and s.material.name == SCREEN_DISPLAY_MAT}
+        if not slots:
+            continue
+        me, mw = o.data, o.matrix_world
+        for poly in me.polygons:
+            if poly.material_index in slots:
+                for vi in poly.vertices:
+                    wv = mw @ me.vertices[vi].co
+                    found = True
+                    for k in range(3):
+                        wmin[k] = min(wmin[k], wv[k])
+                        wmax[k] = max(wmax[k], wv[k])
+    return (Vector(wmin), Vector(wmax)) if found else None
+
+
+def _link_glare_to_glass(light_obj):
+    """Cycles light linking (Blender 4.0+): полоса светит ТОЛЬКО в меши со
+    стеклом/дисплеем — корпус не пересвечивает. Нет API — светим на всё (ок,
+    просто чуть ярче фронт, компенсируется energy)."""
+    try:
+        glass = KEEP_MATS | {SCREEN_DISPLAY_MAT}
+        targets = [o for o in bpy.data.objects if o.type == "MESH" and any(
+            s.material and s.material.name in glass for s in o.material_slots)]
+        if not targets:
+            return
+        coll = bpy.data.collections.new("GlareReceivers")
+        for o in targets:
+            coll.objects.link(o)
+        light_obj.light_linking.receiver_collection = coll
+        print(f"[glare] light-linking: полоса светит только в стекло ({len(targets)} мешей)")
+    except Exception as e:
+        print(f"[glare] light-linking недоступен ({e}) — полоса светит на всё, едем дальше")
+
+
+def place_glare_band(center, size):
+    """Area-светильник, чьё ОТРАЖЕНИЕ в стекле экрана — диагональная полоса-блик
+    в заданном месте экрана (CONFIG["glare"], всё в долях дисплея).
+
+    Геометрия: отражение точки света в плоскости стекла (y=y0) видно из камеры
+    там, где луч камера→зеркальный-образ пересекает плоскость. Идём в обратную
+    сторону: от желаемой точки P на экране строим луч камера→P, продолжаем его
+    за стекло на глубину D и зеркалим обратно — там ставим центр светильника.
+    Отражение уменьшается в t = L/(L+D) раз (L = камера→стекло), поэтому
+    габариты светильника = желаемые-на-экране / t.
+
+    Светильник ПАРАЛЛЕЛЕН стеклу (без TRACK_TO — наклон исказил бы полосу)
+    и стоит в мире неподвижно: при развороте блик «течёт» по корпусу,
+    а на финальном кадре (анфас) ложится ровно куда задано."""
+    g = CONFIG.get("glare") or {}
+    if not g.get("enabled"):
+        return
+    bb = display_world_bbox()
+    if not bb:
+        print("[glare] дисплей не найден — полоса-блик пропущена")
+        return
+    mn, mx = bb
+    W, H = mx.x - mn.x, mx.z - mn.z
+    y0 = mn.y                                     # плоскость стекла (перед = min Y)
+    cam = center + Vector((0.0, -1.0, 0.0)) * size * 3.2   # == place_camera "front"
+    L = y0 - cam.y
+    D = float(g["dist"]) * size
+    t = L / (L + D)
+    P = Vector((mn.x + g["center_u"] * W, y0, mx.z - g["center_v"] * H))
+    M = cam + (P - cam) * ((L + D) / L)           # образ центра за стеклом
+    pos = Vector((M.x, y0 - D, M.z))              # зеркалим в наше полупространство
+
+    la = bpy.data.lights.new("GlareBand", "AREA")
+    la.shape = "RECTANGLE"
+    la.size = g["width"] * W / t                  # ширина полосы (короткая ось X)
+    la.size_y = g["length"] * H / t               # длина полосы (длинная ось Y)
+    la.energy = float(g["energy"]) * max(size, 1e-4) ** 2
+    obj = bpy.data.objects.new("GlareBand", la)
+    bpy.context.collection.objects.link(obj)
+    th = math.radians(float(g["angle_deg"]))
+    ax = Vector((math.cos(th), 0.0, -math.sin(th)))   # короткая ось
+    ay = Vector((math.sin(th), 0.0, math.cos(th)))    # длинная ось (θ=0 — вертикаль)
+    az = Vector((0.0, -1.0, 0.0))                     # -Z светильника → +Y (на телефон)
+    obj.matrix_world = Matrix((
+        (ax.x, ay.x, az.x, pos.x),
+        (ax.y, ay.y, az.y, pos.y),
+        (ax.z, ay.z, az.z, pos.z),
+        (0.0, 0.0, 0.0, 1.0)))
+    _link_glare_to_glass(obj)
+    print(f"[glare] полоса: uv=({g['center_u']},{g['center_v']}) angle={g['angle_deg']}° "
+          f"w={g['width']}W len={g['length']}H dist={g['dist']} E={g['energy']}")
+
+
 def setup_lights(center, size, target):
     add_sun("Key",  (math.radians(55), math.radians(10), math.radians(-40)), 4.0)
     add_sun("Fill", (math.radians(70), 0,                math.radians(60)),  1.5)
@@ -506,6 +618,8 @@ def setup_lights(center, size, target):
                 center, size, target)
     add_softbox("SoftBack",  Vector((-0.55,  1.0, 1.3)).normalized() * size * 2.4,
                 center, size, target)
+    # полоса-блик на стекле экрана (управляется CONFIG["glare"])
+    place_glare_band(center, size)
 
 
 def setup_world():
@@ -745,8 +859,22 @@ def render_turn(cam, tgt, center, size, pivot):
           f"{CONFIG['turn_samples']} samples) → {turn_dir}")
     bpy.ops.render.render(animation=True)
     print(f"[turn] готово: {turn_dir}/turn_0001.png .. turn_{f1:04d}.png")
+
+    # СТИЛЛ ИЗ ТОЙ ЖЕ СЕССИИ: hero-iphone.png/gloss/screen_rect обязаны совпадать
+    # с последним кадром видео 1:1. Раньше стилл рендерился отдельным Run — камера
+    # чуть отличалась, на сайте был скачок размера (компенсирован CSS-фаджем,
+    # после этого рендера фадж убираем). Кадр f1 = поворот 0° (анфас).
+    sc.frame_set(f1)
+    sc.render.use_motion_blur = False
+    sc.cycles.samples = CONFIG["samples"]
+    bpy.context.view_layer.update()
+    export_screen_rect(cam, "front")
+    sc.render.filepath = os.path.join(OUT_DIR, "still_front.png")
+    print(f"[turn] рендерю still_front (кадр {f1}, {CONFIG['samples']} samples) — якорь стыка…")
+    bpy.ops.render.render(write_still=True)
+    print(f"[turn] готово: {os.path.join(OUT_DIR, 'still_front.png')} + screen_rect.json")
     print("[turn] дальше в WSL: bash render/iphone/encode_turn.sh "
-          "(альфа-WebM → web/hero-iphone-turn.webm)")
+          "(альфа-WebM + все веб-ассеты из этой же сессии)")
 
 
 # ──────────────────────────── MAIN ────────────────────────────
