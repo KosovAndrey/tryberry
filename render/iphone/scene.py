@@ -690,9 +690,10 @@ def setup_lights(center, size, target):
     add_sun("Key",  (math.radians(55), math.radians(10), math.radians(-40)), 4.0)
     add_sun("Fill", (math.radians(70), 0,                math.radians(60)),  1.5)
     add_sun("Rim",  (math.radians(120), 0,               math.radians(150)), 3.0)
-    # софтбоксы бликов корпуса — ровно как в первом варианте
-    add_softbox("SoftFront", Vector(( 0.55, -1.0, 1.3)).normalized() * size * 2.4,
-                center, size, target)
+    # софтбокс бликов КРЫШКИ (первая половина разворота). SoftFront убран:
+    # его отражение висело над экраном и при наклоне заезжало на стекло
+    # горизонтальной полосой поверх нашего пятна (фидбек: «маленькое
+    # горизонтальное сверху — убрать»); фронт теперь освещают суны + пятно.
     add_softbox("SoftBack",  Vector((-0.55,  1.0, 1.3)).normalized() * size * 2.4,
                 center, size, target)
     # мягкое пятно-блик на стекле (градиентная эмиссия, чистый финальный анфас)
