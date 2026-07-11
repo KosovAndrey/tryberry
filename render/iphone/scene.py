@@ -54,12 +54,10 @@ CONFIG = {
     "turn_shutter": 0.35,   # моушен-блюр (0 = выкл): смаз на быстрой фазе, киношно
 
     # ── Мягкое пятно-блик на стекле (place_glare_glow) ──
-    # Эмиссивная плоскость с РАДИАЛЬНЫМ ГРАДИЕНТОМ (яркое ядро → плавный ноль
-    # к краям): отражение на стекле — бесформенное световое пятно без единой
-    # прямой границы (фикс «просто прямая полоса»). Затухание до нуля также
-    # гарантирует чистый финальный анфас: у света нет края, который мог бы
-    # остаться на экране (прошлая полоса торчала наклонным хвостом).
-    # Координаты в ДОЛЯХ ДИСПЛЕЯ, геометрия светильника в мире считается сама.
+    # ТРИ вложенные эллиптические area-ЛАМПЫ (не меш! у мешей-эмиттеров Cycles
+    # игнорирует light linking — светили в остров) с одним центром: радиальное
+    # затухание 100→66→33→0%, глянец размывает ступени в бесформенное пятно.
+    # Координаты в ДОЛЯХ ДИСПЛЕЯ, геометрия ламп в мире считается сама.
     "glare": {
         "enabled":  True,
         # center_u: 0=лево, 1=право, >1 = за краем. НЕ МЕНЬШЕ 2.2! Полный след
@@ -68,11 +66,10 @@ CONFIG = {
         "center_u": 2.30,
         "center_v": 0.20,   # по высоте: 0=верх, 1=низ
         "angle_deg": 20.0,  # наклон длинной оси от вертикали («+» = верх вправо)
-        "width":    0.90,   # полный след пятна по ширине экрана (видимое ядро ~вдвое уже)
+        "width":    0.90,   # полный след пятна по ширине экрана (яркое ядро ~вдвое уже)
         "length":   2.2,    # полный след по высоте экрана (>1 = хвосты за краями)
-        "softness": 2.0,    # степень затухания: 1 = линейно, 2-3 = мягче/ядро компактнее
-        "dist":     1.6,    # расстояние плоскости света от стекла (в size модели)
-        "energy":   1200.0, # ⚙ яркость ядра (сила эмиссии шейдера, крутить 400..3000)
+        "dist":     1.6,    # расстояние плоскости ламп от стекла (в size модели)
+        "energy":   1200.0, # ⚙ пиковая яркость центра (как у v1-полосы, крутить 400..3000)
     },
     # Пробные кадры БЕЗ рендера секвенции: телефон за N° до финала разворота —
     # видно, как блик едет по стеклу (при center_u=2.3 проезд ~5..16°:
@@ -564,7 +561,7 @@ def _light_link(light_obj, to_glass, label, skip_front_black_of=None):
         def is_glass(o):
             return any(s.material and s.material.name in glass for s in o.material_slots)
         targets = [o for o in bpy.data.objects if o.type == "MESH"
-                   and o.data.name != "GlareGlow" and is_glass(o) == to_glass]
+                   and is_glass(o) == to_glass]
         if skip_front_black_of is not None:
             cy = skip_front_black_of.y
             def front_black(o):
@@ -590,52 +587,23 @@ def _light_link(light_obj, to_glass, label, skip_front_black_of=None):
         print(f"[light] {label}: light-linking недоступен ({e}) — светит на всё!")
 
 
-def _glow_material(energy, softness):
-    """Эмиссия с радиальным затуханием до нуля: Generated-координаты плоскости
-    (0..1) → в -1..1 (Z зануляем — иначе сферический градиент занулит ВСЁ) →
-    Gradient SPHERICAL (1 в центре, 0 на краях) → power(softness) → strength."""
-    mat = bpy.data.materials.new("GlareGlowMat")
-    mat.use_nodes = True
-    nt = mat.node_tree
-    nt.nodes.clear()
-    out = nt.nodes.new("ShaderNodeOutputMaterial")
-    em = nt.nodes.new("ShaderNodeEmission")
-    tex = nt.nodes.new("ShaderNodeTexCoord")
-    mp = nt.nodes.new("ShaderNodeMapping")
-    mp.inputs["Location"].default_value = (-1.0, -1.0, 0.0)
-    mp.inputs["Scale"].default_value = (2.0, 2.0, 0.0)     # Z→0 обязательно
-    grad = nt.nodes.new("ShaderNodeTexGradient")
-    grad.gradient_type = "SPHERICAL"
-    pw = nt.nodes.new("ShaderNodeMath")
-    pw.operation = "POWER"
-    pw.inputs[1].default_value = float(softness)
-    mul = nt.nodes.new("ShaderNodeMath")
-    mul.operation = "MULTIPLY"
-    mul.inputs[1].default_value = float(energy)
-    nt.links.new(tex.outputs["Generated"], mp.inputs["Vector"])
-    nt.links.new(mp.outputs["Vector"], grad.inputs["Vector"])
-    nt.links.new(grad.outputs["Fac"], pw.inputs[0])
-    nt.links.new(pw.outputs["Value"], mul.inputs[0])
-    nt.links.new(mul.outputs["Value"], em.inputs["Strength"])
-    nt.links.new(em.outputs["Emission"], out.inputs["Surface"])
-    return mat
-
-
 def place_glare_glow(center, size):
-    """Эмиссивная плоскость, чьё ОТРАЖЕНИЕ в стекле экрана — мягкое бесформенное
-    пятно света (CONFIG["glare"], координаты в долях дисплея).
+    """Мягкое бесформенное пятно-блик на стекле (CONFIG["glare"], доли дисплея).
 
-    Геометрия: отражение точки света в плоскости стекла (y=y0) видно из камеры
-    там, где луч камера→зеркальный-образ пересекает плоскость. Идём в обратную
-    сторону: от желаемой точки P на экране строим луч камера→P, продолжаем его
-    за стекло на глубину D и зеркалим обратно — там ставим центр плоскости.
-    Отражение уменьшается в t = L/(L+D) раз (L = камера→стекло), поэтому
-    габариты плоскости = желаемые-на-экране / t.
+    ВАЖНО: это ЛАМПЫ, а не эмиссивный меш — Cycles light linking работает
+    только с лампами; меш-эмиттер игнорировал linking и светил в глянец
+    острова/фронталки напрямую (белые вспышки на пробах). Проверено.
 
-    Плоскость ПАРАЛЛЕЛЬНА стеклу и стоит в мире неподвижно: при развороте
-    пятно «течёт» по стеклу, в финальном анфасе — за краем (экран чистый).
-    Из камеры и теней плоскость исключена (иначе заслонит солнца),
-    в отражениях (glossy) участвует."""
+    Бесформенность: ТРИ вложенные ЭЛЛИПТИЧЕСКИЕ area-лампы с одним центром
+    и убывающими размерами — радиальное затухание ступенями 100→66→33→0%,
+    глянец стекла (rough ~0.06) размывает ступени в гладкое пятно без единой
+    прямой границы. Пиковая яркость в центре = energy (как у v1-полосы).
+
+    Геометрия прежняя: от желаемой точки P на экране строим луч камера→P,
+    продолжаем за стекло на глубину D и зеркалим — там центр ламп. Отражение
+    уменьшается в t = L/(L+D) раз, габариты ламп = желаемые-на-экране / t.
+    Лампы неподвижны в мире: при развороте пятно «течёт» по стеклу,
+    в финальном анфасе — за краем (экран чистый)."""
     g = CONFIG.get("glare") or {}
     if not g.get("enabled"):
         return
@@ -654,33 +622,31 @@ def place_glare_glow(center, size):
     M = cam + (P - cam) * ((L + D) / L)           # образ центра за стеклом
     pos = Vector((M.x, y0 - D, M.z))              # зеркалим в наше полупространство
 
-    me = bpy.data.meshes.new("GlareGlow")         # плоскость -1..1 (Generated 0..1)
-    me.from_pydata([(-1.0, -1.0, 0.0), (1.0, -1.0, 0.0),
-                    (1.0, 1.0, 0.0), (-1.0, 1.0, 0.0)], [], [(0, 1, 2, 3)])
-    me.update()
-    me.materials.append(_glow_material(g["energy"], g.get("softness", 2.0)))
-    obj = bpy.data.objects.new("GlareGlow", me)
-    bpy.context.collection.objects.link(obj)
     th = math.radians(float(g["angle_deg"]))
-    hw = g["width"] * W / t / 2.0                 # полуоси (меш от -1 до 1)
-    hl = g["length"] * H / t / 2.0
-    ax = Vector((math.cos(th), 0.0, -math.sin(th))) * hw   # короткая ось
-    ay = Vector((math.sin(th), 0.0, math.cos(th))) * hl    # длинная ось (θ=0 — вертикаль)
-    az = Vector((0.0, -1.0, 0.0))                          # нормаль (эмиссия двусторонняя)
-    obj.matrix_world = Matrix((
+    ax = Vector((math.cos(th), 0.0, -math.sin(th)))   # короткая ось (единичная)
+    ay = Vector((math.sin(th), 0.0, math.cos(th)))    # длинная ось (θ=0 — вертикаль)
+    az = Vector((0.0, -1.0, 0.0))                     # -Z ламп → +Y (на телефон)
+    rot = Matrix((
         (ax.x, ay.x, az.x, pos.x),
         (ax.y, ay.y, az.y, pos.y),
         (ax.z, ay.z, az.z, pos.z),
         (0.0, 0.0, 0.0, 1.0)))
-    # из камеры и теней — вон (геометрия заслонила бы солнца); glossy остаётся
-    for attr in ("visible_camera", "visible_shadow", "visible_diffuse"):
-        try:
-            setattr(obj, attr, False)
-        except Exception:
-            pass
-    _light_link(obj, to_glass=True, label="GlareGlow")
-    print(f"[glare] пятно: uv=({g['center_u']},{g['center_v']}) angle={g['angle_deg']}° "
-          f"w={g['width']}W len={g['length']}H soft={g.get('softness')} E={g['energy']}")
+    w = g["width"] * W / t                        # полный след пятна в мире
+    l = g["length"] * H / t
+    # энергия ~ f² держит РАВНУЮ светимость всех колец → в перекрытии радиансы
+    # складываются: центр 3/3, середина 2/3, край 1/3 пиковой яркости
+    for i, f in enumerate((0.45, 0.75, 1.0)):
+        la = bpy.data.lights.new(f"GlareGlow{i}", "AREA")
+        la.shape = "ELLIPSE"
+        la.size = w * f
+        la.size_y = l * f
+        la.energy = float(g["energy"]) * max(size, 1e-4) ** 2 * f * f / 3.0
+        obj = bpy.data.objects.new(f"GlareGlow{i}", la)
+        bpy.context.collection.objects.link(obj)
+        obj.matrix_world = rot
+        _light_link(obj, to_glass=True, label=f"GlareGlow{i}")
+    print(f"[glare] пятно (3 эллипса): uv=({g['center_u']},{g['center_v']}) "
+          f"angle={g['angle_deg']}° w={g['width']}W len={g['length']}H E={g['energy']}")
 
 
 def render_probes(cam, tgt, center, size, pivot):
