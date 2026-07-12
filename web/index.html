@@ -569,7 +569,7 @@ footer{background:var(--plum-deep);padding:70px 0 40px;border-top:1px solid var(
 <!-- NAV -->
 <nav id="nav">
   <div class="nav-inner">
-    <a href="#top" class="brand"><img src="/logo.png" class="brand-logo" alt="TryBerry">TryBerry</a>
+    <a href="#top" class="brand"><img src="/logo.png" class="brand-logo" alt="TryBerry" width="30" height="30">TryBerry</a>
     <div class="nav-links" id="navLinks">
       <a href="#features">Возможности</a>
       <a href="#triggers">Как работает</a>
@@ -1006,7 +1006,7 @@ footer{background:var(--plum-deep);padding:70px 0 40px;border-top:1px solid var(
   <div class="wrap">
     <div class="foot-top">
       <div class="foot-brand">
-        <a href="#top" class="brand"><img src="/logo.png" class="brand-logo" alt="TryBerry">TryBerry</a>
+        <a href="#top" class="brand"><img src="/logo.png" class="brand-logo" alt="TryBerry" width="30" height="30">TryBerry</a>
         <p>Telegram-бот, который ловит снижение цен на Wildberries, Ozon, Яндекс Маркете и AliExpress и пишет вам ровно тогда, когда выгодно.</p>
       </div>
       <div class="foot-cols">
@@ -1057,7 +1057,7 @@ footer{background:var(--plum-deep);padding:70px 0 40px;border-top:1px solid var(
 <!-- LEGAL: PRIVACY -->
 <div class="legal" id="legal-privacy">
   <div class="legal-bar">
-    <a href="#" class="brand" onclick="closeLegal();return false"><img src="/logo.png" class="brand-logo" alt="TryBerry">TryBerry</a>
+    <a href="#top" class="brand" onclick="closeLegal();return false"><img src="/logo.png" class="brand-logo" alt="TryBerry" width="30" height="30">TryBerry</a>
     <button class="legal-close" onclick="closeLegal()">Закрыть ✕</button>
   </div>
   <div class="legal-body">
@@ -1100,7 +1100,7 @@ footer{background:var(--plum-deep);padding:70px 0 40px;border-top:1px solid var(
 <!-- LEGAL: OFFER -->
 <div class="legal" id="legal-consent">
   <div class="legal-bar">
-    <a href="#" class="brand" onclick="closeLegal();return false"><img src="/logo.png" class="brand-logo" alt="TryBerry">TryBerry</a>
+    <a href="#top" class="brand" onclick="closeLegal();return false"><img src="/logo.png" class="brand-logo" alt="TryBerry" width="30" height="30">TryBerry</a>
     <button class="legal-close" onclick="closeLegal()">Закрыть ✕</button>
   </div>
   <div class="legal-body">
@@ -1135,7 +1135,7 @@ footer{background:var(--plum-deep);padding:70px 0 40px;border-top:1px solid var(
 
 <div class="legal" id="legal-offer">
   <div class="legal-bar">
-    <a href="#" class="brand" onclick="closeLegal();return false"><img src="/logo.png" class="brand-logo" alt="TryBerry">TryBerry</a>
+    <a href="#top" class="brand" onclick="closeLegal();return false"><img src="/logo.png" class="brand-logo" alt="TryBerry" width="30" height="30">TryBerry</a>
     <button class="legal-close" onclick="closeLegal()">Закрыть ✕</button>
   </div>
   <div class="legal-body">
@@ -1205,6 +1205,7 @@ function setMenu(open){
   burger.classList.toggle('active',open);
   navBackdrop.classList.toggle('show',open);
   burger.setAttribute('aria-expanded',open);
+  document.body.classList.toggle('no-scroll',open); // блокируем прокрутку фона под меню
 }
 burger.addEventListener('click',()=>setMenu(!navLinks.classList.contains('show')));
 navBackdrop.addEventListener('click',()=>setMenu(false));
