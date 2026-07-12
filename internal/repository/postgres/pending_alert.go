@@ -48,8 +48,8 @@ func (r *PendingAlertRepo) Insert(ctx context.Context, a *domain.PendingAlert) (
 // FetchDue возвращает недоставленные созревшие строки по очереди (старейшие
 // сперва). limit ограничивает размер батча на один тик флашера. maxAttempts
 // отсекает исчерпанные строки (напр. юзер заблокировал бота → 403 навсегда):
-// они оседают в таблице с sent_at IS NULL и видны в метрике глубины, но больше
-// не ретраятся.
+// они больше не ретраятся и по истечении retention удаляются
+// DeleteAbandonedBefore.
 func (r *PendingAlertRepo) FetchDue(ctx context.Context, limit, maxAttempts int) ([]domain.PendingAlert, error) {
 	const q = `
 		SELECT id, user_id, subscription_id, product_id, payload, idem_key,
@@ -119,11 +119,13 @@ func (r *PendingAlertRepo) MarkFailedBatch(ctx context.Context, ids []int64, err
 	return err
 }
 
-// CountUnsent — глубина очереди (для метрики).
-func (r *PendingAlertRepo) CountUnsent(ctx context.Context) (int, error) {
-	const q = `SELECT count(*) FROM pending_alerts WHERE sent_at IS NULL`
+// CountUnsent — глубина очереди (для метрики): только строки, которые флашер
+// ещё будет ретраить. Исчерпавшие maxAttempts не считаем — иначе каждая
+// «похороненная» строка навсегда поднимала пол метрики после инцидента.
+func (r *PendingAlertRepo) CountUnsent(ctx context.Context, maxAttempts int) (int, error) {
+	const q = `SELECT count(*) FROM pending_alerts WHERE sent_at IS NULL AND attempts < $1`
 	var n int
-	err := r.db.QueryRow(ctx, q).Scan(&n)
+	err := r.db.QueryRow(ctx, q, maxAttempts).Scan(&n)
 	return n, err
 }
 
@@ -131,6 +133,20 @@ func (r *PendingAlertRepo) CountUnsent(ctx context.Context) (int, error) {
 func (r *PendingAlertRepo) DeleteSentBefore(ctx context.Context, cutoff time.Time) (int64, error) {
 	const q = `DELETE FROM pending_alerts WHERE sent_at IS NOT NULL AND sent_at < $1`
 	tag, err := r.db.Exec(ctx, q, cutoff)
+	if err != nil {
+		return 0, err
+	}
+	return tag.RowsAffected(), nil
+}
+
+// DeleteAbandonedBefore чистит недоставленные строки, исчерпавшие maxAttempts
+// (FetchDue их уже не берёт — доставить невозможно, напр. юзер заблокировал
+// бота). Без этой чистки они оседали в таблице навсегда. cutoff по created_at —
+// держим тот же retention, что и для доставленных, для пост-разбора инцидентов
+// (last_error хранит причину).
+func (r *PendingAlertRepo) DeleteAbandonedBefore(ctx context.Context, cutoff time.Time, maxAttempts int) (int64, error) {
+	const q = `DELETE FROM pending_alerts WHERE sent_at IS NULL AND attempts >= $2 AND created_at < $1`
+	tag, err := r.db.Exec(ctx, q, cutoff, maxAttempts)
 	if err != nil {
 		return 0, err
 	}
