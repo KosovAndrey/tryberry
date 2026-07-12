@@ -158,6 +158,25 @@ func (s *YandexMarketScraper) Scrape(ctx context.Context, url string) (*Result, 
 	if status != 200 {
 		return nil, fmt.Errorf("yandex market status %d", status)
 	}
+	// Новый OOS-шаблон (редизайн лета-2026): страница «Нет в продаже» ВООБЩЕ без
+	// JSON-LD Product, но со ссылкой на полную карточку (showOriginalKmEmptyOffer=1),
+	// которая отдаёт старую вёрстку — Product без offers + стейт-цена. Один
+	// повторный GET, и её разбирает существующий OOS-путь парсера. У выпиленных
+	// карточек (второй вариант шаблона) ссылки нет — они остаются parse_error.
+	if fullURL, ok := ymOOSFullCardURL(url, string(body)); ok {
+		if err := s.limiter.Wait(ctx); err != nil {
+			return nil, err
+		}
+		st2, body2, src2, err2 := s.getWithFallback(ctx, fullURL, ymCardHeader(), 6<<20)
+		if err2 == nil && st2 == 200 && !isYandexCaptcha(body2) {
+			metrics.YandexPriceSource.WithLabelValues(src2).Inc()
+			if res, perr := parseYandexMarketHTML(string(body2), url); perr == nil {
+				s.log.Info("yandex market: OOS-страница разобрана через полную карточку",
+					"url", url, "in_stock", res.InStock, "last_price", res.Price)
+				return res, nil
+			}
+		}
+	}
 	// 200 + реальная страница, но цены не нашли: диагностика структуры (есть ли
 	// JSON-LD, где лежит price) — чтобы поправить парсер под актуальную вёрстку.
 	s.log.Warn("yandex market: product not parsed (no JSON-LD price?)",
@@ -345,6 +364,22 @@ func parseYandexMarketHTML(html, productURL string) (*Result, error) {
 	}
 
 	return nil, ErrProductNotFound
+}
+
+// ymOOSFullCardURL — URL полной карточки для нового OOS-шаблона. Возвращает
+// ok=false, если на странице нет ссылки showOriginalKmEmptyOffer (не тот шаблон
+// или карточка выпилена насовсем) либо запрос уже был по полной карточке
+// (защита от рекурсии повторного GET).
+func ymOOSFullCardURL(productURL, body string) (string, bool) {
+	const marker = "showOriginalKmEmptyOffer"
+	if strings.Contains(productURL, marker) || !strings.Contains(body, marker) {
+		return "", false
+	}
+	sep := "?"
+	if strings.Contains(productURL, "?") {
+		sep = "&"
+	}
+	return productURL + sep + marker + "=1", true
 }
 
 // ymStatePriceRe вытаскивает цену из стейта marketfront для карточек, где JSON-LD
