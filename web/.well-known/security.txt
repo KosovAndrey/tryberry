@@ -1,0 +1,5 @@
+Contact: mailto:support@tryberry.ru
+Contact: https://t.me/kosov_andrey
+Expires: 2027-07-12T00:00:00Z
+Preferred-Languages: ru, en
+Canonical: https://tryberry.ru/.well-known/security.txt
