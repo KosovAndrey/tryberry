@@ -258,6 +258,10 @@ func (h *WebHandlers) handleSitemap(w http.ResponseWriter, r *http.Request) {
 	var b strings.Builder
 	b.WriteString(`<?xml version="1.0" encoding="UTF-8"?>` + "\n")
 	b.WriteString(`<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">` + "\n")
+	// Главная — самая важная страница, но её нет в products-выборке; добавляем явно.
+	b.WriteString("  <url><loc>")
+	b.WriteString(xmlEscape(h.baseURL + "/"))
+	b.WriteString("</loc><changefreq>weekly</changefreq><priority>1.0</priority></url>\n")
 	for _, e := range entries {
 		loc := h.baseURL + "/p/" + e.PublicID
 		if slug := slugify(e.Name); slug != "" {
