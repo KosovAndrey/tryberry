@@ -229,7 +229,17 @@ func (h *WebHandlers) buildPageData(
 			"availability":  avail,
 		}
 	}
-	ldJSON, _ := json.Marshal(ld)
+	// Хлебные крошки (Главная → товар) — отдельный узел JSON-LD; массив из двух
+	// узлов в одном <script> валиден для schema.org.
+	breadcrumb := map[string]any{
+		"@context": "https://schema.org/",
+		"@type":    "BreadcrumbList",
+		"itemListElement": []any{
+			map[string]any{"@type": "ListItem", "position": 1, "name": "TryBerry", "item": h.baseURL + "/"},
+			map[string]any{"@type": "ListItem", "position": 2, "name": p.Name, "item": canonical},
+		},
+	}
+	ldJSON, _ := json.Marshal([]any{ld, breadcrumb})
 
 	vClass, vTitle, vNote := verdictPresentation(domain.AssessHonestPrice(current, stats, now))
 
