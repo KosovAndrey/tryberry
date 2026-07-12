@@ -26,8 +26,9 @@ type pendingAlertStore interface {
 	MarkSent(ctx context.Context, id int64) error
 	MarkSentBatch(ctx context.Context, ids []int64) error
 	MarkFailedBatch(ctx context.Context, ids []int64, errMsg string, nextAfter time.Time) error
-	CountUnsent(ctx context.Context) (int, error)
+	CountUnsent(ctx context.Context, maxAttempts int) (int, error)
 	DeleteSentBefore(ctx context.Context, cutoff time.Time) (int64, error)
+	DeleteAbandonedBefore(ctx context.Context, cutoff time.Time, maxAttempts int) (int64, error)
 }
 
 // flusherConfig — параметры доставки. Дефолты подобраны под лимит Telegram
@@ -96,10 +97,16 @@ func runFlusher(ctx context.Context, log *slog.Logger, store pendingAlertStore, 
 		case <-ctx.Done():
 			return
 		case <-cleanup.C:
-			if n, err := store.DeleteSentBefore(ctx, time.Now().Add(-cfg.retention)); err != nil {
+			cutoff := time.Now().Add(-cfg.retention)
+			if n, err := store.DeleteSentBefore(ctx, cutoff); err != nil {
 				log.Warn("flusher cleanup", "err", err)
 			} else if n > 0 {
 				log.Info("flusher cleanup", "deleted", n)
+			}
+			if n, err := store.DeleteAbandonedBefore(ctx, cutoff, cfg.maxAttempts); err != nil {
+				log.Warn("flusher cleanup abandoned", "err", err)
+			} else if n > 0 {
+				log.Info("flusher cleanup abandoned", "deleted", n)
 			}
 		case <-tick.C:
 			if err := flushDue(ctx, log, store, sender, limiter, cfg.batch, cfg.maxAttempts); err != nil {
@@ -117,7 +124,7 @@ func runFlusher(ctx context.Context, log *slog.Logger, store pendingAlertStore, 
 // юзера). Вынесено из runFlusher ради тестируемости. Возвращает ошибку fetch
 // или отмену ctx (через limiter.Wait).
 func flushDue(ctx context.Context, log *slog.Logger, store pendingAlertStore, sender alertDeliverer, limiter *rate.Limiter, batch, maxAttempts int) error {
-	if n, err := store.CountUnsent(ctx); err == nil {
+	if n, err := store.CountUnsent(ctx, maxAttempts); err == nil {
 		metrics.PendingAlertsDepth.Set(float64(n))
 	}
 	rows, err := store.FetchDue(ctx, batch, maxAttempts)

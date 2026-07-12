@@ -104,6 +104,26 @@ func TestBundlingEndToEnd(t *testing.T) {
 		t.Fatalf("повторный проход не должен слать (идемпотентность): bundles=%d single=%d",
 			len(sender2.bundles), len(sender2.single))
 	}
+
+	// Given-up строка (attempts >= max): FetchDue не берёт, CountUnsent не
+	// считает, DeleteAbandonedBefore удаляет по retention-cutoff.
+	enqueue(t, ctx, repo, run+"-dead", 300, 300, "Мёртвый", 100, 90, past)
+	if _, err := pool.Exec(ctx,
+		`UPDATE pending_alerts SET attempts = 10, created_at = now() - interval '8 days'
+		 WHERE idem_key = $1`, run+"-dead"); err != nil {
+		t.Fatal(err)
+	}
+	if n, err := repo.CountUnsent(ctx, 10); err != nil || n != 1 {
+		t.Fatalf("CountUnsent должен видеть только future-строку: n=%d err=%v", n, err)
+	}
+	deleted, err := repo.DeleteAbandonedBefore(ctx, time.Now().Add(-7*24*time.Hour), 10)
+	if err != nil || deleted != 1 {
+		t.Fatalf("DeleteAbandonedBefore: deleted=%d err=%v (ждём ровно 1)", deleted, err)
+	}
+	// future-строка (attempts=0) жива — чистка не задела очередь.
+	if n := countUnsentLike(t, ctx, pool, run+"%"); n != 1 {
+		t.Fatalf("после чистки должна остаться 1 недоставленная (future), осталось %d", n)
+	}
 }
 
 func enqueue(t *testing.T, ctx context.Context, repo *postgres.PendingAlertRepo, key string, user, chat int64, name string, old, newp float64, deliverAfter time.Time) {

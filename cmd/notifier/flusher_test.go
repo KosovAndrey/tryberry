@@ -73,8 +73,11 @@ func (f *fakeStore) MarkFailedBatch(_ context.Context, ids []int64, _ string, ne
 	f.failedNext = append(f.failedNext, next)
 	return nil
 }
-func (f *fakeStore) CountUnsent(context.Context) (int, error)                   { return 0, nil }
+func (f *fakeStore) CountUnsent(context.Context, int) (int, error)              { return 0, nil }
 func (f *fakeStore) DeleteSentBefore(context.Context, time.Time) (int64, error) { return 0, nil }
+func (f *fakeStore) DeleteAbandonedBefore(context.Context, time.Time, int) (int64, error) {
+	return 0, nil
+}
 
 type fakeSender struct {
 	err     error
