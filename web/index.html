@@ -1205,6 +1205,7 @@ function setMenu(open){
   burger.classList.toggle('active',open);
   navBackdrop.classList.toggle('show',open);
   burger.setAttribute('aria-expanded',open);
+  document.body.classList.toggle('no-scroll',open); // блокируем прокрутку фона под меню
 }
 burger.addEventListener('click',()=>setMenu(!navLinks.classList.contains('show')));
 navBackdrop.addEventListener('click',()=>setMenu(false));
