@@ -210,3 +210,30 @@ func TestYandexMatches(t *testing.T) {
 		t.Error("should not match ozon url")
 	}
 }
+
+// Новый OOS-шаблон («Нет в продаже» без JSON-LD Product): ретраим полной
+// карточкой только при наличии ссылки showOriginalKmEmptyOffer и без рекурсии.
+func TestYMOOSFullCardURL(t *testing.T) {
+	oosBody := `<div data-baobab-name="notOnSale"><a href="/product--x/1?showOriginalKmEmptyOffer=1" data-auto="link-to-full-card"></a></div>`
+
+	got, ok := ymOOSFullCardURL("https://market.yandex.ru/product--x/1", oosBody)
+	if !ok || got != "https://market.yandex.ru/product--x/1?showOriginalKmEmptyOffer=1" {
+		t.Errorf("ждём URL полной карточки, got %q ok=%v", got, ok)
+	}
+
+	// URL уже с query — параметр добавляется через &.
+	got, ok = ymOOSFullCardURL("https://market.yandex.ru/product--x/1?sku=2", oosBody)
+	if !ok || got != "https://market.yandex.ru/product--x/1?sku=2&showOriginalKmEmptyOffer=1" {
+		t.Errorf("ждём &-конкатенацию, got %q ok=%v", got, ok)
+	}
+
+	// Выпиленная карточка: ссылки на полную карточку нет — ретрая нет.
+	if _, ok := ymOOSFullCardURL("https://market.yandex.ru/product--x/1", "<html>пусто</html>"); ok {
+		t.Error("без маркера ретрая быть не должно")
+	}
+
+	// Запрос уже по полной карточке — не рекурсим.
+	if _, ok := ymOOSFullCardURL("https://market.yandex.ru/product--x/1?showOriginalKmEmptyOffer=1", oosBody); ok {
+		t.Error("рекурсивный ретрай запрещён")
+	}
+}
