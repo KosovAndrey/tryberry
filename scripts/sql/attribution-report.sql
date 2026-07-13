@@ -7,8 +7,13 @@
 -- trials  — из них активировали триал
 -- paid    — из них хотя бы раз успешно оплатили
 -- revenue — сумма их успешных платежей, ₽
+--
+-- Конвенция меток: формат = семейство + номер ролика через дефис (f1-03 =
+-- ролик №3 формата F1), площадка = yt/vkclips/ig/tt/...; каталоги — dir_*
+-- (v_dir_tgstat). Каждый ролик получает СВОЮ ссылку → первая секция ниже
+-- сама даёт разрез «какой ролик приводит», вторая сворачивает до семейства.
 
--- Формат × площадка (сводная, канал суммарно)
+-- Ролик (формат) × площадка (сводная, канал суммарно)
 SELECT
     a.format,
     a.platform,
@@ -27,6 +32,19 @@ LEFT JOIN (
 WHERE NOT u.is_synthetic
 GROUP BY a.format, a.platform
 ORDER BY starts DESC, a.format, a.platform;
+
+-- Семейство формата (f1-03 → f1) × площадка — что снимать дальше
+SELECT
+    split_part(a.format, '-', 1) AS format_family,
+    a.platform,
+    COUNT(*)                                      AS starts,
+    COUNT(*) FILTER (WHERE u.trial_used)          AS trials,
+    COUNT(DISTINCT a.format)                      AS videos -- сколько роликов внесло вклад
+FROM user_attribution a
+JOIN users u ON u.id = a.user_id
+WHERE NOT u.is_synthetic
+GROUP BY format_family, a.platform
+ORDER BY starts DESC;
 
 -- Разбивка по каналам входа (tg/vk/max) — какой мессенджер выбирают
 SELECT
