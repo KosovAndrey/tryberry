@@ -335,6 +335,11 @@ func (b *Bot) handleCommand(ctx context.Context, msg *tgbotapi.Message) {
 			b.handleLinkCode(ctx, msg.Chat.ID, user, msg.From.UserName, code)
 			return
 		}
+		// Промо-атрибуция (?start=v_<формат>_<площадка>, PROMO-SHORTS-PLAN §6):
+		// фиксируем первое касание, юзеру — обычное меню.
+		if att, ok := domain.ParseStartAttribution(payload); ok {
+			b.saveAttribution(ctx, user.ID, att)
+		}
 		b.sendMainMenu(ctx, msg.Chat.ID, 0, false)
 	case "menu":
 		b.sendMainMenu(ctx, msg.Chat.ID, 0, false)

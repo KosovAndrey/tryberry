@@ -220,6 +220,13 @@ func (b *Bot) handleStart(ctx context.Context, maxID int64, payload string) {
 		b.handleRefCode(ctx, maxID, user, code)
 		return
 	}
+	// Промо-атрибуция: deep-link со start-payload v_<формат>_<площадка>
+	// (PROMO-SHORTS-PLAN §6). Фиксируем первое касание, юзеру — обычное меню.
+	if att, ok := domain.ParseStartAttribution(payload); ok {
+		if err := b.userRepo.SaveAttribution(ctx, user.ID, domain.NotifyMax, att, time.Now().Add(-domain.AttributionWindow)); err != nil {
+			b.log.Error("max: attribution save", "err", err, "payload", att.Payload)
+		}
+	}
 	b.send(ctx, maxID, b.welcomeText(user), menuKeyboard(user))
 }
 
