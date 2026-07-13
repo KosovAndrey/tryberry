@@ -44,6 +44,39 @@
 
   var chart = null;
 
+  // Анимация первой отрисовки: серия «прорастает» слева направо. Оси/сетка не
+  // прыгают — на время анимации шкалы зафиксированы по полной серии (fixedX/Y),
+  // после — отпускаем автоскейл (те же значения, визуального скачка нет).
+  var reduceMotion = window.matchMedia &&
+    window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+  var fixedX = null, fixedY = null, animGen = 0;
+
+  function animateIn(full) {
+    var xs = full[0], ys = full[1], n = xs.length;
+    if (n < 8) return; // короткую серию не мучаем
+    var ymin = Infinity, ymax = -Infinity;
+    for (var i = 0; i < n; i++) {
+      if (ys[i] == null) continue;
+      if (ys[i] < ymin) ymin = ys[i];
+      if (ys[i] > ymax) ymax = ys[i];
+    }
+    if (!isFinite(ymin)) return;
+    fixedX = [xs[0], xs[n - 1]];
+    fixedY = uPlot.rangeNum(ymin, ymax, 0.1, true);
+    var gen = ++animGen, dur = 700, t0 = performance.now();
+    function frame(t) {
+      // Переключение периода (setData в render) обгоняет анимацию — бросаем её.
+      if (!chart || gen !== animGen) return;
+      var p = Math.min(1, (t - t0) / dur);
+      var e = 1 - Math.pow(1 - p, 3); // ease-out cubic
+      var k = Math.max(2, Math.round(e * n));
+      chart.setData([xs.slice(0, k), ys.slice(0, k)]);
+      if (p < 1) requestAnimationFrame(frame);
+      else { fixedX = fixedY = null; chart.setData(full); }
+    }
+    requestAnimationFrame(frame);
+  }
+
   function size() {
     return { width: elChart.clientWidth || 600, height: elChart.clientHeight || 340 };
   }
@@ -115,7 +148,11 @@
     if (elEmpty) elEmpty.hidden = true;
 
     var data = toCols(points);
-    if (chart) { chart.setData(data); return; }
+    if (chart) {
+      animGen++; fixedX = fixedY = null; // оборвать анимацию первой загрузки
+      chart.setData(data);
+      return;
+    }
 
     var s = size();
     var opts = {
@@ -124,7 +161,10 @@
       padding: [14, 10, 0, 10],
       cursor: { y: false, points: { size: 7, fill: BERRY_HI, stroke: "#150611", width: 2 } },
       legend: { show: false },
-      scales: { x: { time: true } },
+      scales: {
+        x: { time: true, range: function (u, min, max) { return fixedX || [min, max]; } },
+        y: { range: function (u, min, max) { return fixedY || uPlot.rangeNum(min, max, 0.1, true); } }
+      },
       plugins: [refLinesPlugin(), tooltipPlugin()],
       axes: [
         {
@@ -153,6 +193,7 @@
       ]
     };
     chart = new uPlot(opts, data, elChart);
+    if (!reduceMotion) animateIn(data);
   }
 
   function setActive(range) {
