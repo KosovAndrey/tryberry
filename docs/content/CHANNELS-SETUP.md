@@ -89,10 +89,16 @@
 
 ---
 
-## После создания (перекрёстные ссылки — TODO, когда адреса финальны)
+## Перекрёстные ссылки
 
-1. BotFather → Edit @TryBerryBot → добавить ссылку на канал в About/Description.
-2. Проставить реальные адреса каналов в `docs/DIRECTORY-SUBMISSIONS.md`
-   (поле «канал проекта» просят каталоги).
-3. Сайт: ссылки на канал/сообщество в футер `web/index.html` (отдельной правкой).
-4. Контент основного канала — по событию; скидки — автоматом после фичи.
+Финальные адреса: TG-новости `@tryberry` (t.me/tryberry), TG-скидки `@tryberrydeals`,
+VK `vk.com/tryberrybot` (сообщения vk.me/tryberrybot), MAX-бот `max.ru/se13426918_bot`.
+
+- [x] Сайт: колонка «Каналы» в футере `web/index.html` + каналы в `sameAs`
+      Organization-схемы (сделано 2026-07-13, нужен `make deploy-api`… нет —
+      статика nginx: правка видна после обычного деплоя web/ или сразу, кэш HTML
+      не immutable). Проверить curl'ом, что лендинг жив.
+- [x] `docs/DIRECTORY-SUBMISSIONS.md` — адреса проставлены.
+- [ ] **BotFather** (руками): `/mybots` → @TryBerryBot → Edit Bot → Edit Description
+      → добавить строку «📢 Новости: t.me/tryberry · Скидки: t.me/tryberrydeals».
+- [ ] Контент основного канала — по событию; скидки — автоматом после фичи.
