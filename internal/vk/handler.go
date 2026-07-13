@@ -248,6 +248,16 @@ func (b *Bot) HandleEvent(ctx context.Context, ev CallbackEvent) {
 		b.handleLink(ctx, m.Message.FromID, user, code)
 		return
 	}
+	// Промо-атрибуция: юзер пришёл по vk.me/...?ref=v_<формат>_<площадка>
+	// (PROMO-SHORTS-PLAN §6). Фиксируем первое касание и обрабатываем само
+	// сообщение штатно — юзер увидит обычное приветствие/меню.
+	if att, ok := domain.ParseStartAttribution(m.Message.Ref); ok {
+		if user, err := b.userRepo.UpsertVK(ctx, m.Message.FromID); err != nil {
+			b.log.Error("vk: upsert user (ref attribution)", "err", err)
+		} else if err := b.userRepo.SaveAttribution(ctx, user.ID, domain.NotifyVK, att, time.Now().Add(-domain.AttributionWindow)); err != nil {
+			b.log.Error("vk: attribution save", "err", err, "payload", att.Payload)
+		}
+	}
 	b.handleMessage(ctx, m.Message.FromID, strings.TrimSpace(m.Message.Text), m.Message.Payload)
 }
 

@@ -121,5 +121,18 @@ func (b *Bot) handlePDConsentAccept(ctx context.Context, cb *tgbotapi.CallbackQu
 			b.handleLinkCode(ctx, chatID, user, cb.From.UserName, code)
 			return
 		}
+		// Промо-атрибуция (v_<формат>_<площадка>) — пишем только теперь, после
+		// согласия ПД; меню уже показано выше.
+		if att, ok := domain.ParseStartAttribution(payload); ok {
+			b.saveAttribution(ctx, user.ID, att)
+		}
+	}
+}
+
+// saveAttribution фиксирует первое касание (write-once в repo); ошибка не
+// блокирует онбординг — только лог.
+func (b *Bot) saveAttribution(ctx context.Context, userID int64, att domain.StartAttribution) {
+	if err := b.userRepo.SaveAttribution(ctx, userID, domain.NotifyTG, att, time.Now().Add(-domain.AttributionWindow)); err != nil {
+		b.log.Error("attribution: save", "err", err, "payload", att.Payload)
 	}
 }
