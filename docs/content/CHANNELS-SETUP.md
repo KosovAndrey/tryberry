@@ -114,8 +114,32 @@
 
 ## Перекрёстные ссылки
 
-Финальные адреса: TG-новости `@tryberry` (t.me/tryberry), TG-скидки `@tryberrydeals`,
-VK `vk.com/tryberrybot` (сообщения vk.me/tryberrybot), MAX-бот `max.ru/se13426918_bot`.
+Финальные адреса (канон):
+
+| Что | Адрес |
+|---|---|
+| TG-канал новостей | `t.me/tryberry` (@tryberry) |
+| TG-канал скидок | `t.me/tryberrydeals` (пустой до фичи) |
+| TG-бот | `t.me/TryBerryBot` |
+| VK-сообщество | `vk.com/tryberrybot` (сообщения `vk.me/tryberrybot`) |
+| MAX-канал | `max.ru/se13426918_biz` |
+| MAX-бот | `max.ru/se13426918_bot` |
+| Сайт | `tryberry.ru` |
+
+⚠️ В MAX бот и канал различаются ТОЛЬКО суффиксом (`_bot` vs `_biz`) — легко
+перепутать. Человекочитаемые юзернеймы MAX сменить пока не даёт.
+
+### Описания ботов (руками, в коде НЕ задаются)
+
+Везде последней строкой — каналы + сайт:
+- **TG** — BotFather → `/mybots` → @TryBerryBot → Edit Bot → Edit Description:
+  `📢 Новости: t.me/tryberry · Скидки: t.me/tryberrydeals · Сайт: tryberry.ru`
+- **MAX** — @MasterBot → описание бота:
+  `📢 Канал: max.ru/se13426918_biz · Сайт: tryberry.ru`
+- **VK** — поле «Веб-сайт» в настройках сообщества: `tryberry.ru` (рендерится в
+  шапке само, в описании не дублировать).
+
+Метить эти ссылки `v_dir_*` НЕ надо: человек уже в боте, это не привлечение.
 
 - [x] Сайт: колонка «Каналы» в футере `web/index.html` + каналы в `sameAs`
       Organization-схемы (сделано 2026-07-13, нужен `make deploy-api`… нет —
