@@ -6,7 +6,9 @@ GOOGLE_CLIENT_SECRET, GOOGLE_REFRESH_TOKEN. Секреты в логи/git НЕ 
 
 Режимы:
   list            — показать незавершённые задачи (для хука/обзора).
-  add "<текст>" [due] [prio]  — добавить задачу (due=YYYY-MM-DD опц., prio=🔴/🟡/🟢 опц.).
+  add "<текст>" [due] [prio] [--notes "<описание>"]
+                  — добавить задачу (due=YYYY-MM-DD опц., prio=🔴/🟡/🟢 опц.).
+                    Лимиты API: title 1024, notes 8192 — при перерасходе голый 400.
   done "<подстрока>"          — пометить выполненной задачу, чьё название содержит подстроку.
   url | exchange | fill       — разовая OAuth-настройка/первичная заливка (см. историю).
 
@@ -91,12 +93,26 @@ def cmd_list():
 
 
 def cmd_add(args):
+    # --notes "<текст>" — необязательное описание (лимит API 8192); в заголовке
+    # лимит 1024, и API отвечает голым 400 при перерасходе — поэтому длинные
+    # разборы кладём в notes, а не в title.
+    notes = None
+    if "--notes" in args:
+        i = args.index("--notes")
+        notes = args[i + 1] if len(args) > i + 1 else None
+        args = args[:i] + args[i + 2:]
     text = args[0]
     due = args[1] if len(args) > 1 and args[1] not in ("🔴", "🟡", "🟢") else None
     prio = next((a for a in args[1:] if a in ("🔴", "🟡", "🟢")), "")
     at = access_token()
     lid = list_id(at)
-    body = {"title": (prio + " " + text).strip()}
+    title = (prio + " " + text).strip()
+    if len(title) > 1024:
+        print(f"заголовок {len(title)} симв. > 1024 — перенеси хвост в --notes")
+        sys.exit(1)
+    body = {"title": title}
+    if notes:
+        body["notes"] = notes[:8192]
     if due:
         body["due"] = due + "T00:00:00.000Z"
     api("POST", f"lists/{lid}/tasks", at, body)
