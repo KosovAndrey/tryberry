@@ -92,6 +92,19 @@ func run(log *slog.Logger) error {
 	if err != nil || ozonConcurrency < 1 {
 		return fmt.Errorf("OZON_CONSUMER_CONCURRENCY: must be a positive integer, got %q", getEnv("OZON_CONSUMER_CONCURRENCY", "6"))
 	}
+	// SCRAPE_HANDLER_TIMEOUT — жёсткий потолок на обработку ОДНОГО сообщения
+	// (скрейп + запись цены/истории). Без него вызов без собственного дедлайна
+	// (напр. pg advisory-lock / INSERT в backfillHistory) может зависнуть
+	// навечно: горутина пула не завершается, tr.complete не двигает вотермарк,
+	// offset партиции застревает, lag растёт — при этом реплика выглядит
+	// здоровой (инцидент 2026-07-14, scrape-tasks:3 замёрзла на одном offset).
+	// С таймаутом зависание превращается в обычную ошибку → offset проходит,
+	// задача переедет на следующий плановый тик. 120с с запасом покрывают
+	// Ozon-браузер (~60с) + бэкфилл истории; per-МП Client.Timeout меньше.
+	handlerTimeout, err := time.ParseDuration(getEnv("SCRAPE_HANDLER_TIMEOUT", "120s"))
+	if err != nil || handlerTimeout <= 0 {
+		return fmt.Errorf("SCRAPE_HANDLER_TIMEOUT: must be a positive duration, got %q", getEnv("SCRAPE_HANDLER_TIMEOUT", "120s"))
+	}
 
 	// ── Подключения ──────────────────────────────────────────────────────────
 
@@ -219,7 +232,7 @@ func run(log *slog.Logger) error {
 	)
 
 	// ── Обработчик сообщений (цены) — блокирующий основной цикл ────────────────
-	handler := makeHandler(log, registry, productRepo, priceHistoryRepo, priceCache, producer, pm)
+	handler := makeHandler(log, registry, productRepo, priceHistoryRepo, priceCache, producer, pm, handlerTimeout)
 
 	log.Info("scraper started, waiting for tasks...",
 		"concurrency", concurrency, "ozon_concurrency", ozonConcurrency)
@@ -241,8 +254,16 @@ func makeHandler(
 	priceCache *redisrepo.PriceCache,
 	producer *kafka.Producer,
 	pm *partition.Manager,
+	handlerTimeout time.Duration,
 ) kafka.HandlerFunc {
 	return func(ctx context.Context, msg kafka.Message) error {
+		// Per-message deadline: любой шаг ниже (скрейп ИЛИ запись в БД) обязан
+		// уложиться в бюджет, иначе зависание держало бы слот пула и морозило
+		// вотермарк партиции (см. SCRAPE_HANDLER_TIMEOUT в run()). pgx/http.Client
+		// уважают отмену ctx — по дедлайну in-flight вызов вернёт ошибку.
+		ctx, cancel := context.WithTimeout(ctx, handlerTimeout)
+		defer cancel()
+
 		task, err := kafka.Decode[domain.ScrapeTask](msg)
 		if err != nil {
 			log.Error("decode scrape task", "err", err)
