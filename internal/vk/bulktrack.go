@@ -87,7 +87,7 @@ func (b *Bot) trackOne(ctx context.Context, user *domain.User, rawURL string, tr
 		if err := b.prodRepo.SetInStock(ctx, product.ID, false); err != nil {
 			b.log.Warn("vk bulk: set out of stock", "product_id", product.ID, "err", err)
 		}
-		_, created, err := b.subRepo.UpsertOutOfStock(ctx, user.ID, product.ID, result.Price)
+		_, created, err := b.subRepo.UpsertOutOfStock(ctx, user.ID, product.ID)
 		if err != nil {
 			b.log.Warn("vk bulk: upsert oos sub failed", "url", rawURL, "err", err)
 			return bulkItemResult{outcome: bulkFailed}

@@ -56,14 +56,30 @@ func (r *SubscriptionRepo) Upsert(ctx context.Context, userID, productID int64, 
 }
 
 // UpsertOutOfStock — подписать на товар БЕЗ активного оффера. Стратегия по
-// умолчанию back_in_stock («уведомить, когда появится в наличии»). lastPrice —
-// последняя известная цена из стейта (0, если неизвестна): фиксируем её в
-// baseline/first_seen, чтобы при выборе below_target/discount_pct была опорная
-// цена, и пользователь видел «последняя цена X». В остальном как Upsert.
-func (r *SubscriptionRepo) UpsertOutOfStock(ctx context.Context, userID, productID int64, lastPrice float64) (*domain.Subscription, bool, error) {
+// умолчанию back_in_stock («уведомить, когда появится в наличии»).
+//
+// Последняя известная цена (baseline/first_seen — опора для below_target/
+// discount_pct и строки «последняя цена X») берётся ИЗ НАШЕЙ ИСТОРИИ, а не от
+// маркетплейса. Раньше её передавали снаружи из Result.Price, куда скрейпер клал
+// «справочную» цену из стейта МП, — и она врала: у Я.Маркета на одном SKU много
+// продавцов, стейт при OOS отдаёт цену оффера, по которому купить нельзя
+// (Xiaomi Smartmi Air Purifier 2, 2026-07-15: бот показал «последняя цена
+// 11 049 ₽», хотя товар продавался по 12 664 ₽ и такой цены в истории нет вовсе).
+// price_history — цены, которые мы САМИ видели активными, поэтому источник тут он.
+// Истории нет (первый скрейп застал товар уже без оффера) → 0, и это честно:
+// вызывающий покажет «цена появится, когда товар вернётся».
+func (r *SubscriptionRepo) UpsertOutOfStock(ctx context.Context, userID, productID int64) (*domain.Subscription, bool, error) {
 	const q = `
+		WITH last AS (
+			SELECT COALESCE((
+				SELECT price FROM price_history
+				 WHERE product_id = $2
+				 ORDER BY recorded_at DESC
+				 LIMIT 1
+			), 0) AS price
+		)
 		INSERT INTO subscriptions (user_id, product_id, baseline_price, first_seen_price, trigger_type)
-		VALUES ($1, $2, $3, $3, 'back_in_stock')
+		SELECT $1, $2, last.price, last.price, 'back_in_stock' FROM last
 		ON CONFLICT (user_id, product_id) DO UPDATE
 			SET active           = TRUE,
 			    baseline_price   = EXCLUDED.baseline_price,
@@ -81,7 +97,7 @@ func (r *SubscriptionRepo) UpsertOutOfStock(ctx context.Context, userID, product
 	s := &domain.Subscription{}
 	var inserted bool
 	err := withSpan(ctx, "upsert_subscription_oos", func(ctx context.Context) error {
-		return r.db.QueryRow(ctx, q, userID, productID, lastPrice).
+		return r.db.QueryRow(ctx, q, userID, productID).
 			Scan(&s.ID, &s.UserID, &s.ProductID, &s.BaselinePrice, &s.FirstSeenPrice,
 				&s.TriggerType, &s.TargetPrice, &s.DiscountPct, &s.Notified,
 				&s.Active, &s.CreatedAt, &s.UpdatedAt, &inserted)

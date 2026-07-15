@@ -625,8 +625,9 @@ func (b *Bot) doTrack(ctx context.Context, chatID int64, rawURL string, user *do
 		if err := b.prodRepo.SetInStock(ctx, product.ID, false); err != nil {
 			b.log.Warn("set product out of stock", "product_id", product.ID, "err", err)
 		}
-		// result.Price для OOS = последняя известная цена (0, если неизвестна).
-		sub, _, err := b.subRepo.UpsertOutOfStock(ctx, user.ID, product.ID, result.Price)
+		// Последнюю известную цену берём из НАШЕЙ истории (внутри UpsertOutOfStock),
+		// а не из result.Price: там «справочная» цена из стейта МП, и она врёт.
+		sub, _, err := b.subRepo.UpsertOutOfStock(ctx, user.ID, product.ID)
 		if err != nil {
 			span.RecordError(err)
 			metrics.TrackCommands.WithLabelValues("error").Inc()
@@ -637,8 +638,8 @@ func (b *Bot) doTrack(ctx context.Context, chatID int64, rawURL string, user *do
 		metrics.TrackCommands.WithLabelValues("success").Inc()
 
 		priceLine := "Цена появится, когда товар вернётся в продажу."
-		if result.Price > 0 {
-			priceLine = fmt.Sprintf("💰 Последняя цена: <b>%.0f ₽</b>", result.Price)
+		if sub.BaselinePrice > 0 {
+			priceLine = fmt.Sprintf("💰 Последняя цена: <b>%.0f ₽</b>", sub.BaselinePrice)
 		}
 		text := fmt.Sprintf(
 			"✅ <b>Добавил в отслеживание!</b>\n\n"+
@@ -652,7 +653,7 @@ func (b *Bot) doTrack(ctx context.Context, chatID int64, rawURL string, user *do
 		// 3 стратегии как у обычного товара, но «любое снижение» → «в наличии».
 		// below_target/discount_pct показываем только при известной last-цене
 		// (есть опора): без неё процент скидки считать не от чего.
-		kb := trackOOSKeyboard(sub.ID, result.Price > 0, b.chartURL(product.PublicID))
+		kb := trackOOSKeyboard(sub.ID, sub.BaselinePrice > 0, b.chartURL(product.PublicID))
 		edit := tgbotapi.NewEditMessageText(chatID, sent.MessageID, text)
 		edit.ParseMode = "HTML"
 		edit.ReplyMarkup = &kb

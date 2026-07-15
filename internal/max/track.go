@@ -115,21 +115,23 @@ func (b *Bot) handleTrack(ctx context.Context, maxID int64, user *domain.User, r
 		if err := b.prodRepo.SetInStock(ctx, product.ID, false); err != nil {
 			b.log.Warn("max: set product out of stock", "product_id", product.ID, "err", err)
 		}
-		oos, _, err := b.subRepo.UpsertOutOfStock(ctx, user.ID, product.ID, result.Price)
+		// Последняя известная цена — из НАШЕЙ истории (внутри UpsertOutOfStock),
+		// а не из result.Price: там «справочная» цена из стейта МП, и она врёт.
+		oos, _, err := b.subRepo.UpsertOutOfStock(ctx, user.ID, product.ID)
 		if err != nil {
 			b.log.Error("max: upsert oos subscription", "err", err)
 			b.send(ctx, maxID, "Произошла ошибка, попробуй позже.", nil)
 			return
 		}
 		priceLine := "Цена появится, когда товар вернётся в продажу."
-		if result.Price > 0 {
-			priceLine = fmt.Sprintf("💰 Последняя цена: %.0f ₽", result.Price)
+		if oos.BaselinePrice > 0 {
+			priceLine = fmt.Sprintf("💰 Последняя цена: %.0f ₽", oos.BaselinePrice)
 		}
 		b.send(ctx, maxID, fmt.Sprintf(
 			"✅ Добавил в отслеживание!\n\n%s\n🚫 Сейчас товара нет в наличии (нет активного предложения).\n%s\n\n"+
 				"По умолчанию уведомлю, как только он появится в наличии. Сменить тип — кнопками ниже 👇",
 			result.Name, priceLine),
-			maxTrackOOSKeyboard(oos.ID, result.Price > 0, b.chartURL(product.PublicID)))
+			maxTrackOOSKeyboard(oos.ID, oos.BaselinePrice > 0, b.chartURL(product.PublicID)))
 		return
 	}
 
