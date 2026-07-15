@@ -45,8 +45,31 @@ except Exception as ex:
     print('=== id', pid, '— НЕ JSON:', str(ex)[:120], '==='); print(raw[:400]); sys.exit()
 has_rub = any('₽' in v for v in ws.values())
 print('=== id', pid, '— widgets:', len(ws), '| has ₽:', has_rub, '===')
+# Помечаем, ЧТО несёт каждый виджет: ₽ = цена, IMG = продуктовая картинка CDN.
+# Это и есть источники «чужой» цены/фото у OOS-товаров (виджеты полок «с этим
+# покупают» тоже несут ₽ и multimedia — парсер обязан их отличать от карточки).
 for k in sorted(ws):
-    print('  ', k)
+    v = ws[k]
+    flags = []
+    if '₽' in v:
+        flags.append('₽')
+    if '/multimedia' in v:
+        flags.append('IMG')
+    print('   %-46s %s' % (k, ' '.join(flags)))
+print('  --- виджеты с ₽ (сниппет вокруг первой цены) ---')
+for k in sorted(ws):
+    v = ws[k]
+    if '₽' not in v:
+        continue
+    i = v.find('₽')
+    print('   [%s] …%s…' % (k, v[max(0, i-160):i+40].replace(chr(10), ' ')))
+print('  --- виджеты с продуктовой картинкой ---')
+for k in sorted(ws):
+    v = ws[k]
+    if '/multimedia' not in v:
+        continue
+    i = v.find('/multimedia')
+    print('   [%s] …%s…' % (k, v[max(0, i-60):i+60].replace(chr(10), ' ')))
 kws = ['adult','ageverif','age_verif','возраст','взросл','вам есть 18','вам уже есть 18','18+',
        'войти','войдите','авториз','signin','login']
 hits = 0
