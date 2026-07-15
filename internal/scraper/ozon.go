@@ -266,7 +266,7 @@ func (s *OzonScraper) scrapeOnce(ctx context.Context, id string, authed bool) (*
 		return nil, fmt.Errorf("ozon status %d", statusCode)
 	}
 
-	res, err := parseOzonWidgets(body)
+	res, err := parseOzonWidgets(body, id)
 	if err != nil {
 		return nil, err
 	}
@@ -466,7 +466,9 @@ type ozonEnvelope struct {
 	NextPage string `json:"nextPage"`
 }
 
-func parseOzonWidgets(body []byte) (*Result, error) {
+// parseOzonWidgets разбирает ответ карточки. sku — id товара из URL: он нужен,
+// чтобы отличать виджеты НАШЕЙ карточки от посторонних (см. extractOzonOutOfStock).
+func parseOzonWidgets(body []byte, sku string) (*Result, error) {
 	var env ozonEnvelope
 	if err := json.Unmarshal(body, &env); err != nil {
 		return nil, fmt.Errorf("ozon decode envelope: %w", err)
@@ -475,11 +477,23 @@ func parseOzonWidgets(body []byte) (*Result, error) {
 		return nil, fmt.Errorf("ozon: empty widgetStates")
 	}
 
+	// OOS проверяем ПЕРВЫМ делом: у товара не в продаже своих ценового и
+	// галерейного виджетов на странице НЕТ вообще, зато есть полки «с этим
+	// покупают» (skuShelfGoods/tileGridDesktop) — с чужими ценами и фото.
+	// Разбирать такую страницу общими экстракторами нельзя: они находят «какую-то»
+	// цену, она != 0, и товар уходит в базу как живой с ценой соседа по полке.
+	if oos := extractOzonOutOfStock(env.WidgetStates, sku); oos != nil {
+		return oos, nil
+	}
+
 	res := &Result{
 		Price:    extractOzonPrice(env.WidgetStates),
 		Name:     extractOzonName(env.WidgetStates),
 		ImageURL: extractOzonImage(env.WidgetStates),
-		InStock:  true,
+		// Своя цена в ценовом виджете карточки найдена (иначе ниже res.Price == 0)
+		// → товар в продаже. Случай «цены нет, потому что нет в наличии» разобран
+		// выше по webOutOfStock и сюда не доходит.
+		InStock: true,
 	}
 
 	if res.Price == 0 {
@@ -514,6 +528,69 @@ func parseOzonWidgets(body []byte) (*Result, error) {
 		res.Name = "Товар Ozon"
 	}
 	return res, nil
+}
+
+// ozonOutOfStockWidget — виджет webOutOfStock*, которым Ozon ПОДМЕНЯЕТ ценовой
+// блок на карточке товара, снятого с продажи. Реальная сигнатура (дамп
+// 2274265393, 2026-07-15):
+//
+//	{"sku":"2274265393","skuName":"Palit Видеокарта GeForce RTX 5070 Ti …",
+//	 "productLink":"/product/2274265393/?oos_search=false",
+//	 "coverImage":"https://ir.ozone.ru/s3/multimedia-1-9/c200/7613089461.jpg",
+//	 "price":"90 617 ₽","deliveryMessage":"Доставка недоступна",
+//	 "lexemes":{"outOfStockTitle":"Этот товар закончился", …}}
+type ozonOutOfStockWidget struct {
+	SKU        string `json:"sku"`
+	SKUName    string `json:"skuName"`
+	CoverImage string `json:"coverImage"`
+	Price      string `json:"price"`
+}
+
+// extractOzonOutOfStock распознаёт «товара нет в продаже» и собирает Result по
+// НАШЕЙ карточке: имя, фото и ПОСЛЕДНЮЮ известную цену (всё это несёт сам
+// OOS-виджет), с InStock=false. Возвращает nil, если товар в продаже.
+//
+// Виджет обязан быть подписан нашим sku — иначе игнорируем. Ozon кладёт на ту же
+// страницу предложения других продавцов («Купите этот товар у другого продавца»)
+// и полки похожих товаров, поэтому «нашли виджет с ₽» ничего не доказывает:
+// принадлежность карточке подтверждает только sku.
+//
+// Цену несём как last-known — паритет с Я.Маркетом (см. ymStatePrice): наличие
+// определяется наличием предложения, а НЕ тем, что цена где-то на странице
+// нашлась. В price_history она не попадёт (cmd/scraper пишет историю только при
+// InStock=true), а в событие уйдёт NewPrice=0 → сработает триггер back_in_stock,
+// когда товар вернётся в продажу.
+func extractOzonOutOfStock(ws map[string]string, sku string) *Result {
+	if sku == "" {
+		return nil
+	}
+	keys := make([]string, 0)
+	for k := range ws {
+		if strings.Contains(strings.ToLower(k), "outofstock") {
+			keys = append(keys, k)
+		}
+	}
+	sort.Strings(keys)
+	for _, k := range keys {
+		var w ozonOutOfStockWidget
+		if json.Unmarshal([]byte(ws[k]), &w) != nil {
+			continue
+		}
+		if w.SKU != sku {
+			continue
+		}
+		name := strings.TrimSpace(w.SKUName)
+		if name == "" {
+			name = "Товар Ozon"
+		}
+		return &Result{
+			Name:     name,
+			ImageURL: w.CoverImage,
+			Price:    parseRubles(w.Price),
+			InStock:  false,
+		}
+	}
+	return nil
 }
 
 // hasOzonProductCard сообщает, что в ответе есть виджеты карточки товара
@@ -602,27 +679,31 @@ func isOzonAgeGated(ws map[string]string) bool {
 }
 
 // candidateWidgets возвращает значения виджетов в порядке приоритета: сперва с
-// именем, начинающимся на namePrefix, затем чьё имя содержит nameSub, затем (если
-// withRuble) любые со знаком ₽ в значении. Имена нестабильны между web/mobile,
-// поэтому полагаемся не на точное имя, а на содержимое.
-func candidateWidgets(ws map[string]string, namePrefix, nameSub string, withRuble bool) []string {
-	var prio, mid, low []string
-	for k, v := range ws {
+// именем, начинающимся на namePrefix, затем чьё имя содержит nameSub. Имена
+// нестабильны между web/mobile, поэтому полагаемся не на точное имя, а на
+// содержимое — но ТОЛЬКО среди виджетов с осмысленным именем.
+//
+// Ярус «любой виджет со знаком ₽» здесь был и оказался багом: на странице
+// OOS-товара своего ценового виджета нет, и ярус дотягивался до полок «с этим
+// покупают» (skuShelfGoods, tileGridDesktop) и фильтров выдачи, отдавая цену
+// ЧУЖОГО товара как нашу. Проверено дампами: у товара в продаже цена всегда
+// приходит из webPrice*/price*, до такого яруса дело не доходит вовсе — то есть
+// он не спасал ничего, а только врал.
+func candidateWidgets(ws map[string]string, namePrefix, nameSub string) []string {
+	var prio, mid []string
+	for k := range ws {
 		lk := strings.ToLower(k)
 		switch {
 		case namePrefix != "" && strings.HasPrefix(k, namePrefix):
 			prio = append(prio, k)
 		case nameSub != "" && strings.Contains(lk, nameSub):
 			mid = append(mid, k)
-		case withRuble && strings.Contains(v, "₽"):
-			low = append(low, k)
 		}
 	}
 	sort.Strings(prio)
 	sort.Strings(mid)
-	sort.Strings(low)
-	out := make([]string, 0, len(prio)+len(mid)+len(low))
-	for _, list := range [][]string{prio, mid, low} {
+	out := make([]string, 0, len(prio)+len(mid))
+	for _, list := range [][]string{prio, mid} {
 		for _, k := range list {
 			out = append(out, ws[k])
 		}
@@ -636,7 +717,7 @@ func candidateWidgets(ws map[string]string, namePrefix, nameSub string, withRubl
 // PRICE (текущая) → CARD_PRICE (с Ozon Картой) → ORIGINAL_PRICE (старая). Фолбэк —
 // старый рекурсивный поиск строковых полей price/cardPrice/originalPrice.
 func extractOzonPrice(ws map[string]string) float64 {
-	for _, raw := range candidateWidgets(ws, "webPrice", "price", true) {
+	for _, raw := range candidateWidgets(ws, "webPrice", "price") {
 		var data any
 		if json.Unmarshal([]byte(raw), &data) != nil {
 			continue
@@ -723,21 +804,19 @@ func extractOzonName(ws map[string]string) string {
 	return ""
 }
 
-// extractOzonImage достаёт URL фото товара. Продуктовые картинки Ozon лежат на CDN
-// с "/multimedia" в пути (ir.ozone.ru/s3/multimedia-…), что отличает их от иконок
-// банков/доставки (payments-cdn и пр.). Сначала смотрим галерейный виджет, затем
-// фолбэком — любой виджет (структура имён нестабильна между web/mobile).
+// extractOzonImage достаёт URL фото товара из ГАЛЕРЕЙНОГО виджета карточки.
+// Продуктовые картинки Ozon лежат на CDN с "/multimedia" в пути
+// (ir.ozone.ru/s3/multimedia-…), что отличает их от иконок банков/доставки
+// (payments-cdn и пр.).
+//
+// Фолбэка «первая картинка из любого виджета» здесь больше нет: продуктовые фото
+// несут и меню каталога, и полки «с этим покупают», а range по map в Go
+// рандомизирован — фото товара не просто бралось чужое, оно ещё и МЕНЯЛОСЬ от
+// скрейпа к скрейпу. Лучше пусто, чем чужое: пустую картинку UpdateScrapedData
+// не пишет (COALESCE NULLIF), уже сохранённое фото остаётся, а промах виден в
+// логе (см. ozonImageDiag в scrapeOnce).
 func extractOzonImage(ws map[string]string) string {
-	for _, raw := range candidateWidgets(ws, "webGallery", "gallery", false) {
-		var data any
-		if json.Unmarshal([]byte(raw), &data) != nil {
-			continue
-		}
-		if u := findOzonImageURL(data); u != "" {
-			return u
-		}
-	}
-	for _, raw := range ws {
+	for _, raw := range candidateWidgets(ws, "webGallery", "gallery") {
 		var data any
 		if json.Unmarshal([]byte(raw), &data) != nil {
 			continue
