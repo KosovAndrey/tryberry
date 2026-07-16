@@ -145,10 +145,19 @@ func (w *searchWorker) scrapeQuery(ctx context.Context, q *domain.SearchQuery) e
 	// (registry.Scrape выбирает по URL, не по колонке), а вот юзеру карточка с
 	// Я.Маркета показывалась как вайлдберрисовская. На проде так помечено 3108
 	// товаров — чинит миграция 030.
+	//
+	// URL канонизируем тем же CanonicalProductURL, что и ботовый /track. Без этого
+	// одна карточка заводит РАЗНЫЕ products из выдачи и из бота: products.url
+	// UNIQUE = ключ товара, а выдача Ozon отдаёт ссылки со slug-ом (bot — как
+	// пришлёт юзер). Канон обязан стоять и здесь, и в /track — иначе половина
+	// товаров ключуется одним написанием, половина другим.
+	mp := scraper.Marketplace(q.Marketplace)
+	canon := make([]string, len(set.Items))
 	prodUpserts := make([]postgres.ProductUpsert, 0, len(set.Items))
-	for _, it := range set.Items {
+	for i, it := range set.Items {
+		canon[i] = scraper.CanonicalProductURL(mp, it.URL)
 		prodUpserts = append(prodUpserts, postgres.ProductUpsert{
-			URL: it.URL, Name: it.Name, ImageURL: it.ImageURL, Marketplace: q.Marketplace,
+			URL: canon[i], Name: it.Name, ImageURL: it.ImageURL, Marketplace: q.Marketplace,
 		})
 	}
 	idByURL, err := w.products.UpsertBatch(ctx, prodUpserts)
@@ -158,8 +167,8 @@ func (w *searchWorker) scrapeQuery(ctx context.Context, q *domain.SearchQuery) e
 
 	entries := make([]entry, 0, len(set.Items))
 	resultRows := make([]postgres.ResultUpsert, 0, len(set.Items))
-	for _, it := range set.Items {
-		pid, ok := idByURL[it.URL]
+	for i, it := range set.Items {
+		pid, ok := idByURL[canon[i]]
 		if !ok {
 			continue // товар не апсертнулся (редкий сбой) — пропускаем
 		}
