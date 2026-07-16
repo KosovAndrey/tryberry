@@ -139,25 +139,29 @@ func (w *searchWorker) scrapeQuery(ctx context.Context, q *domain.SearchQuery) e
 	// results) вместо N запросов на каждый item: на 500-item выдачах это резко режет
 	// латентность и нагрузку на БД (особенно reseller 1-мин). results.UpsertBatch
 	// ещё и подавляет no-op перезаписи (heartbeat для last_seen_at).
-	// Маркетплейс берём у САМОГО запроса: он же и определил, какой скрейпер выдачи
-	// отработал. Раньше здесь стояла константа "wildberries" — и товары из ЛЮБОЙ
-	// выдачи (Я.Маркет, Ozon, Ali) ложились с ярлыком WB. Скрейп это переживал
-	// (registry.Scrape выбирает по URL, не по колонке), а вот юзеру карточка с
-	// Я.Маркета показывалась как вайлдберрисовская. На проде так помечено 3108
-	// товаров — чинит миграция 030.
+	// Маркетплейс — у СКРЕЙПЕРА ВЫДАЧИ (ss): он резолвится по тому же URL и тем же
+	// FindSearchByURL, а бот при заведении запроса пишет ровно его же
+	// (string(ss.Marketplace())) — один источник правды, разъехаться нечему.
+	//
+	// Здесь стояла константа "wildberries" → товары из ЛЮБОЙ выдачи (Я.Маркет,
+	// Ozon, Ali) ложились с ярлыком WB: на проде так было помечено 3119 товаров,
+	// у Ali — 96% каталога. Скрейп это переживал (registry.Scrape выбирает по URL,
+	// а не по колонке), но юзеру ямаркетовская карточка показывалась WB.
+	// Брать q.Marketplace НЕЛЬЗЯ (пробовали, 2026-07-16): q здесь собран вручную
+	// из Kafka-задачи (см. makeHandler), а она маркетплейс не несёт — поле пустое.
 	//
 	// URL канонизируем тем же CanonicalProductURL, что и ботовый /track. Без этого
 	// одна карточка заводит РАЗНЫЕ products из выдачи и из бота: products.url
 	// UNIQUE = ключ товара, а выдача Ozon отдаёт ссылки со slug-ом (bot — как
 	// пришлёт юзер). Канон обязан стоять и здесь, и в /track — иначе половина
 	// товаров ключуется одним написанием, половина другим.
-	mp := scraper.Marketplace(q.Marketplace)
+	mp := ss.Marketplace()
 	canon := make([]string, len(set.Items))
 	prodUpserts := make([]postgres.ProductUpsert, 0, len(set.Items))
 	for i, it := range set.Items {
 		canon[i] = scraper.CanonicalProductURL(mp, it.URL)
 		prodUpserts = append(prodUpserts, postgres.ProductUpsert{
-			URL: canon[i], Name: it.Name, ImageURL: it.ImageURL, Marketplace: q.Marketplace,
+			URL: canon[i], Name: it.Name, ImageURL: it.ImageURL, Marketplace: string(mp),
 		})
 	}
 	idByURL, err := w.products.UpsertBatch(ctx, prodUpserts)
