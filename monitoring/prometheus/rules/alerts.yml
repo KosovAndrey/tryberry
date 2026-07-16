@@ -22,6 +22,21 @@ groups:
           summary: "Сервис {{ $labels.job }} недоступен"
           description: "Prometheus не может достучаться до {{ $labels.job }} больше 1 минуты"
 
+      # Сервисы на dns_sd (scraper, reseller-worker) ServiceDown НЕ покрывает:
+      # у них нет статического target. Умерла последняя реплика → пропала A-запись
+      # → пропал target → серии up{} нет вовсе, а `up == 0` по несуществующей серии
+      # не матчится никогда. absent() ловит именно этот случай: 1, когда серии нет.
+      # Смерть ЧАСТИ реплик тихая by design (группа переберёт партиции); лаг
+      # оставшихся ловит ConsumerLag.
+      - alert: DiscoveredServiceGone
+        expr: absent(up{job="tryberrybot-scraper"}) or absent(up{job="tryberrybot-reseller-worker"})
+        for: 2m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Сервис исчез из DNS-discovery"
+          description: "Ни одной реплики scraper/reseller-worker в A-записи 2+ минуты — все реплики мертвы либо имя не резолвится. Проверить: docker compose ps scraper reseller-worker."
+
       # Постгрес недоступен
       - alert: PostgresDown
         expr: pg_up == 0
