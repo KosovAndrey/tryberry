@@ -122,9 +122,9 @@ services:
       HTTPS_PROXY: "http://xray:8888"
       # api.yookassa.ru — мимо прокси (RU-IP сервера, см. api). Создание платежей.
       NO_PROXY: "postgres,redis,kafka,jaeger,wb-search-miner,localhost,127.0.0.1,api.vk.com,api.yookassa.ru,platform-api2.max.ru"
-      # Живая цена WB-карточки при /track через тот же браузер-сайдкар, что и поиск
-      # (см. WB_CARD_BROWSER_URL у scraper). Пусто → цена из архива, как раньше.
-      WB_CARD_BROWSER_URL: "${WB_CARD_BROWSER_URL:-http://wb-search-miner:8081}"
+      # Живая цена WB-карточки при /track через тот же браузер-сайдкар, что и поиск.
+      # Выключено по умолчанию — см. WB_CARD_BROWSER_URL у scraper.
+      WB_CARD_BROWSER_URL: "${WB_CARD_BROWSER_URL:-}"
       ADMIN_IDS: "${ADMIN_IDS}"
       # VK-бот (пусто = выключено): токен сообщества + ссылка для кнопки привязки.
       VK_GROUP_TOKEN: "${VK_GROUP_TOKEN:-}"
@@ -233,10 +233,15 @@ services:
       # OZON_POOL_SIZE; Ali — осторожность X5SEC.
       SCRAPER_RATE_LIMIT_RPS_WB: "${SCRAPER_RATE_LIMIT_RPS_WB:-5}"
       SCRAPER_RATE_LIMIT_RPS_OZON: "${SCRAPER_RATE_LIMIT_RPS_OZON:-1}"
-      # ЖИВАЯ цена WB-карточки через браузер-сайдкар (/card). Основной источник цены:
-      # архив basket-CDN отстаёт на дни (см. wb_price_source{source="basket"} — рост
-      # доли = цены снова врут). Пусто → цена из архива, как было до 2026-07-16.
-      WB_CARD_BROWSER_URL: "${WB_CARD_BROWSER_URL:-http://wb-search-miner:8081}"
+      # ЖИВАЯ цена WB-карточки через браузер-сайдкар (/card). Архив basket-CDN
+      # отстаёт на дни (wb_price_source{source="basket"}), живая карточка — правда.
+      # ВЫКЛЮЧЕНО по умолчанию: включать явно, вписав в .env
+      #   WB_CARD_BROWSER_URL=http://wb-search-miner:8081
+      # Пусто → цена из архива, как до 2026-07-16. Дефолт пустой намеренно: первая
+      # версия (навигация) на проде утопила общую с /search дорожку, и «выключить»
+      # оказалось нечем — форма ${VAR:-default} подставляет дефолт и на пустое
+      # значение, т.е. рубильника из .env не существовало. Теперь существует.
+      WB_CARD_BROWSER_URL: "${WB_CARD_BROWSER_URL:-}"
       # u-card-fallback (трансграничные WB-товары, basket-CDN их не видит) через
       # xray: u-card 403-ит прямой RU-IP воркера, зарубежный exit принимает. Нагрузка
       # копеечная — только редкие трансграничные. Пусто → fallback идёт напрямую (403).

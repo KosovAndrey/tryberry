@@ -78,15 +78,38 @@ WARM_RELOADS = int(os.getenv("WB_WARM_RELOADS", "2"))
 USEARCH_MARKER = os.getenv("WB_USEARCH_MARKER", "/u-search/")
 
 # ── Карточка (/card) ─────────────────────────────────────────────────────────
-# Страница товара для навигации: фронт сам дёргает u-card XHR, который мы и ловим.
-CARD_PAGE_URL = os.getenv(
-    "WB_CARD_PAGE_URL",
-    "https://www.wildberries.ru/catalog/{nm}/detail.aspx",
+# u-card дёргаем IN-PAGE fetch-ем из прогретого контекста, БЕЗ навигации на
+# страницу товара. Навигация была первой версией (2026-07-16) и провалилась на
+# проде: страница товара тяжёлая, одна навигация ~14с → одна дорожка тянет ~4.3
+# карточки/мин при спросе 4.2/мин, т.е. 100% загрузки. Очередь копилась, запросы
+# выбивали таймаут, таймаут гасил дорожку, перепрогрев съедал ещё 10с — лавина
+# (ok=7 против no_lanes=89). In-page fetch ~1с вместо 14 убирает саму причину.
+#
+# Почему это может НЕ сработать: тот же приём к u-search wbaas отвергает 403 —
+# фронт кладёт в запрос что-то своё (см. warm). Но u-card — другой хост и другая
+# защита: браузеру с нашего датацентр-IP он отвечает (доказано теми же ok=7).
+# Если 403 — Go штатно уйдёт в архив, а метрика wb_card_fetch_total{forbidden}
+# это покажет.
+UCARD_URL = os.getenv(
+    "WB_UCARD_URL",
+    "https://u-card.wb.ru/cards/v4/list?appType=1&curr=rub&dest={dest}&spp={spp}&nm={nm}",
 )
-# Маркер u-card в URL ответов. Должен совпадать с wbUCardBase в Go
-# (u-card.wb.ru/cards/v4/list) — форма ответа та же, Go парсит её как
-# wbSearchResponse.
-UCARD_MARKER = os.getenv("WB_UCARD_MARKER", "/cards/v4/list")
+# Таймаут in-page fetch. Здоровый u-card отвечает <1с; 15с как у поиска здесь ни
+# к чему — лишь копило бы очередь на локе дорожки.
+CARD_FETCH_TIMEOUT_S = float(os.getenv("WB_CARD_FETCH_TIMEOUT_SECONDS", "8"))
+
+# fetch ИЗНУТРИ страницы: те же cookie, тот же TLS/JA3, тот же Origin, что у
+# фронта. credentials:include — иначе не поедет x_wbaas_token.
+_UCARD_JS = """
+async (u) => {
+  try {
+    const r = await fetch(u, {credentials: 'include'});
+    return {status: r.status, body: await r.text()};
+  } catch (e) {
+    return {status: 0, body: String(e)};
+  }
+}
+"""
 
 # Человекоподобный интервал между запросами одной дорожки + джиттер.
 LANE_MIN_INTERVAL_S = float(os.getenv("WB_LANE_MIN_INTERVAL_MS", "800")) / 1000.0
@@ -356,25 +379,65 @@ class Lane:
             "search %r p%d" % (query[:40], page))
 
     async def fetch_card(self, nm: str):
-        """То же, что fetch_search, но навигация на страницу ТОВАРА и перехват
-        u-card XHR: это ЖИВАЯ цена карточки (basket-CDN price-history.json отстаёт
-        на дни — см. фикс 2026-07-16). Форма ответа = поисковой выдаче, Go парсит
-        её тем же wbSearchResponse. Возвращает (status, body_bytes)."""
-        return await self._fetch_intercept(
-            CARD_PAGE_URL.format(nm=quote(nm)), UCARD_MARKER, "card %s" % nm)
+        """ЖИВАЯ цена карточки: in-page fetch к u-card из прогретого контекста, БЕЗ
+        навигации (почему — см. UCARD_URL). Форма ответа = поисковой выдаче, Go
+        парсит её тем же wbSearchResponse. Возвращает (status, body_bytes).
+
+        ВАЖНО: неудача карточки НЕ гасит дорожку. Дорожка общая с /search, а health
+        тут значит «wbaas-стена пройдена» — это про прогрев, а не про то, что
+        u-card ответил 403 на один товар. Первая версия гасила, и карточки роняли
+        поиск заодно с собой. Гасим только на смерти браузера — это правда про
+        дорожку."""
+        url = UCARD_URL.format(dest=quote(WB_DEST), spp=quote(WB_SPP), nm=quote(nm))
+        async with self.lock:
+            await self._space()
+            try:
+                res = await asyncio.wait_for(self._page.evaluate(_UCARD_JS, url),
+                                             timeout=CARD_FETCH_TIMEOUT_S)
+            except asyncio.TimeoutError:
+                log.warning("дорожка %d: card %s — таймаут in-page fetch", self.idx, nm)
+                return 504, b""
+            except Exception as e:  # noqa: BLE001
+                if _is_dead(e):
+                    self.healthy = False  # труп браузера — это уже про дорожку
+                    log.warning("дорожка %d: card %s — браузер мёртв: %s",
+                                self.idx, nm, _first_line(e))
+                    return 502, b""
+                log.warning("дорожка %d: card %s — fetch упал: %s",
+                            self.idx, nm, _first_line(e))
+                return 502, b""
+
+            status = int(res.get("status") or 0)
+            body = (res.get("body") or "").encode()
+            if status == 200:
+                log.info("дорожка %d: card %s ок (%d байт)", self.idx, nm, len(body))
+                return 200, body
+            if status == 0:
+                # fetch бросил (CORS/сеть) — тело содержит текст исключения.
+                log.warning("дорожка %d: card %s — fetch отвергнут: %s",
+                            self.idx, nm, body[:120].decode("utf-8", "replace"))
+                return 502, b""
+            log.warning("дорожка %d: card %s — u-card status=%s", self.idx, nm, status)
+            return status, body
+
+    async def _space(self):
+        """Выдержать человекоподобный интервал между запросами одной дорожки.
+        Зовётся под self.lock."""
+        t0 = time.monotonic()
+        spacing = max(0.1, LANE_MIN_INTERVAL_S * (1.0 + LANE_JITTER * (2 * random.random() - 1)))
+        wait = spacing - (t0 - self._last_at)
+        if wait > 0:
+            await asyncio.sleep(wait)
+        self._last_at = time.monotonic()
 
     async def _fetch_intercept(self, nav_url: str, marker: str, what: str):
-        """Общий транспорт /search и /card: выдержать человекоподобный интервал,
-        навигировать прогретую дорожку и вернуть (status, body) первого ответа, чей
-        URL содержит marker. Ручной fetch тут не годится — wbaas отвергает всё, что
-        не сделал сам фронт, поэтому именно перехват нативного XHR."""
+        """Транспорт /search: навигировать прогретую дорожку и вернуть (status, body)
+        первого ответа, чей URL содержит marker. Ручной fetch тут не годится — wbaas
+        отвергает всё, что не сделал сам фронт (см. warm), поэтому именно перехват
+        нативного XHR. Карточка этот путь НЕ использует: ей навигация не нужна, а
+        стоит она ~14с (см. UCARD_URL)."""
         async with self.lock:
-            t0 = time.monotonic()
-            spacing = max(0.1, LANE_MIN_INTERVAL_S * (1.0 + LANE_JITTER * (2 * random.random() - 1)))
-            wait = spacing - (t0 - self._last_at)
-            if wait > 0:
-                await asyncio.sleep(wait)
-            self._last_at = time.monotonic()
+            await self._space()
 
             loop = asyncio.get_event_loop()
             fut: asyncio.Future = loop.create_future()
