@@ -42,60 +42,101 @@ DELETE FROM ym_dupe_map WHERE loser_id = keeper_id;   -- в карте толь�
 \echo '== что склеиваем =='
 SELECT count(*) AS losers, count(DISTINCT keeper_id) AS groups FROM ym_dupe_map;
 
-\echo '== коллизии: юзер подписан на оба дубля (одну подписку придётся убить) =='
-SELECT count(*) AS collisions
-FROM subscriptions dup
-JOIN ym_dupe_map m ON m.loser_id = dup.product_id
-JOIN subscriptions keep ON keep.user_id = dup.user_id AND keep.product_id = m.keeper_id;
+\echo '== сколько строк схлопнется (юзер/выдача держат НЕСКОЛЬКО копий одного товара) =='
+SELECT 'subscriptions' AS tbl, count(*) - count(DISTINCT (s.user_id, COALESCE(m.keeper_id, s.product_id))) AS dropped
+  FROM subscriptions s LEFT JOIN ym_dupe_map m ON m.loser_id = s.product_id
+UNION ALL
+SELECT 'search_results', count(*) - count(DISTINCT (r.search_query_id, COALESCE(m.keeper_id, r.product_id)))
+  FROM search_results r LEFT JOIN ym_dupe_map m ON m.loser_id = r.product_id
+UNION ALL
+SELECT 'search_subscription_products', count(*) - count(DISTINCT (p.subscription_id, COALESCE(m.keeper_id, p.product_id)))
+  FROM search_subscription_products p LEFT JOIN ym_dupe_map m ON m.loser_id = p.product_id;
 
 -- Победитель группы — СТАРЕЙШИЙ (min(id)): у него настоящий created_at
 -- («наблюдаем с»), самая длинная история и уже разошедшийся по ссылкам public_id.
 --
--- Порядок продиктован ограничениями, а не вкусом (см. 030):
--- notifications висят на подписке БЕЗ каскада → уведомления переподцепляем к
--- выжившей подписке ДО удаления, иначе падение по FK.
-UPDATE notifications n SET subscription_id = keep.id
-  FROM subscriptions dup
-  JOIN ym_dupe_map m ON m.loser_id = dup.product_id
-  JOIN subscriptions keep ON keep.user_id = dup.user_id AND keep.product_id = m.keeper_id
- WHERE n.subscription_id = dup.id;
+-- ⚠️ Схема «оставить ровно ОДНОГО выжившего в группе», а не «удалить коллизию с
+-- победителем». Разница принципиальна: у YM в группе до 12 копий, и в одну
+-- выдачу/подписку могут попасть ДВА дубля БЕЗ победителя — тогда наивный DELETE
+-- ничего не находит, а UPDATE схлопывает обоих в один product_id и падает по
+-- первичному ключу (проверено на проде: search_results_pkey (60, 6064927)).
+-- row_number по (владелец, ЦЕЛЕВОЙ товар) устойчив к любому числу копий; строка
+-- победителя выигрывает сортировку (m.loser_id IS NULL → первым).
 
-DELETE FROM subscriptions dup
- USING ym_dupe_map m, subscriptions keep
- WHERE dup.product_id = m.loser_id
-   AND keep.user_id = dup.user_id
-   AND keep.product_id = m.keeper_id;
+-- ── subscriptions: UNIQUE (user_id, product_id) ──────────────────────────────
+CREATE TEMP TABLE ym_sub_remap ON COMMIT DROP AS
+SELECT s.id AS sub_id,
+       s.user_id,
+       COALESCE(m.keeper_id, s.product_id) AS target,
+       (s.product_id <> COALESCE(m.keeper_id, s.product_id)) AS moves,
+       row_number() OVER (
+           PARTITION BY s.user_id, COALESCE(m.keeper_id, s.product_id)
+           ORDER BY (m.loser_id IS NULL) DESC, s.id
+       ) AS rn
+FROM subscriptions s
+LEFT JOIN ym_dupe_map m ON m.loser_id = s.product_id;
 
-UPDATE subscriptions s SET product_id = m.keeper_id
-  FROM ym_dupe_map m WHERE s.product_id = m.loser_id;
+-- rn > 1 — это всегда строка-дубль: подписка на победителя сортируется первой, а
+-- двух строк на один (user_id, keeper_id) быть не может (UNIQUE).
+-- notifications висят на подписке БЕЗ каскада → переподцепляем к выжившей ДО
+-- удаления, иначе падение по FK.
+UPDATE notifications n SET subscription_id = surv.sub_id
+  FROM ym_sub_remap dead
+  JOIN ym_sub_remap surv ON surv.user_id = dead.user_id AND surv.target = dead.target AND surv.rn = 1
+ WHERE dead.rn > 1 AND n.subscription_id = dead.sub_id;
 
--- price_history: уникальности нет, product_id не в ключе партиционирования.
+DELETE FROM subscriptions s USING ym_sub_remap dead
+ WHERE dead.rn > 1 AND s.id = dead.sub_id;
+
+UPDATE subscriptions s SET product_id = r.target
+  FROM ym_sub_remap r WHERE r.rn = 1 AND r.moves AND s.id = r.sub_id;
+
+-- ── price_history: уникальности нет, product_id не в ключе партиционирования ──
 UPDATE price_history h SET product_id = m.keeper_id
   FROM ym_dupe_map m WHERE h.product_id = m.loser_id;
 
--- search_results: PK (search_query_id, product_id) — при коллизии оставляем
--- строку победителя.
-DELETE FROM search_results r
- USING ym_dupe_map m, search_results keep
- WHERE r.product_id = m.loser_id
-   AND keep.search_query_id = r.search_query_id
-   AND keep.product_id = m.keeper_id;
+-- ── search_results: PK (search_query_id, product_id) ─────────────────────────
+CREATE TEMP TABLE ym_sr_remap ON COMMIT DROP AS
+SELECT r.search_query_id,
+       r.product_id,
+       COALESCE(m.keeper_id, r.product_id) AS target,
+       row_number() OVER (
+           PARTITION BY r.search_query_id, COALESCE(m.keeper_id, r.product_id)
+           ORDER BY (m.loser_id IS NULL) DESC, r.position, r.product_id
+       ) AS rn
+FROM search_results r
+LEFT JOIN ym_dupe_map m ON m.loser_id = r.product_id;
 
-UPDATE search_results r SET product_id = m.keeper_id
-  FROM ym_dupe_map m WHERE r.product_id = m.loser_id;
+DELETE FROM search_results r USING ym_sr_remap x
+ WHERE x.rn > 1 AND r.search_query_id = x.search_query_id AND r.product_id = x.product_id;
 
--- search_subscription_products: PK (subscription_id, product_id). Baseline
--- победителя старше — он и остаётся.
-DELETE FROM search_subscription_products p
- USING ym_dupe_map m, search_subscription_products keep
- WHERE p.product_id = m.loser_id
-   AND keep.subscription_id = p.subscription_id
-   AND keep.product_id = m.keeper_id;
+UPDATE search_results r SET product_id = x.target
+  FROM ym_sr_remap x
+ WHERE x.rn = 1 AND x.product_id <> x.target
+   AND r.search_query_id = x.search_query_id AND r.product_id = x.product_id;
 
-UPDATE search_subscription_products p SET product_id = m.keeper_id
-  FROM ym_dupe_map m WHERE p.product_id = m.loser_id;
+-- ── search_subscription_products: PK (subscription_id, product_id) ───────────
+-- Baseline победителя старше — он и остаётся (сортировка по first_seen_at).
+CREATE TEMP TABLE ym_ssp_remap ON COMMIT DROP AS
+SELECT p.subscription_id,
+       p.product_id,
+       COALESCE(m.keeper_id, p.product_id) AS target,
+       row_number() OVER (
+           PARTITION BY p.subscription_id, COALESCE(m.keeper_id, p.product_id)
+           ORDER BY (m.loser_id IS NULL) DESC, p.first_seen_at, p.product_id
+       ) AS rn
+FROM search_subscription_products p
+LEFT JOIN ym_dupe_map m ON m.loser_id = p.product_id;
 
--- search_notifications: уникальности нет.
+DELETE FROM search_subscription_products p USING ym_ssp_remap x
+ WHERE x.rn > 1 AND p.subscription_id = x.subscription_id AND p.product_id = x.product_id;
+
+UPDATE search_subscription_products p SET product_id = x.target
+  FROM ym_ssp_remap x
+ WHERE x.rn = 1 AND x.product_id <> x.target
+   AND p.subscription_id = x.subscription_id AND p.product_id = x.product_id;
+
+-- ── search_notifications: уникальности нет ───────────────────────────────────
 UPDATE search_notifications n SET product_id = m.keeper_id
   FROM ym_dupe_map m WHERE n.product_id = m.loser_id;
 
