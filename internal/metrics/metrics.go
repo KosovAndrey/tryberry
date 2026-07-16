@@ -315,6 +315,20 @@ var (
 		[]string{"outcome"},
 	)
 
+	// WBUCardFetch — исход запроса живой цены к u-card.wb.ru (через xray).
+	// Без него wb_price_source{basket} говорит «u-card не смог», но молчит ПОЧЕМУ:
+	// forbidden — WB режет наш exit (по частоте или целиком); timeout — не тянет
+	// прокси; empty — карточки нет; error — сеть/парсинг. Заведена 2026-07-16,
+	// когда basket держал 77% и диагностировать было нечем.
+	WBUCardFetch = promauto.NewCounterVec(
+		prometheus.CounterOpts{
+			Namespace: namespace,
+			Name:      "wb_ucard_fetch_total",
+			Help:      "Outcome of live WB u-card fetch (ok|forbidden|timeout|empty|error)",
+		},
+		[]string{"outcome"},
+	)
+
 	// WBCondGet — исход conditional GET price-history.json на basket-CDN
 	// (дешёвый change-detection перед полным скрейпом). not_modified — 304,
 	// цена не менялась, card.json не запрашивался (сэкономленный полный скрейп);
@@ -331,14 +345,17 @@ var (
 		[]string{"outcome"},
 	)
 
-	// WBPriceSource — каким источником взята цена WB-карточки. ucard — основной
-	// (u-card.wb.ru, real-time, без перебора баскетов, видит трансграничные);
-	// basket — fallback на basket-CDN price-history (u-card не ответил).
+	// WBPriceSource — каким источником взята цена WB-карточки:
+	//   ucard  — ЖИВАЯ цена с u-card.wb.ru через xray (основной с 2026-07-16);
+	//   basket — архив basket-CDN price-history, отстаёт на ДНИ (u-card не ответил:
+	//            лёг прокси / 403). Рост доли = деградация ПРАВДИВОСТИ цен, при
+	//            этом success rate остаётся 100% — следить надо именно здесь, глазами
+	//            такое ловилось только сверкой с живой карточкой.
 	WBPriceSource = promauto.NewCounterVec(
 		prometheus.CounterOpts{
 			Namespace: namespace,
 			Name:      "wb_price_source_total",
-			Help:      "Which source served the WB product price",
+			Help:      "Which source served the WB product price (ucard=live via xray|basket=stale archive)",
 		},
 		[]string{"source"},
 	)

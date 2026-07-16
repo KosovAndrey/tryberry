@@ -112,6 +112,10 @@ func run(log *slog.Logger) error {
 		wbCard.SetBasketResolver(bc)
 		wbCard.SetCondCache(bc) // 304 вместо полного скрейпа при /track уже известного артикула
 	}
+	// Живая цена при /track: юзер должен увидеть то же, что на сайте, а не последнюю
+	// точку архива (отстаёт на дни). Прокси отдельно не задаём — у бота HTTPS_PROXY
+	// уже указывает на xray, и u-card едет через него.
+	wbCard.SetUCardPrimary(getEnv("WB_UCARD_PRIMARY", "true") != "false")
 	wbSearch := scraper.NewWildberriesSearchScraper(wbCard, nil, nil, 5, 0)
 	// WB-витрина продавца: боту нужен разбор ссылки (MatchesSearch/Normalize) и
 	// гейт CAP при подключении (MaxItems). maxPages берём из того же SELLER_MAX_PAGES,
