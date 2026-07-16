@@ -8,6 +8,7 @@ import (
 	"io"
 	"net/http"
 	neturl "net/url"
+	"os"
 	"regexp"
 	"strconv"
 	"strings"
@@ -266,20 +267,31 @@ func (s *WildberriesScraper) fetchFromUCard(ctx context.Context, articleID strin
 	req.Header.Set("User-Agent", wbUserAgent)
 	resp, err := s.ucard.Do(req)
 	if err != nil {
+		// Таймаут клиента (8с) отделяем от прочей сети: это разные болезни —
+		// «не тянет прокси» против «нет связи».
+		if errors.Is(err, context.DeadlineExceeded) || os.IsTimeout(err) {
+			metrics.WBUCardFetch.WithLabelValues("timeout").Inc()
+		} else {
+			metrics.WBUCardFetch.WithLabelValues("error").Inc()
+		}
 		return nil, err
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
+		metrics.WBUCardFetch.WithLabelValues(wbUCardOutcome(resp.StatusCode)).Inc()
 		return nil, fmt.Errorf("u-card status %d", resp.StatusCode)
 	}
 
 	var parsed wbSearchResponse
 	if err := json.NewDecoder(resp.Body).Decode(&parsed); err != nil {
+		metrics.WBUCardFetch.WithLabelValues("error").Inc()
 		return nil, err
 	}
 	if len(parsed.Products) == 0 {
+		metrics.WBUCardFetch.WithLabelValues("empty").Inc()
 		return nil, ErrProductNotFound
 	}
+	metrics.WBUCardFetch.WithLabelValues("ok").Inc()
 
 	p := parsed.Products[0]
 	priceKopecks := ucardPriceKopecks(p)
@@ -294,6 +306,21 @@ func (s *WildberriesScraper) fetchFromUCard(ctx context.Context, articleID strin
 		ImageURL: wbImageURL(id),
 		InStock:  priceKopecks > 0,
 	}, nil
+}
+
+// wbUCardOutcome — метка исхода по статусу: 403/429 (нас режут) и 5xx (у WB
+// плохо) — разные болезни с разным лечением, остальное в кучу.
+func wbUCardOutcome(status int) string {
+	switch {
+	case status == http.StatusForbidden:
+		return "forbidden"
+	case status == http.StatusTooManyRequests:
+		return "rate_limited"
+	case status >= 500:
+		return "upstream_5xx"
+	default:
+		return "error"
+	}
 }
 
 // ucardPriceKopecks — финальная цена позиции в копейках: product (что видит

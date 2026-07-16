@@ -315,6 +315,20 @@ var (
 		[]string{"outcome"},
 	)
 
+	// WBUCardFetch — исход запроса живой цены к u-card.wb.ru (через xray).
+	// Без него wb_price_source{basket} говорит «u-card не смог», но молчит ПОЧЕМУ:
+	// forbidden — WB режет наш exit (по частоте или целиком); timeout — не тянет
+	// прокси; empty — карточки нет; error — сеть/парсинг. Заведена 2026-07-16,
+	// когда basket держал 77% и диагностировать было нечем.
+	WBUCardFetch = promauto.NewCounterVec(
+		prometheus.CounterOpts{
+			Namespace: namespace,
+			Name:      "wb_ucard_fetch_total",
+			Help:      "Outcome of live WB u-card fetch (ok|forbidden|timeout|empty|error)",
+		},
+		[]string{"outcome"},
+	)
+
 	// WBCondGet — исход conditional GET price-history.json на basket-CDN
 	// (дешёвый change-detection перед полным скрейпом). not_modified — 304,
 	// цена не менялась, card.json не запрашивался (сэкономленный полный скрейп);
