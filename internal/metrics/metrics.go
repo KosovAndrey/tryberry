@@ -331,14 +331,17 @@ var (
 		[]string{"outcome"},
 	)
 
-	// WBPriceSource — каким источником взята цена WB-карточки. ucard — основной
-	// (u-card.wb.ru, real-time, без перебора баскетов, видит трансграничные);
-	// basket — fallback на basket-CDN price-history (u-card не ответил).
+	// WBPriceSource — каким источником взята цена WB-карточки:
+	//   ucard  — ЖИВАЯ цена с u-card.wb.ru через xray (основной с 2026-07-16);
+	//   basket — архив basket-CDN price-history, отстаёт на ДНИ (u-card не ответил:
+	//            лёг прокси / 403). Рост доли = деградация ПРАВДИВОСТИ цен, при
+	//            этом success rate остаётся 100% — следить надо именно здесь, глазами
+	//            такое ловилось только сверкой с живой карточкой.
 	WBPriceSource = promauto.NewCounterVec(
 		prometheus.CounterOpts{
 			Namespace: namespace,
 			Name:      "wb_price_source_total",
-			Help:      "Which source served the WB product price",
+			Help:      "Which source served the WB product price (ucard=live via xray|basket=stale archive)",
 		},
 		[]string{"source"},
 	)

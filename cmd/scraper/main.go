@@ -195,11 +195,15 @@ func run(log *slog.Logger) error {
 		// цене (метрика wb_cond_get_total). Без Redis — полный скрейп, как раньше.
 		wbCard.SetCondCache(bc)
 	}
-	// u-card-fallback (трансграничные товары) через прокси: с прямого RU-IP воркера
-	// u-card отдаёт 403, зарубежный/чистый выход (xray) — принимает.
+	// u-card через прокси: с прямого RU-IP воркера u-card отдаёт 403, зарубежный/
+	// чистый выход (xray) — принимает.
 	if err := wbCard.SetUCardProxy(getEnv("WB_UCARD_PROXY_URL", "")); err != nil {
-		log.Warn("bad WB_UCARD_PROXY_URL, u-card fallback uses direct egress", "err", err)
+		log.Warn("bad WB_UCARD_PROXY_URL, u-card uses direct egress", "err", err)
 	}
+	// Цена — с ЖИВОГО u-card, архив basket только под историю/имя/картинку: его
+	// последняя точка отстаёт на дни и врала в 97% скрейпов при success rate 100%.
+	// WB_UCARD_PRIMARY=false → прежний порядок «архив первый» (рубильник в .env).
+	wbCard.SetUCardPrimary(getEnv("WB_UCARD_PRIMARY", "true") != "false")
 	registry := scraper.NewRegistry(
 		wbCard,
 		scraper.NewOzonScraper(scraper.OzonOptions{

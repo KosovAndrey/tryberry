@@ -59,6 +59,9 @@ type WildberriesScraper struct {
 	limiter *rate.Limiter
 	baskets BasketResolver // nilable
 	cond    CondCache      // nilable
+	// ucardPrimary — брать цену с живого u-card, а архив держать только под
+	// историю/имя/картинку. См. Scrape и SetUCardPrimary.
+	ucardPrimary bool
 }
 
 func NewWildberriesScraper(rps float64) *WildberriesScraper {
@@ -82,6 +85,15 @@ func (s *WildberriesScraper) SetBasketResolver(r BasketResolver) { s.baskets = r
 // SetCondCache подключает кэш снимков для conditional GET (опционально; сервисы
 // передают redisrepo.BasketCache). Без него каждый скрейп полный, как раньше.
 func (s *WildberriesScraper) SetCondCache(c CondCache) { s.cond = c }
+
+// SetUCardPrimary переключает источник ЦЕНЫ: true — живой u-card (архив только
+// под историю/имя/картинку), false — прежний порядок «архив первый».
+//
+// Рубильник существует потому, что цена — обещание продукта, а u-card ходит через
+// xray: ляжет прокси или WB начнёт 403-ить — переключаем в .env
+// (WB_UCARD_PRIMARY=false) без выкатки кода. Цены снова отстанут на дни, но бот
+// продолжит работать.
+func (s *WildberriesScraper) SetUCardPrimary(v bool) { s.ucardPrimary = v }
 
 // SetUCardProxy направляет запросы u-card-fallback через прокси. Нужно там, где
 // прямой egress 403-ится антиботом u-card (датацентровый RU-IP воркера): прокси
@@ -123,13 +135,24 @@ func ExtractArticleID(url string) (string, error) {
 
 // Scrape получает данные о товаре Wildberries.
 //
-// Основной источник — basket-CDN price-history.json: быстрый, доступен с прямого
-// egress, без антибота. Цена может отставать на часы — компромисс ради простоты.
+// Основной источник ЦЕНЫ — u-card.wb.ru/cards/v4/list (real-time) через xray
+// (SetUCardProxy): u-card 403-ит наш датацентровый RU-IP, зарубежный exit его
+// принимает. basket-CDN price-history.json остаётся источником ИСТОРИИ (бэкфилл),
+// имени и картинки, но НЕ текущей цены.
 //
-// Fallback — u-card.wb.ru/cards/v4/list (real-time): включается, ТОЛЬКО когда
-// товара нет в basket-CDN (удалён / трансграничный «Находки из Китая»). u-card
-// 403-ит датацентровый RU-IP, поэтому fallback ходит через прокси (SetUCardProxy,
-// напр. xray) — но лишь для редких трансграничных, нагрузка на прокси минимальна.
+// Почему так (решение 2026-07-16, после двух провалов браузерного пути):
+// последняя точка архива — НЕ текущая цена, архив отстаёт на ДНИ и врал в 97%
+// скрейпов при success rate 100% (успех != правда: скрейпер честно качает файл с
+// CDN, там нет антибота, и метриками это не ловится — только сверкой глазами).
+// Браузерный сайдкар отвергнут: навигация на карточку ~14с при спросе 4.2/мин =
+// 100% загрузки одной дорожки, а молотилка попыток забанила наш IP у wbaas и
+// уронила заодно WB-поиск (разбор — docs/WB-CARD-LIVE-PRICE.md). u-card через
+// xray обходит wbaas целиком и УЖЕ работал на трансграничных (ucard=646 успехов
+// в проде на 2026-07-16) — расширяем работающий путь, а не проверяем гипотезу.
+//
+// Нагрузка на xray: ~4.2 запроса/мин (замер прода) — xray несёт TG-egress, но на
+// фоне polling'а бота это немного. Рубильник: WB_UCARD_PRIMARY=false (SetUCardPrimary)
+// возвращает прежний порядок «архив первый».
 func (s *WildberriesScraper) Scrape(ctx context.Context, url string) (*Result, error) {
 	articleID, err := ExtractArticleID(url)
 	if err != nil {
@@ -140,10 +163,71 @@ func (s *WildberriesScraper) Scrape(ctx context.Context, url string) (*Result, e
 		return nil, err
 	}
 
-	// Уже знаем, что товара нет в basket (трансгран/удалён) → сразу u-card, минуя
-	// дорогой 25-шардовый перебор (~10с все 404, блокирует консьюмер).
+	if !s.ucardPrimary {
+		return s.scrapeArchiveFirst(ctx, articleID)
+	}
+
+	id, perr := strconv.ParseInt(articleID, 10, 64)
+	// Товара нет в basket (трансгран/удалён) → за архивом не идём вовсе: перебор
+	// 25 шардов стоит ~10с все 404 и блокирует консьюмер.
+	noBasket := perr == nil && s.baskets != nil && s.baskets.NoBasket(ctx, id)
+
+	// Живая цена и архив идут ПАРАЛЛЕЛЬНО: u-card через прокси (~300мс) и
+	// basket-CDN (~100мс) друг друга не ждут, история достаётся почти бесплатно.
+	var (
+		live, arch       *Result
+		liveErr, archErr error
+		wg               sync.WaitGroup
+	)
+	wg.Add(1)
+	go func() { defer wg.Done(); live, liveErr = s.fetchFromUCard(ctx, articleID) }()
+	if !noBasket {
+		wg.Add(1)
+		go func() { defer wg.Done(); arch, archErr = s.fetchFromBasket(ctx, articleID) }()
+	}
+	wg.Wait()
+
+	// Запоминаем «нет в basket», чтобы впредь не перебирать шарды.
+	if !noBasket && errors.Is(archErr, ErrProductNotFound) && perr == nil && s.baskets != nil {
+		s.baskets.MarkNoBasket(ctx, id)
+	}
+
+	if liveErr == nil {
+		metrics.WBPriceSource.WithLabelValues("ucard").Inc()
+		if arch == nil {
+			return live, nil // нет архива — живой карточки достаточно, просто без Истории
+		}
+		// Живые цена и наличие поверх архивных имени/картинки и Истории.
+		arch.Price = live.Price
+		arch.InStock = live.InStock
+		if arch.Name == "" {
+			arch.Name = live.Name
+		}
+		if arch.ImageURL == "" {
+			arch.ImageURL = live.ImageURL
+		}
+		return arch, nil
+	}
+
+	// u-card не смог (прокси лёг / 403) → архив: цена отстаёт на дни, но это лучше,
+	// чем ничего. Рост доли basket в метрике = цены снова врут, при зелёном success rate.
+	if arch != nil {
+		metrics.WBPriceSource.WithLabelValues("basket").Inc()
+		return arch, nil
+	}
+	if archErr != nil {
+		return nil, archErr
+	}
+	return nil, liveErr
+}
+
+// scrapeArchiveFirst — прежний порядок (архив первый, u-card только для тех, кого
+// нет в basket). Остаётся под рубильником WB_UCARD_PRIMARY=false как путь отката.
+func (s *WildberriesScraper) scrapeArchiveFirst(ctx context.Context, articleID string) (*Result, error) {
 	if id, perr := strconv.ParseInt(articleID, 10, 64); perr == nil && s.baskets != nil && s.baskets.NoBasket(ctx, id) {
-		if ur, uerr := s.fetchFromUCard(ctx, articleID); uerr == nil {
+		// Здесь «нет оффера» исторически = «не нашли»: архив мог сохранить последнюю
+		// цену, и отдавать OOS из u-card на этом пути мы не начинаем.
+		if ur, uerr := s.fetchFromUCard(ctx, articleID); uerr == nil && ur.InStock {
 			metrics.WBPriceSource.WithLabelValues("ucard").Inc()
 			return ur, nil
 		}
@@ -155,13 +239,11 @@ func (s *WildberriesScraper) Scrape(ctx context.Context, url string) (*Result, e
 		metrics.WBPriceSource.WithLabelValues("basket").Inc()
 		return r, nil
 	}
-	// Нет в basket-CDN (трансгран/удалён) → запоминаем (чтобы впредь не перебирать
-	// шарды) и пробуем real-time u-card.
 	if errors.Is(err, ErrProductNotFound) {
 		if id, perr := strconv.ParseInt(articleID, 10, 64); perr == nil && s.baskets != nil {
 			s.baskets.MarkNoBasket(ctx, id)
 		}
-		if ur, uerr := s.fetchFromUCard(ctx, articleID); uerr == nil {
+		if ur, uerr := s.fetchFromUCard(ctx, articleID); uerr == nil && ur.InStock {
 			metrics.WBPriceSource.WithLabelValues("ucard").Inc()
 			return ur, nil
 		}
@@ -201,17 +283,16 @@ func (s *WildberriesScraper) fetchFromUCard(ctx context.Context, articleID strin
 
 	p := parsed.Products[0]
 	priceKopecks := ucardPriceKopecks(p)
-	if priceKopecks == 0 {
-		// Нет активного оффера в u-card → отдаём на fallback (basket price-history
-		// мог сохранить последнюю цену). Так контракт WB-скрейпера не меняется:
-		// он, как и раньше, не отдаёт «нет в наличии» (InStock всегда true).
-		return nil, ErrProductNotFound
-	}
+	// Цена 0 при валидной карточке — это НЕ ошибка, а «нет активного оффера»:
+	// u-card видит живой buy-box (в отличие от архива, который наличия не знает в
+	// принципе и всегда давал InStock=true). Отдаём OOS честно — зовущий решает,
+	// что с этим делать: путь отката (scrapeArchiveFirst) по-прежнему трактует
+	// !InStock как «не нашли».
 	return &Result{
 		Name:     firstNonEmpty(p.Name, "Товар WB"),
 		Price:    float64(priceKopecks) / 100,
 		ImageURL: wbImageURL(id),
-		InStock:  true,
+		InStock:  priceKopecks > 0,
 	}, nil
 }
 

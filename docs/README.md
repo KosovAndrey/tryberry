@@ -15,6 +15,7 @@
 | Док | О чём |
 |---|---|
 | `SCRAPE-CADENCE.md` | 📌 Каданс скрейпа по тарифам × маркетплейсам, волатильностный бэкофф. Ozon-троттл выкл (0/1) — Ozon = WB/YM. |
+| `WB-CARD-LIVE-PRICE.md` | 📌 Источник цены WB: живой u-card через xray, архив basket-CDN — только бэкфилл истории. Рубильник `WB_UCARD_PRIMARY`. Разбор двух провалов браузерного пути (и бана IP). |
 | `features/scraper-throughput-concurrency.md` | 📌 Пропускная: worker-pool консюмер (№1) + отдельный Ozon-топик (№2). Топология топиков/групп. |
 | `SECURITY-HARDENING.md` | 📌 Чек-лист хардинга сервера (ufw/DOCKER-USER, роли PG, requirepass). |
 | `SECRET-ROTATION-RUNBOOK.md` | 📌 Ранбук ротации секретов (после инцидента 2026-07-03). |
