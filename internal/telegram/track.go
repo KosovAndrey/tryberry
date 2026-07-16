@@ -580,7 +580,7 @@ func (b *Bot) doTrack(ctx context.Context, chatID int64, rawURL string, user *do
 		attribute.Float64("product.price", result.Price),
 	)
 
-	product, err := b.prodRepo.Upsert(ctx, rawURL, result.Name, result.ImageURL, string(s.Marketplace()))
+	product, err := b.prodRepo.Upsert(ctx, scraper.CanonicalProductURL(s.Marketplace(), rawURL), result.Name, result.ImageURL, string(s.Marketplace()))
 	if err != nil {
 		span.RecordError(err)
 		span.SetStatus(codes.Error, err.Error())

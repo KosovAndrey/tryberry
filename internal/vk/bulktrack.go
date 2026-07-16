@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"gitlab.com/KosovAndrey/tryberrybot/internal/domain"
+	"gitlab.com/KosovAndrey/tryberrybot/internal/scraper"
 )
 
 // Массовое добавление в VK: пользователь шлёт несколько товарных ссылок одним
@@ -73,7 +74,7 @@ func (b *Bot) trackOne(ctx context.Context, user *domain.User, rawURL string, tr
 		b.log.Warn("vk bulk: scrape failed", "url", rawURL, "marketplace", s.Marketplace(), "err", err)
 		return bulkItemResult{outcome: bulkFailed}
 	}
-	product, err := b.prodRepo.Upsert(ctx, rawURL, result.Name, result.ImageURL, string(s.Marketplace()))
+	product, err := b.prodRepo.Upsert(ctx, scraper.CanonicalProductURL(s.Marketplace(), rawURL), result.Name, result.ImageURL, string(s.Marketplace()))
 	if err != nil {
 		b.log.Warn("vk bulk: upsert product failed", "url", rawURL, "err", err)
 		return bulkItemResult{outcome: bulkFailed}

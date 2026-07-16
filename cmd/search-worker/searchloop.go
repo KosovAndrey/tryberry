@@ -26,8 +26,6 @@ import (
 	"gitlab.com/KosovAndrey/tryberrybot/internal/searchsub"
 )
 
-const wbMarketplace = "wildberries"
-
 // evalSlack — допуск к интервалу оценки подписки: если шаг скрейпа примерно
 // совпадает с интервалом тарифа, мелкий джиттер не должен «съедать» оценку.
 const evalSlack = 5 * time.Second
@@ -141,10 +139,29 @@ func (w *searchWorker) scrapeQuery(ctx context.Context, q *domain.SearchQuery) e
 	// results) вместо N запросов на каждый item: на 500-item выдачах это резко режет
 	// латентность и нагрузку на БД (особенно reseller 1-мин). results.UpsertBatch
 	// ещё и подавляет no-op перезаписи (heartbeat для last_seen_at).
+	// Маркетплейс — у СКРЕЙПЕРА ВЫДАЧИ (ss): он резолвится по тому же URL и тем же
+	// FindSearchByURL, а бот при заведении запроса пишет ровно его же
+	// (string(ss.Marketplace())) — один источник правды, разъехаться нечему.
+	//
+	// Здесь стояла константа "wildberries" → товары из ЛЮБОЙ выдачи (Я.Маркет,
+	// Ozon, Ali) ложились с ярлыком WB: на проде так было помечено 3119 товаров,
+	// у Ali — 96% каталога. Скрейп это переживал (registry.Scrape выбирает по URL,
+	// а не по колонке), но юзеру ямаркетовская карточка показывалась WB.
+	// Брать q.Marketplace НЕЛЬЗЯ (пробовали, 2026-07-16): q здесь собран вручную
+	// из Kafka-задачи (см. makeHandler), а она маркетплейс не несёт — поле пустое.
+	//
+	// URL канонизируем тем же CanonicalProductURL, что и ботовый /track. Без этого
+	// одна карточка заводит РАЗНЫЕ products из выдачи и из бота: products.url
+	// UNIQUE = ключ товара, а выдача Ozon отдаёт ссылки со slug-ом (bot — как
+	// пришлёт юзер). Канон обязан стоять и здесь, и в /track — иначе половина
+	// товаров ключуется одним написанием, половина другим.
+	mp := ss.Marketplace()
+	canon := make([]string, len(set.Items))
 	prodUpserts := make([]postgres.ProductUpsert, 0, len(set.Items))
-	for _, it := range set.Items {
+	for i, it := range set.Items {
+		canon[i] = scraper.CanonicalProductURL(mp, it.URL)
 		prodUpserts = append(prodUpserts, postgres.ProductUpsert{
-			URL: it.URL, Name: it.Name, ImageURL: it.ImageURL, Marketplace: wbMarketplace,
+			URL: canon[i], Name: it.Name, ImageURL: it.ImageURL, Marketplace: string(mp),
 		})
 	}
 	idByURL, err := w.products.UpsertBatch(ctx, prodUpserts)
@@ -154,8 +171,8 @@ func (w *searchWorker) scrapeQuery(ctx context.Context, q *domain.SearchQuery) e
 
 	entries := make([]entry, 0, len(set.Items))
 	resultRows := make([]postgres.ResultUpsert, 0, len(set.Items))
-	for _, it := range set.Items {
-		pid, ok := idByURL[it.URL]
+	for i, it := range set.Items {
+		pid, ok := idByURL[canon[i]]
 		if !ok {
 			continue // товар не апсертнулся (редкий сбой) — пропускаем
 		}

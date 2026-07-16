@@ -89,7 +89,7 @@ func (b *Bot) handleTrack(ctx context.Context, vkID int64, user *domain.User, ra
 		return
 	}
 
-	product, err := b.prodRepo.Upsert(ctx, rawURL, result.Name, result.ImageURL, string(s.Marketplace()))
+	product, err := b.prodRepo.Upsert(ctx, scraper.CanonicalProductURL(s.Marketplace(), rawURL), result.Name, result.ImageURL, string(s.Marketplace()))
 	if err != nil {
 		b.log.Error("vk: upsert product", "err", err)
 		b.send(ctx, vkID, "Произошла ошибка, попробуй позже.", nil)
