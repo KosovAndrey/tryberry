@@ -10,9 +10,10 @@
 -- (ExtractArticleID / ozonProductRe / aliItemRe в internal/scraper) — иначе
 -- отчёт покажет не те группы, что склеит миграция.
 --
--- yandex_market НЕ разбираем намеренно: он единственный реально фетчит
--- сохранённый URL и достаёт из его пути sku — канон для него отдельная задача
--- (см. internal/scraper/canonical_url.go).
+-- yandex_market разбирается с 2026-07-16: канон /product/<id> проверен живым
+-- скрейпером (cmd/ym-canon-probe, 8 из 8 совпали). Раньше он тут отсутствовал —
+-- и именно поэтому его ~1057 дублей (у одного товара 12 копий) никто не видел,
+-- пока отчёт бодро показывал «одна группа дублей» по Ozon.
 
 \echo '== 1. Сколько групп дублей и сколько лишних строк =='
 
@@ -23,9 +24,10 @@ WITH keyed AS (
                WHEN 'wildberries' THEN substring(url from '/catalog/(\d+)/')
                WHEN 'ozon'        THEN substring(url from 'ozon\.ru/product/(?:[^/?#]*-)?(\d+)')
                WHEN 'aliexpress'  THEN substring(url from '/item/(\d+)\.html')
+               WHEN 'yandex_market' THEN substring(url from 'market\.yandex\.ru/product(?:--[^/?#]*)?/(\d+)')
            END AS ext_id
     FROM products
-    WHERE marketplace IN ('wildberries', 'ozon', 'aliexpress')
+    WHERE marketplace IN ('wildberries', 'ozon', 'aliexpress', 'yandex_market')
 ),
 groups AS (
     SELECT marketplace, ext_id, count(*) AS n
@@ -47,7 +49,7 @@ ORDER BY marketplace;
 
 SELECT marketplace, count(*) AS unparsed
 FROM products
-WHERE marketplace IN ('wildberries', 'ozon', 'aliexpress')
+WHERE marketplace IN ('wildberries', 'ozon', 'aliexpress', 'yandex_market')
   AND CASE marketplace
           WHEN 'wildberries' THEN substring(url from '/catalog/(\d+)/')
           WHEN 'ozon'        THEN substring(url from 'ozon\.ru/product/(?:[^/?#]*-)?(\d+)')
@@ -66,9 +68,10 @@ WITH keyed AS (
                WHEN 'wildberries' THEN substring(url from '/catalog/(\d+)/')
                WHEN 'ozon'        THEN substring(url from 'ozon\.ru/product/(?:[^/?#]*-)?(\d+)')
                WHEN 'aliexpress'  THEN substring(url from '/item/(\d+)\.html')
+               WHEN 'yandex_market' THEN substring(url from 'market\.yandex\.ru/product(?:--[^/?#]*)?/(\d+)')
            END AS ext_id
     FROM products
-    WHERE marketplace IN ('wildberries', 'ozon', 'aliexpress')
+    WHERE marketplace IN ('wildberries', 'ozon', 'aliexpress', 'yandex_market')
 ),
 dupes AS (
     SELECT k.*,
@@ -102,9 +105,10 @@ WITH keyed AS (
                WHEN 'wildberries' THEN substring(url from '/catalog/(\d+)/')
                WHEN 'ozon'        THEN substring(url from 'ozon\.ru/product/(?:[^/?#]*-)?(\d+)')
                WHEN 'aliexpress'  THEN substring(url from '/item/(\d+)\.html')
+               WHEN 'yandex_market' THEN substring(url from 'market\.yandex\.ru/product(?:--[^/?#]*)?/(\d+)')
            END AS ext_id
     FROM products
-    WHERE marketplace IN ('wildberries', 'ozon', 'aliexpress')
+    WHERE marketplace IN ('wildberries', 'ozon', 'aliexpress', 'yandex_market')
 )
 SELECT k.marketplace, k.ext_id, s.user_id, count(*) AS subs_on_dupes
 FROM keyed k

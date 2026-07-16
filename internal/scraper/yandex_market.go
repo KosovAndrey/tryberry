@@ -424,6 +424,37 @@ func ymStatePrice(html, sku string) float64 {
 	return price
 }
 
+// ymProductPathRe — путь карточки товара: /product--<slug>/<id> или /product/<id>.
+// Гейт нужен, чтобы не принять за карточку витрину продавца
+// (/business--<slug>/<id>) или выдачу — у них в пути тоже есть числа.
+//
+// Форма /card/<slug>-NNNN/<id> СОЗНАТЕЛЬНО не включена, хотя в проде встречается
+// (4 товара, их присылают юзеры — ссылки из рекламной выдачи с cpc=/sponsored=).
+// Причина: у /card/ id другой РАЗМЕРНОСТИ (PS5: 102947526895, 12 знаков против
+// 10 у /product/) — похоже на id ОФФЕРА, а не товара, и /product/<этот id> в
+// пробе цены не дал. Проверить не удалось: YM закрыл пробника SmartCaptcha.
+// Пока не проверено на живых карточках — не трогаем: на кону 4 товара с
+// подписками и историей (у PS5 96 точек). Дубль дешевле сломанной ссылки.
+var ymProductPathRe = regexp.MustCompile(`market\.yandex\.ru/product(?:--[^/?#]*)?/`)
+
+// ExtractYandexMarketID — id товара из URL карточки Я.Маркета (для канона URL,
+// см. CanonicalProductURL).
+//
+// Id берём ИМЕННО ymExtractSKU — той же функцией, которой парсер потом ищет цену
+// в HTML (ymStatePrice). Не «такой же регуляркой», а той же функцией: разъедься
+// они, канон переписал бы URL на id, которого парсер на странице не найдёт, и
+// цена молча уехала бы к первому попавшемуся товару (жадный фолбэк locs[0]).
+func ExtractYandexMarketID(productURL string) (string, error) {
+	if !ymProductPathRe.MatchString(productURL) {
+		return "", fmt.Errorf("%w: not a yandex market product URL", ErrInvalidURL)
+	}
+	sku := ymExtractSKU(productURL)
+	if sku == "" {
+		return "", fmt.Errorf("%w: no product id in URL", ErrInvalidURL)
+	}
+	return sku, nil
+}
+
 // ymExtractSKU — SKU товара из URL карточки: последний числовой сегмент пути
 // (market.yandex.ru/card/<slug>-15584/5193397317 → "5193397317";
 // /product--<slug>/123 → "123"). Пусто, если не нашли.
