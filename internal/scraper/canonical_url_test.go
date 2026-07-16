@@ -36,10 +36,18 @@ func TestCanonicalProductURL(t *testing.T) {
 			want: "https://aliexpress.ru/item/1005006.html",
 		},
 		{
-			name: "Я.Маркет НЕ трогаем: он фетчит URL и берёт из пути sku",
+			// Слаг у YM гуляет (у одного товара нашлось 12 копий) — он декоративный,
+			// товар резолвится по id. Проверено живым скрейпером: cmd/ym-canon-probe.
+			name: "Я.Маркет: слаг и query-хвост сворачиваются",
 			m:    MarketplaceYandexMarket,
-			in:   "https://market.yandex.ru/product--smartfon/123456789?sku=101&do-waremd5=z",
-			want: "https://market.yandex.ru/product--smartfon/123456789?sku=101&do-waremd5=z",
+			in:   "https://market.yandex.ru/product--smartfon-xiaomi/123456789?sku=101&do-waremd5=z",
+			want: "https://market.yandex.ru/product/123456789",
+		},
+		{
+			name: "Я.Маркет: та же карточка уже без слага — тот же канон",
+			m:    MarketplaceYandexMarket,
+			in:   "https://market.yandex.ru/product/123456789",
+			want: "https://market.yandex.ru/product/123456789",
 		},
 		{
 			name: "id не достаётся → отдаём как есть, дубль лучше потери ссылки",
@@ -100,6 +108,25 @@ func TestCanonicalProductURLStaysScrapeable(t *testing.T) {
 		}
 		if id, err := ExtractAliexpressID(u); err != nil || id != "1005006" {
 			t.Fatalf("ExtractAliexpressID(%q) = %q, %v", u, id, err)
+		}
+	})
+
+	// У Я.Маркета ставка выше остальных: он ЕДИНСТВЕННЫЙ реально загружает
+	// сохранённый URL и берёт из его пути sku, которым ищет цену в HTML
+	// (ymStatePrice). Разъедься канон с ymExtractSKU — парсер искал бы в странице
+	// чужой id и молча брал не ту цену. Поэтому проверяем оба соответствия.
+	t.Run("yandex_market", func(t *testing.T) {
+		ym := NewYandexMarketScraper(YandexMarketOptions{})
+		raw := "https://market.yandex.ru/product--kofevarka-kitfort/1339990358?sku=103961394773"
+		u := CanonicalProductURL(MarketplaceYandexMarket, raw)
+		if !ym.Matches(u) {
+			t.Fatalf("Matches отверг собственный канон %q", u)
+		}
+		if id, err := ExtractYandexMarketID(u); err != nil || id != "1339990358" {
+			t.Fatalf("ExtractYandexMarketID(%q) = %q, %v", u, id, err)
+		}
+		if got, want := ymExtractSKU(u), ymExtractSKU(raw); got != want {
+			t.Fatalf("канон увёл sku: было %q, стало %q — парсер искал бы чужой id", want, got)
 		}
 	})
 }

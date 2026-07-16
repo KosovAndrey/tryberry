@@ -424,6 +424,21 @@ func ymStatePrice(html, sku string) float64 {
 	return price
 }
 
+// ymProductRe — id товара в пути карточки: /product--<slug>/<id> либо /product/<id>.
+var ymProductRe = regexp.MustCompile(`market\.yandex\.ru/product(?:--[^/?#]*)?/(\d+)`)
+
+// ExtractYandexMarketID — id товара из URL карточки Я.Маркета. Используется для
+// канона URL (CanonicalProductURL); ОБЯЗАН давать тот же id, что ymExtractSKU
+// достаёт из пути для поиска цены в HTML — иначе канон уведёт скрейп не туда.
+// Это соответствие закреплено тестом.
+func ExtractYandexMarketID(productURL string) (string, error) {
+	m := ymProductRe.FindStringSubmatch(productURL)
+	if len(m) < 2 {
+		return "", fmt.Errorf("%w: not a yandex market product URL", ErrInvalidURL)
+	}
+	return m[1], nil
+}
+
 // ymExtractSKU — SKU товара из URL карточки: последний числовой сегмент пути
 // (market.yandex.ru/card/<slug>-15584/5193397317 → "5193397317";
 // /product--<slug>/123 → "123"). Пусто, если не нашли.
