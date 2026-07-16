@@ -195,6 +195,10 @@ func run(log *slog.Logger) error {
 		// цене (метрика wb_cond_get_total). Без Redis — полный скрейп, как раньше.
 		wbCard.SetCondCache(bc)
 	}
+	// ЖИВАЯ цена карточки через браузер-сайдкар — основной источник цены. Архив
+	// basket-CDN отстаёт на дни и врал в 97% скрейпов при success rate 100%.
+	// Пусто → цена из архива, как раньше (рубильник отката).
+	wbCard.SetCardBrowser(getEnv("WB_CARD_BROWSER_URL", ""))
 	// u-card-fallback (трансграничные товары) через прокси: с прямого RU-IP воркера
 	// u-card отдаёт 403, зарубежный/чистый выход (xray) — принимает.
 	if err := wbCard.SetUCardProxy(getEnv("WB_UCARD_PROXY_URL", "")); err != nil {

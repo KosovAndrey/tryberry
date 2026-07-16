@@ -59,6 +59,10 @@ type WildberriesScraper struct {
 	limiter *rate.Limiter
 	baskets BasketResolver // nilable
 	cond    CondCache      // nilable
+	// cardBrowserURL — база сайдкара wb-search-miner (/card). Пустая строка →
+	// живой карточки нет, цена берётся из архива как раньше (см. SetCardBrowser).
+	cardBrowserURL    string
+	cardBrowserClient *http.Client
 }
 
 func NewWildberriesScraper(rps float64) *WildberriesScraper {
@@ -82,6 +86,89 @@ func (s *WildberriesScraper) SetBasketResolver(r BasketResolver) { s.baskets = r
 // SetCondCache подключает кэш снимков для conditional GET (опционально; сервисы
 // передают redisrepo.BasketCache). Без него каждый скрейп полный, как раньше.
 func (s *WildberriesScraper) SetCondCache(c CondCache) { s.cond = c }
+
+// SetCardBrowser подключает сайдкар wb-search-miner как ОСНОВНОЙ источник цены
+// (GET /card?nm=<id> — перехват u-card XHR живой карточки в прогретом браузере).
+//
+// Зачем: basket-CDN price-history.json отстаёт на ДНИ, и его последняя точка ≠
+// текущая цена. Пустой baseURL → старое поведение (цена из архива), т.е. флаг
+// одновременно и рубильник отката.
+//
+// Таймаут щедрый (45с, как у поиска через тот же сайдкар): дорожка выдерживает
+// человекоподобный интервал и может ждать навигации — это не обычный HTTP.
+func (s *WildberriesScraper) SetCardBrowser(baseURL string) {
+	s.cardBrowserURL = strings.TrimRight(baseURL, "/")
+	if s.cardBrowserURL == "" {
+		return
+	}
+	s.cardBrowserClient = &http.Client{Timeout: 45 * time.Second, Transport: newTunedHTTPTransport()}
+}
+
+// fetchFromBrowserCard — ЖИВАЯ карточка через сайдкар. Форма ответа совпадает с
+// u-card/поисковой выдачей, поэтому парсим тем же wbSearchResponse.
+//
+// Цена 0 при валидной карточке — это НЕ ошибка, а «нет активного оффера»: здесь
+// (в отличие от архивной дорожки, которая знать этого не может) мы видим живой
+// buy-box, поэтому отдаём InStock=false честно.
+func (s *WildberriesScraper) fetchFromBrowserCard(ctx context.Context, articleID string) (*Result, error) {
+	if s.cardBrowserURL == "" || s.cardBrowserClient == nil {
+		return nil, fmt.Errorf("%w: card browser sidecar not configured", ErrMarketplaceBlocked)
+	}
+	id, err := strconv.ParseInt(articleID, 10, 64)
+	if err != nil {
+		return nil, fmt.Errorf("%w: invalid article id", ErrInvalidURL)
+	}
+
+	req, _ := http.NewRequestWithContext(ctx, http.MethodGet,
+		s.cardBrowserURL+"/card?nm="+articleID, nil)
+	resp, err := s.cardBrowserClient.Do(req)
+	if err != nil {
+		metrics.WBCardFetch.WithLabelValues("error").Inc()
+		return nil, err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		// 403 — стена wbaas, 502 — нет живых дорожек. И то и другое лечится сайдкаром
+		// (re-warm/relaunch), а не ретраем отсюда: зовущий уйдёт в архив.
+		metrics.WBCardFetch.WithLabelValues(wbCardOutcome(resp.StatusCode)).Inc()
+		return nil, fmt.Errorf("card sidecar status %d", resp.StatusCode)
+	}
+
+	var parsed wbSearchResponse
+	if err := json.NewDecoder(resp.Body).Decode(&parsed); err != nil {
+		metrics.WBCardFetch.WithLabelValues("error").Inc()
+		return nil, err
+	}
+	if len(parsed.Products) == 0 {
+		// Пустой products — карточки нет либо ответ не тот. НЕ трактуем как OOS:
+		// иначе сбой формы ответа разом «погасил» бы все товары WB.
+		metrics.WBCardFetch.WithLabelValues("empty").Inc()
+		return nil, ErrProductNotFound
+	}
+
+	p := parsed.Products[0]
+	priceKopecks := ucardPriceKopecks(p)
+	metrics.WBCardFetch.WithLabelValues("ok").Inc()
+	return &Result{
+		Name:     firstNonEmpty(p.Name, "Товар WB"),
+		Price:    float64(priceKopecks) / 100,
+		ImageURL: wbImageURL(id),
+		InStock:  priceKopecks > 0,
+	}, nil
+}
+
+// wbCardOutcome — метка исхода для метрики: 403 (стена) и 502 (нет дорожек) —
+// разные болезни с разным лечением, остальное в кучу.
+func wbCardOutcome(status int) string {
+	switch status {
+	case http.StatusForbidden:
+		return "forbidden"
+	case http.StatusBadGateway:
+		return "no_lanes"
+	default:
+		return "error"
+	}
+}
 
 // SetUCardProxy направляет запросы u-card-fallback через прокси. Нужно там, где
 // прямой egress 403-ится антиботом u-card (датацентровый RU-IP воркера): прокси
@@ -123,13 +210,15 @@ func ExtractArticleID(url string) (string, error) {
 
 // Scrape получает данные о товаре Wildberries.
 //
-// Основной источник — basket-CDN price-history.json: быстрый, доступен с прямого
-// egress, без антибота. Цена может отставать на часы — компромисс ради простоты.
+// Основной источник ЦЕНЫ — живая карточка через браузерный сайдкар
+// (SetCardBrowser). basket-CDN price-history.json остаётся источником ИСТОРИИ
+// (бэкфилл), имени и картинки, но НЕ текущей цены: архив отстаёт на дни, и его
+// последняя точка врала в 97% скрейпов при success rate 100% (успех != правда —
+// метриками такое не ловится, только сверкой с живой карточкой).
 //
-// Fallback — u-card.wb.ru/cards/v4/list (real-time): включается, ТОЛЬКО когда
-// товара нет в basket-CDN (удалён / трансграничный «Находки из Китая»). u-card
-// 403-ит датацентровый RU-IP, поэтому fallback ходит через прокси (SetUCardProxy,
-// напр. xray) — но лишь для редких трансграничных, нагрузка на прокси минимальна.
+// Браузер не настроен или не смог (стена/нет дорожек) → архив как раньше: цена
+// может отставать, но это лучше, чем ничего. Долю такого режима видно по
+// wb_price_source{source="basket"}.
 func (s *WildberriesScraper) Scrape(ctx context.Context, url string) (*Result, error) {
 	articleID, err := ExtractArticleID(url)
 	if err != nil {
@@ -140,20 +229,69 @@ func (s *WildberriesScraper) Scrape(ctx context.Context, url string) (*Result, e
 		return nil, err
 	}
 
+	if s.cardBrowserURL == "" {
+		r, source, err := s.scrapeArchive(ctx, articleID)
+		if err == nil {
+			metrics.WBPriceSource.WithLabelValues(source).Inc()
+		}
+		return r, err
+	}
+
+	// Живая карточка и архив идут ПАРАЛЛЕЛЬНО: браузерная навигация (~1-2с) заведомо
+	// дольше basket-CDN (~100мс), так что история достаётся практически бесплатно.
+	var (
+		live, arch       *Result
+		liveErr, archErr error
+		source           string
+		wg               sync.WaitGroup
+	)
+	wg.Add(2)
+	go func() { defer wg.Done(); live, liveErr = s.fetchFromBrowserCard(ctx, articleID) }()
+	go func() { defer wg.Done(); arch, source, archErr = s.scrapeArchive(ctx, articleID) }()
+	wg.Wait()
+
+	if liveErr != nil {
+		if archErr != nil {
+			return nil, archErr
+		}
+		metrics.WBPriceSource.WithLabelValues(source).Inc()
+		return arch, nil
+	}
+
+	metrics.WBPriceSource.WithLabelValues("browser").Inc()
+	if archErr != nil {
+		// Нет в basket (трансгран/удалён/шард за окном) — живой карточки достаточно,
+		// просто без бэкфилла истории.
+		return live, nil
+	}
+	// Живые цена и наличие поверх архивных имени/картинки и Истории.
+	arch.Price = live.Price
+	arch.InStock = live.InStock
+	if arch.Name == "" {
+		arch.Name = live.Name
+	}
+	if arch.ImageURL == "" {
+		arch.ImageURL = live.ImageURL
+	}
+	return arch, nil
+}
+
+// scrapeArchive — прежний путь: basket-CDN, а для отсутствующих в нём
+// (трансгран/удалён) real-time u-card. Возвращает ещё и метку источника, чтобы
+// метрику инкрементировал вызывающий: только он знает, победил ли браузер.
+func (s *WildberriesScraper) scrapeArchive(ctx context.Context, articleID string) (*Result, string, error) {
 	// Уже знаем, что товара нет в basket (трансгран/удалён) → сразу u-card, минуя
 	// дорогой 25-шардовый перебор (~10с все 404, блокирует консьюмер).
 	if id, perr := strconv.ParseInt(articleID, 10, 64); perr == nil && s.baskets != nil && s.baskets.NoBasket(ctx, id) {
 		if ur, uerr := s.fetchFromUCard(ctx, articleID); uerr == nil {
-			metrics.WBPriceSource.WithLabelValues("ucard").Inc()
-			return ur, nil
+			return ur, "ucard", nil
 		}
-		return nil, ErrProductNotFound
+		return nil, "", ErrProductNotFound
 	}
 
 	r, err := s.fetchFromBasket(ctx, articleID)
 	if err == nil {
-		metrics.WBPriceSource.WithLabelValues("basket").Inc()
-		return r, nil
+		return r, "basket", nil
 	}
 	// Нет в basket-CDN (трансгран/удалён) → запоминаем (чтобы впредь не перебирать
 	// шарды) и пробуем real-time u-card.
@@ -162,11 +300,10 @@ func (s *WildberriesScraper) Scrape(ctx context.Context, url string) (*Result, e
 			s.baskets.MarkNoBasket(ctx, id)
 		}
 		if ur, uerr := s.fetchFromUCard(ctx, articleID); uerr == nil {
-			metrics.WBPriceSource.WithLabelValues("ucard").Inc()
-			return ur, nil
+			return ur, "ucard", nil
 		}
 	}
-	return r, err
+	return r, "", err
 }
 
 // fetchFromUCard берёт карточку с u-card.wb.ru/cards/v4/list — real-time эндпоинт.

@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-server.py — wb-search-miner: БРАУЗЕР-КАК-ТРАНСПОРТ для WB-поиска.
+server.py — wb-search-miner: БРАУЗЕР-КАК-ТРАНСПОРТ для WB (поиск + карточка).
 
 Долгоживущий HTTP-сервис с пулом прогретых дорожек (lane). Дорожка = headful
 Chromium (patchright, тот же движок, что проходит wbaas в token-miner) в Xvfb.
@@ -19,6 +19,13 @@ Go-скрейпер (WildberriesSearchScraper, фолбэк на 403) зовёт
 GET /search?query=<q>&sort=<s>&page=<n> → дорожка делает in-page fetch к u-search
 и отдаёт СЫРОЙ JSON той же формы, что и direct (wbSearchResponse), зеркаля
 upstream-статус (403 при стойкой стене).
+
+GET /card?nm=<id> — то же для КАРТОЧКИ (перехват u-card XHR со страницы товара).
+Отдельный повод: цену WB брали последней точкой архива basket-CDN, который
+отстаёт на ДНИ (97% цен, при success rate 100% — успех != правда). Живую цену
+знает только карточка, а u-card 403-ит датацентр-IP по тем же причинам, что и
+u-search: дело в транспорте. Архив остаётся ТОЛЬКО бэкфиллом истории — его
+настоящая роль (только WB отдаёт выгружаемую серию).
 
 Живучесть: джиттер интервала, backoff на стойкой стене (не долбить — жжёт IP),
 периодический re-warm, пересоздание браузера после смерти драйвера И после N
@@ -69,6 +76,17 @@ WARM_RELOADS = int(os.getenv("WB_WARM_RELOADS", "2"))
 # Маркер u-search в URL ответов (ловим 200 на XHR самой страницы = стена пройдена,
 # cookie x_wbaas_token выставлен). Совпадает с путём USEARCH_PATH.
 USEARCH_MARKER = os.getenv("WB_USEARCH_MARKER", "/u-search/")
+
+# ── Карточка (/card) ─────────────────────────────────────────────────────────
+# Страница товара для навигации: фронт сам дёргает u-card XHR, который мы и ловим.
+CARD_PAGE_URL = os.getenv(
+    "WB_CARD_PAGE_URL",
+    "https://www.wildberries.ru/catalog/{nm}/detail.aspx",
+)
+# Маркер u-card в URL ответов. Должен совпадать с wbUCardBase в Go
+# (u-card.wb.ru/cards/v4/list) — форма ответа та же, Go парсит её как
+# wbSearchResponse.
+UCARD_MARKER = os.getenv("WB_UCARD_MARKER", "/cards/v4/list")
 
 # Человекоподобный интервал между запросами одной дорожки + джиттер.
 LANE_MIN_INTERVAL_S = float(os.getenv("WB_LANE_MIN_INTERVAL_MS", "800")) / 1000.0
@@ -333,7 +351,23 @@ class Lane:
         """Навигируем прогретый браузер на страницу запроса и ПЕРЕХВАТЫВАЕМ ответ
         u-search, который фронт делает сам (нативно, со всеми нужными заголовками —
         ручной fetch wbaas отвергает 403). Возвращает (status, body_bytes)."""
-        nav_url = _search_page_url(query, sort, page)
+        return await self._fetch_intercept(
+            _search_page_url(query, sort, page), USEARCH_MARKER,
+            "search %r p%d" % (query[:40], page))
+
+    async def fetch_card(self, nm: str):
+        """То же, что fetch_search, но навигация на страницу ТОВАРА и перехват
+        u-card XHR: это ЖИВАЯ цена карточки (basket-CDN price-history.json отстаёт
+        на дни — см. фикс 2026-07-16). Форма ответа = поисковой выдаче, Go парсит
+        её тем же wbSearchResponse. Возвращает (status, body_bytes)."""
+        return await self._fetch_intercept(
+            CARD_PAGE_URL.format(nm=quote(nm)), UCARD_MARKER, "card %s" % nm)
+
+    async def _fetch_intercept(self, nav_url: str, marker: str, what: str):
+        """Общий транспорт /search и /card: выдержать человекоподобный интервал,
+        навигировать прогретую дорожку и вернуть (status, body) первого ответа, чей
+        URL содержит marker. Ручной fetch тут не годится — wbaas отвергает всё, что
+        не сделал сам фронт, поэтому именно перехват нативного XHR."""
         async with self.lock:
             t0 = time.monotonic()
             spacing = max(0.1, LANE_MIN_INTERVAL_S * (1.0 + LANE_JITTER * (2 * random.random() - 1)))
@@ -347,7 +381,7 @@ class Lane:
 
             def on_resp(resp):
                 try:
-                    if USEARCH_MARKER in resp.url and not fut.done():
+                    if marker in resp.url and not fut.done():
                         fut.set_result(resp)
                 except Exception:  # noqa: BLE001
                     pass
@@ -369,22 +403,22 @@ class Lane:
                     resp = await asyncio.wait_for(fut, timeout=FETCH_TIMEOUT_S)
                 except asyncio.TimeoutError:
                     self.healthy = False
-                    log.warning("дорожка %d: u-search не прилетел на %r p%d — нездорова",
-                                self.idx, query[:40], page)
+                    log.warning("дорожка %d: %s не прилетел на %s — нездорова",
+                                self.idx, marker, what)
                     return 403, b""
                 status = resp.status
                 try:
                     body = await resp.body()
                 except Exception as e:  # noqa: BLE001
-                    log.warning("дорожка %d: чтение тела u-search упало: %s", self.idx, _first_line(e))
+                    log.warning("дорожка %d: чтение тела %s упало: %s",
+                                self.idx, marker, _first_line(e))
                     return 502, b""
                 if status == 200:
-                    log.info("дорожка %d: search %r p%d ок (%d байт)",
-                             self.idx, query[:40], page, len(body))
+                    log.info("дорожка %d: %s ок (%d байт)", self.idx, what, len(body))
                     return 200, body
                 self.healthy = False
-                log.warning("дорожка %d: u-search status=%s на %r p%d — нездорова",
-                            self.idx, status, query[:40], page)
+                log.warning("дорожка %d: %s status=%s на %s — нездорова",
+                            self.idx, marker, status, what)
                 return status, body
             finally:
                 try:
@@ -460,6 +494,23 @@ async def handle_search(request: web.Request) -> web.Response:
                         headers={"X-WB-Lane": str(lane.idx)})
 
 
+async def handle_card(request: web.Request) -> web.Response:
+    """GET /card?nm=<id> → сырой JSON u-card (та же форма, что /search).
+    Живая цена карточки для Go-скрейпера."""
+    pool: Pool = request.app["pool"]
+    nm = (request.query.get("nm") or "").strip()
+    if not nm.isdigit():
+        return web.json_response({"error": "numeric nm required"}, status=400)
+    lane = pool.pick()
+    if lane is None:
+        return web.Response(status=502, text="no healthy lanes")
+    status, body = await lane.fetch_card(nm)
+    if status == 0:
+        return web.Response(status=502, text="lane fetch failed")
+    return web.Response(status=status, body=body, content_type="application/json",
+                        headers={"X-WB-Lane": str(lane.idx)})
+
+
 async def handle_health(request: web.Request) -> web.Response:
     pool: Pool = request.app["pool"]
     healthy = pool.healthy_count()
@@ -515,6 +566,7 @@ async def main():
         app = web.Application()
         app["pool"] = pool
         app.router.add_get("/search", handle_search)
+        app.router.add_get("/card", handle_card)
         app.router.add_get("/healthz", handle_health)
         app.router.add_get("/metrics", handle_metrics)
 

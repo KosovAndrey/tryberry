@@ -331,16 +331,33 @@ var (
 		[]string{"outcome"},
 	)
 
-	// WBPriceSource — каким источником взята цена WB-карточки. ucard — основной
-	// (u-card.wb.ru, real-time, без перебора баскетов, видит трансграничные);
-	// basket — fallback на basket-CDN price-history (u-card не ответил).
+	// WBPriceSource — каким источником взята цена WB-карточки:
+	//   browser — ЖИВАЯ цена с карточки через сайдкар wb-search-miner (основной);
+	//   basket  — архив basket-CDN price-history, отстаёт на ДНИ (браузер не смог
+	//             или не настроен) — рост доли = деградация ПРАВДИВОСТИ цен,
+	//             при этом success rate остаётся 100%, так что следить надо здесь;
+	//   ucard   — real-time u-card напрямую (товара нет в basket: трансгран/удалён).
 	WBPriceSource = promauto.NewCounterVec(
 		prometheus.CounterOpts{
 			Namespace: namespace,
 			Name:      "wb_price_source_total",
-			Help:      "Which source served the WB product price",
+			Help:      "Which source served the WB product price (browser|basket|ucard)",
 		},
 		[]string{"source"},
+	)
+
+	// WBCardFetch — исход запроса живой карточки к сайдкару wb-search-miner.
+	// forbidden — стена wbaas (дорожка нездорова, сайдкар перепрогреется);
+	// no_lanes — 502, ни одной прогретой дорожки; empty — ответ без products
+	// (форма ответа поехала); error — сеть/парсинг. Любой не-ok = скрейп ушёл
+	// в архив, т.е. цена отстаёт.
+	WBCardFetch = promauto.NewCounterVec(
+		prometheus.CounterOpts{
+			Namespace: namespace,
+			Name:      "wb_card_fetch_total",
+			Help:      "Outcome of live WB card fetch via browser sidecar (ok|forbidden|no_lanes|empty|error)",
+		},
+		[]string{"outcome"},
 	)
 
 	// AliPriceSource — каким путём взята цена AliExpress. direct — основной (запрос
