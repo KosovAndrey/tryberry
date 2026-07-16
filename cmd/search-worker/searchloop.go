@@ -26,8 +26,6 @@ import (
 	"gitlab.com/KosovAndrey/tryberrybot/internal/searchsub"
 )
 
-const wbMarketplace = "wildberries"
-
 // evalSlack — допуск к интервалу оценки подписки: если шаг скрейпа примерно
 // совпадает с интервалом тарифа, мелкий джиттер не должен «съедать» оценку.
 const evalSlack = 5 * time.Second
@@ -141,10 +139,16 @@ func (w *searchWorker) scrapeQuery(ctx context.Context, q *domain.SearchQuery) e
 	// results) вместо N запросов на каждый item: на 500-item выдачах это резко режет
 	// латентность и нагрузку на БД (особенно reseller 1-мин). results.UpsertBatch
 	// ещё и подавляет no-op перезаписи (heartbeat для last_seen_at).
+	// Маркетплейс берём у САМОГО запроса: он же и определил, какой скрейпер выдачи
+	// отработал. Раньше здесь стояла константа "wildberries" — и товары из ЛЮБОЙ
+	// выдачи (Я.Маркет, Ozon, Ali) ложились с ярлыком WB. Скрейп это переживал
+	// (registry.Scrape выбирает по URL, не по колонке), а вот юзеру карточка с
+	// Я.Маркета показывалась как вайлдберрисовская. На проде так помечено 3108
+	// товаров — чинит миграция 030.
 	prodUpserts := make([]postgres.ProductUpsert, 0, len(set.Items))
 	for _, it := range set.Items {
 		prodUpserts = append(prodUpserts, postgres.ProductUpsert{
-			URL: it.URL, Name: it.Name, ImageURL: it.ImageURL, Marketplace: wbMarketplace,
+			URL: it.URL, Name: it.Name, ImageURL: it.ImageURL, Marketplace: q.Marketplace,
 		})
 	}
 	idByURL, err := w.products.UpsertBatch(ctx, prodUpserts)
