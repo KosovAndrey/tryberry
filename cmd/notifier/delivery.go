@@ -251,13 +251,18 @@ func (d *deliverer) SendPriceAlert(ctx context.Context, a telegram.PriceAlert) e
 }
 
 func (d *deliverer) SendSearchAlert(ctx context.Context, a telegram.SearchAlert) error {
+	// Hero-фото топ-снижения — и для VK (поле картинки). MAX рендерит превью ссылки.
+	hero := ""
+	if len(a.Items) > 0 {
+		hero = a.Items[0].ImageURL
+	}
 	return d.deliver(ctx, a.UserID, a.ChatID,
 		func(ctx context.Context, chat int64) error {
 			a := a
 			a.ChatID = chat
 			return d.tg.SendSearchAlert(ctx, a)
 		},
-		vkSearchText(a), "")
+		vkSearchText(a), hero)
 }
 
 // SendBundledAlert — пачка товарных алертов одного юзера одним сообщением (без

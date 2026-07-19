@@ -22,6 +22,7 @@ type SearchHitItem struct {
 	ProductID             int64  `json:"product_id"`
 	Name                  string `json:"name"`
 	URL                   string `json:"url"`
+	ImageURL              string `json:"image_url"` // для hero-фото в уведомлении (фото топ-снижения)
 	PriceKopecks          int64  `json:"price_kopecks"`
 	PrevPriceKopecks      int64  `json:"prev_price_kopecks"`
 	FeedbackPointsKopecks int64  `json:"feedback_points_kopecks"`

@@ -193,6 +193,7 @@ func (n *Notifier) SendBundledAlert(ctx context.Context, a BundledAlert) error {
 type SearchAlertItem struct {
 	Name         string
 	URL          string
+	ImageURL     string  // фото товара; у Items[0] (топ-снижение) идёт hero-картинкой
 	EffectiveRub float64 // цена с учётом баллов (что пользователь платит по факту)
 	PrevRub      float64 // опорная цена (baseline/last-notified); «было» в сообщении
 	PointsRub    float64 // баллы за отзыв в рублях, 0 если нет
@@ -209,11 +210,50 @@ type SearchAlert struct {
 
 // SendSearchAlert — одно сообщение на подписку: топ подешевевших товаров.
 // Если подходящих больше, чем в Items, добавляется приписка «нашлось больше».
+// searchCaptionBudget — приблизительный бюджет ВИДИМЫХ символов подписи к
+// hero-фото. Лимит подписи Telegram — 1024 (URL внутри <a href> в него не входят),
+// держим запас. Позиции сверх бюджета сворачиваются в «…и ещё N».
+const searchCaptionBudget = 950
+
 func (n *Notifier) SendSearchAlert(ctx context.Context, a SearchAlert) error {
 	if len(a.Items) == 0 {
 		return nil
 	}
+	keyboard := searchAlertKeyboard(a)
 
+	// Hero-фото: картинка топ-снижения (Items отсортированы по величине падения в
+	// cmd/notifier). Есть фото у топа → sendPhoto с подписью в пределах лимита,
+	// хвост в «…и ещё N». Битую картинку Telegram отвергает (ErrTelegramPermanent,
+	// частый кейс для трансграничных товаров) → фолбэк на полный текст. Нет фото у
+	// топа → сразу текст (полный список до 4096). Один механизм на free-дайджест
+	// (много позиций) и платную одиночку (богатая карточка).
+	if hero := a.Items[0].ImageURL; hero != "" {
+		caption := renderSearchAlert(a, searchCaptionBudget)
+		err := n.sendPhoto(ctx, a.ChatID, hero, caption, keyboard)
+		if errors.Is(err, ErrTelegramPermanent) {
+			return n.sendMessage(ctx, a.ChatID, renderSearchAlert(a, 0), keyboard)
+		}
+		return err
+	}
+	return n.sendMessage(ctx, a.ChatID, renderSearchAlert(a, 0), keyboard)
+}
+
+func searchAlertKeyboard(a SearchAlert) any {
+	if a.SearchURL == "" {
+		return nil
+	}
+	return map[string]any{
+		"inline_keyboard": [][]map[string]any{
+			{{"text": "🔎 Открыть выдачу", "url": a.SearchURL}},
+		},
+	}
+}
+
+// renderSearchAlert собирает текст уведомления. budget>0 — лимит ВИДИМЫХ символов
+// (подпись к фото): рендерим позиции, пока влезают, остальные — «…и ещё N».
+// budget<=0 — без лимита (обычное сообщение до 4096). Топ-позиция показывается
+// всегда, даже если одна её длина превышает бюджет.
+func renderSearchAlert(a SearchAlert, budget int) string {
 	var sb strings.Builder
 	q := html.EscapeString(a.QueryText)
 	if a.TotalHits > len(a.Items) {
@@ -224,10 +264,19 @@ func (n *Notifier) SendSearchAlert(ctx context.Context, a SearchAlert) error {
 	} else {
 		fmt.Fprintf(&sb, "🔎 По запросу «%s» подешевело <b>%d</b> товаров:\n\n", q, a.TotalHits)
 	}
+	visible := len([]rune(a.QueryText)) + 60 // грубая оценка заголовка
 
+	shown := 0
 	for _, it := range a.Items {
-		name := html.EscapeString(it.Name)
-		fmt.Fprintf(&sb, "📉 <a href=\"%s\">%s</a>\n", it.URL, name)
+		name := it.Name
+		if budget > 0 && len([]rune(name)) > 64 {
+			name = string([]rune(name)[:63]) + "…"
+		}
+		blockVisible := len([]rune(name)) + 40 // имя + строка цены, без URL-энтити
+		if budget > 0 && shown > 0 && visible+blockVisible > budget {
+			break
+		}
+		fmt.Fprintf(&sb, "📉 <a href=\"%s\">%s</a>\n", it.URL, html.EscapeString(name))
 		if it.PrevRub > it.EffectiveRub && it.PrevRub > 0 {
 			fmt.Fprintf(&sb, "    <b>%.0f ₽</b>  (было %.0f ₽)", it.EffectiveRub, it.PrevRub)
 		} else {
@@ -237,17 +286,13 @@ func (n *Notifier) SendSearchAlert(ctx context.Context, a SearchAlert) error {
 			fmt.Fprintf(&sb, "  +%.0f баллов", it.PointsRub)
 		}
 		sb.WriteString("\n\n")
+		visible += blockVisible
+		shown++
 	}
-
-	var keyboard any
-	if a.SearchURL != "" {
-		keyboard = map[string]any{
-			"inline_keyboard": [][]map[string]any{
-				{{"text": "🔎 Открыть выдачу", "url": a.SearchURL}},
-			},
-		}
+	if shown < len(a.Items) {
+		fmt.Fprintf(&sb, "…и ещё %d", len(a.Items)-shown)
 	}
-	return n.sendMessage(ctx, a.ChatID, sb.String(), keyboard)
+	return sb.String()
 }
 
 // SendPlanPausedNotice — разовое уведомление: план истёк, поиск-подписки на

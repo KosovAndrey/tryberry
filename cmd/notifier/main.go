@@ -791,6 +791,7 @@ func makeSearchHandler(
 			alert.Items = append(alert.Items, telegram.SearchAlertItem{
 				Name:         it.Name,
 				URL:          domain.CleanProductURL(it.URL),
+				ImageURL:     it.ImageURL,
 				EffectiveRub: searchsub.Rubles(it.EffectiveKopecks),
 				PrevRub:      searchsub.Rubles(it.PrevPriceKopecks),
 				PointsRub:    searchsub.Rubles(it.FeedbackPointsKopecks),
