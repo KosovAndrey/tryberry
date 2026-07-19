@@ -104,7 +104,7 @@ func run(log *slog.Logger) error {
 	if publicBaseURL == "" {
 		publicBaseURL = "https://tryberry.ru"
 	}
-	tgNotifier := telegram.NewNotifier(botToken, publicBaseURL)
+	tgNotifier := telegram.NewNotifier(botToken, publicBaseURL, log)
 
 	// Маршрутизация по каналам: без VK_GROUP_TOKEN ведёт себя ровно как раньше
 	// (всё в Telegram). С токеном — смотрит на users.notify_channel.

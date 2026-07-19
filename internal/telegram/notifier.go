@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"html"
+	"log/slog"
 	"math"
 	"net/http"
 	"strings"
@@ -21,14 +22,19 @@ var ErrTelegramPermanent = errors.New("telegram permanent error")
 type Notifier struct {
 	token        string
 	client       *http.Client
-	chartBaseURL string // PUBLIC_BASE_URL для кнопки «📈 График цены» ("" → не показываем)
+	chartBaseURL string       // PUBLIC_BASE_URL для кнопки «📈 График цены» ("" → не показываем)
+	log          *slog.Logger // наблюдаемость тихих фолбэков (фото→текст)
 }
 
-func NewNotifier(token, chartBaseURL string) *Notifier {
+func NewNotifier(token, chartBaseURL string, log *slog.Logger) *Notifier {
+	if log == nil {
+		log = slog.Default()
+	}
 	return &Notifier{
 		token:        token,
 		client:       &http.Client{Timeout: 10 * time.Second},
 		chartBaseURL: chartBaseURL,
+		log:          log,
 	}
 }
 
@@ -109,8 +115,10 @@ func (n *Notifier) SendPriceAlert(ctx context.Context, a PriceAlert) error {
 		err := n.sendPhoto(ctx, a.ChatID, a.ImageURL, caption, keyboard)
 		// Картинку Telegram не принял (битый/недоступный URL — частый кейс для
 		// трансграничных товаров без basket-картинки, «wrong type of the web page
-		// content») → шлём текстом, чтобы алерт всё равно дошёл.
+		// content») → шлём текстом, чтобы алерт всё равно дошёл. Логируем: иначе
+		// потеря фото невидима («было фото или нет?» не ответить по логам).
 		if errors.Is(err, ErrTelegramPermanent) {
+			n.log.Warn("price alert photo rejected, falling back to text", "image_url", a.ImageURL, "err", err)
 			return n.sendMessage(ctx, a.ChatID, caption, keyboard)
 		}
 		return err
@@ -231,10 +239,14 @@ func (n *Notifier) SendSearchAlert(ctx context.Context, a SearchAlert) error {
 		caption := renderSearchAlert(a, searchCaptionBudget)
 		err := n.sendPhoto(ctx, a.ChatID, hero, caption, keyboard)
 		if errors.Is(err, ErrTelegramPermanent) {
+			n.log.Warn("search alert hero photo rejected, falling back to text", "image_url", hero, "err", err)
 			return n.sendMessage(ctx, a.ChatID, renderSearchAlert(a, 0), keyboard)
 		}
 		return err
 	}
+	// Без фото у топа — обычный текст; лог, чтобы отличать «hero не было» от
+	// «hero отвергнут» при разборах.
+	n.log.Info("search alert without hero (no image on top item)", "sub_id", a.UserID)
 	return n.sendMessage(ctx, a.ChatID, renderSearchAlert(a, 0), keyboard)
 }
 

@@ -51,7 +51,7 @@ func TestTrackKeyboardIncludesChart(t *testing.T) {
 
 func TestPriceAlertKeyboard_Chart(t *testing.T) {
 	// С настроенным сайтом и public_id — первой строкой кнопка графика.
-	n := NewNotifier("token", "https://tryberry.ru")
+	n := NewNotifier("token", "https://tryberry.ru", nil)
 	rows := alertRows(n.priceAlertKeyboard(PriceAlert{SubscriptionID: 5, PublicID: "abc123def456"}))
 	if len(rows) != 2 {
 		t.Fatalf("ожидали 2 строки (график + keep/untrack), получили %d", len(rows))
@@ -61,7 +61,7 @@ func TestPriceAlertKeyboard_Chart(t *testing.T) {
 	}
 
 	// Без сайта — только keep/untrack, никакой битой кнопки.
-	n2 := NewNotifier("token", "")
+	n2 := NewNotifier("token", "", nil)
 	rows2 := alertRows(n2.priceAlertKeyboard(PriceAlert{SubscriptionID: 5, PublicID: "abc123def456"}))
 	if len(rows2) != 1 {
 		t.Errorf("без сайта ожидали 1 строку, получили %d", len(rows2))
