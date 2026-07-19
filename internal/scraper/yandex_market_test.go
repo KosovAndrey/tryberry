@@ -209,6 +209,12 @@ func TestYandexMatches(t *testing.T) {
 	if s.Matches("https://www.ozon.ru/product/123") {
 		t.Error("should not match ozon url")
 	}
+	// Неразвёрнутый шорт /cc/: резолв упал (SmartCaptcha), URL остался сырым.
+	// Не матчим — иначе Scrape уйдёт с пустым sku и возьмёт чужую цену (ozon-oos
+	// класс). Пусть FindByURL отвергнет, юзеру — «пришли полную ссылку».
+	if s.Matches("https://market.yandex.ru/cc/9w7AHT") {
+		t.Error("should NOT match unresolved /cc/ short link")
+	}
 }
 
 // Новый OOS-шаблон («Нет в продаже» без JSON-LD Product): ретраим полной

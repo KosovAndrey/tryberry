@@ -386,6 +386,22 @@ var (
 		[]string{"source"},
 	)
 
+	// YandexEmptySKUPrice — счётчик скрейпов Я.Маркета, где sku из URL пустой,
+	// а цену всё равно достали из стейта ЖАДНЫМ фолбэком (ymStatePrice берёт
+	// первое вхождение locs[0]). Это тот самый класс бага, что у ozon-oos: при
+	// пустом sku «первая цена на странице» может принадлежать чужому товару из
+	// рекомендаций. Пустой sku = URL без числового сегмента, типично неразвёрнутый
+	// шорт /cc/<код> (SmartCaptcha не дал резолву). Метрика ставится ПЕРЕД сменой
+	// поведения: сперва измеряем объём (сколько таких скрейпов реально идёт),
+	// потом решаем, отдавать ли 0 вместо чужой цены. Рост = пора чинить фолбэк.
+	YandexEmptySKUPrice = promauto.NewCounter(
+		prometheus.CounterOpts{
+			Namespace: namespace,
+			Name:      "yandex_empty_sku_price_total",
+			Help:      "YM scrapes where sku was empty but a price was still taken via greedy state fallback (possible foreign price, ozon-oos class)",
+		},
+	)
+
 	// MaxActiveSubsPerUser — максимум активных товарных подписок у одного юзера.
 	// Сигнал «пора делать бандлинг алертов»: пока мало (единицы) — пачек уведомлений
 	// за цикл почти нет; когда вырастет (~15+) или появятся reseller-юзеры — за цикл

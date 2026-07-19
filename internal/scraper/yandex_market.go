@@ -112,6 +112,15 @@ func newYandexTLSClients(proxyURL string) (direct, proxy tls_client.HttpClient, 
 func (s *YandexMarketScraper) Marketplace() Marketplace { return MarketplaceYandexMarket }
 
 func (s *YandexMarketScraper) Matches(url string) bool {
+	// Неразвёрнутый шорт market.yandex.ru/cc/<код>: резолвер вернул его как есть
+	// (SmartCaptcha не дал развернуть — см. resolver.expandYandex «пусть его честно
+	// отвергнет FindByURL»). Если принять его здесь, Scrape уйдёт с пустым sku
+	// (в /cc/ нет числового сегмента) и жадный фолбэк ymStatePrice возьмёт ПЕРВУЮ
+	// цену на странице — возможно чужого товара из рекомендаций (класс ozon-oos).
+	// Лучше отказ («не распознал ссылку, пришли полную»), чем товар с чужой ценой.
+	if strings.Contains(url, "market.yandex.ru/cc/") {
+		return false
+	}
 	return strings.Contains(url, "market.yandex.ru/")
 }
 
@@ -416,6 +425,11 @@ func ymStatePrice(html, sku string) float64 {
 				}
 			}
 		}
+	} else {
+		// Пустой sku → цену привязать не к чему, берём первое вхождение (возможно
+		// чужой товар из рекомендаций — класс ozon-oos). Считаем объём таких
+		// скрейпов ПЕРЕД сменой поведения: см. metrics.YandexEmptySKUPrice.
+		metrics.YandexEmptySKUPrice.Inc()
 	}
 	price, err := parsePriceString(html[pick[2]:pick[3]])
 	if err != nil {

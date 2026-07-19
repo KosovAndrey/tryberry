@@ -30,15 +30,54 @@ import (
 // совпадает с интервалом тарифа, мелкий джиттер не должен «съедать» оценку.
 const evalSlack = 5 * time.Second
 
+// Порты, от которых зависит цикл скрейпа. Конкретные *postgres.*-репозитории,
+// *scraper.Registry и *kafka.Producer им удовлетворяют «как есть» (wiring в
+// main.go не меняется) — шов существует только затем, чтобы scrapeQuery можно
+// было прогнать с фейками, без живой БД/Kafka. Именно из-за отсутствия такого
+// шва в scrapeQuery дважды незаметно уехал источник маркетплейса (см. коммент
+// у mp := ss.Marketplace()).
+type searchRegistry interface {
+	FindSearchByURL(url string) (scraper.SearchScraper, error)
+}
+
+type queryStore interface {
+	UpdateLastScraped(ctx context.Context, id int64) error
+	UpdateMinPrice(ctx context.Context, id int64, minPrice float64) error
+}
+
+type productStore interface {
+	UpsertBatch(ctx context.Context, items []postgres.ProductUpsert) (map[string]int64, error)
+}
+
+type resultStore interface {
+	UpsertBatch(ctx context.Context, queryID int64, rows []postgres.ResultUpsert) error
+}
+
+type subStore interface {
+	GetActiveByQueryID(ctx context.Context, queryID int64) ([]*domain.SearchSubscription, error)
+	GetBaseline(ctx context.Context, subID, productID int64) (float64, bool, error)
+	UpsertBaseline(ctx context.Context, subID, productID int64, firstSeenPrice float64) error
+	MarkEvaluated(ctx context.Context, id int64) error
+}
+
+type notifStore interface {
+	GetLastNotifiedPrice(ctx context.Context, subID, productID int64) (float64, bool, error)
+	GetLastNotifiedAt(ctx context.Context, subID int64) (time.Time, bool, error)
+}
+
+type eventSink interface {
+	Send(ctx context.Context, key string, value any) error
+}
+
 type searchWorker struct {
 	log      *slog.Logger
-	registry *scraper.Registry
-	queries  *postgres.SearchQueryRepo
-	subs     *postgres.SearchSubscriptionRepo
-	results  *postgres.SearchResultRepo
-	notifs   *postgres.SearchNotificationRepo
-	products *postgres.ProductRepo
-	events   *kafka.Producer // топик search-events
+	registry searchRegistry
+	queries  queryStore
+	subs     subStore
+	results  resultStore
+	notifs   notifStore
+	products productStore
+	events   eventSink // топик search-events
 
 	// defaultInterval — интервал оценки для тарифов без своего Interval (фолбэк).
 	defaultInterval time.Duration
