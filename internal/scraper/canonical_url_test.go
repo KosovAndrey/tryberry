@@ -50,6 +50,15 @@ func TestCanonicalProductURL(t *testing.T) {
 			want: "https://market.yandex.ru/product/123456789",
 		},
 		{
+			// /card/ id НЕ сводится к /product/<id> (проверено 2026-07-19: не резолвится),
+			// но query-хвост (cpc/OOS) протухает и рушит повторный скрейп — срезаем его,
+			// путь со слагом оставляем.
+			name: "Я.Маркет /card/: query-хвост срезается, путь остаётся",
+			m:    MarketplaceYandexMarket,
+			in:   "https://market.yandex.ru/card/kofemashina-jura-e8-15584/5193397317?showOriginalKmEmptyOffer=1&ogV=-12",
+			want: "https://market.yandex.ru/card/kofemashina-jura-e8-15584/5193397317",
+		},
+		{
 			name: "id не достаётся → отдаём как есть, дубль лучше потери ссылки",
 			m:    MarketplaceOzon,
 			in:   "https://www.ozon.ru/product/",
@@ -70,15 +79,17 @@ func TestCanonicalProductURL(t *testing.T) {
 	}
 }
 
-// Формы URL Я.Маркета, для которых канон НЕ проверен живым скрейпером, обязаны
-// оставаться нетронутыми. Это не придирка: канон переписывает URL, а YM по нему
-// РЕАЛЬНО ходит — свернём не туда, и товар молча перестанет скрейпиться либо
-// начнёт отдавать чужую цену. Все три формы живут в проде (2026-07-16).
+// Формы URL Я.Маркета, для которых канон НЕ переписывает URL, обязаны оставаться
+// нетронутыми. Это не придирка: канон переписывает URL, а YM по нему РЕАЛЬНО ходит
+// — свернём не туда, и товар молча перестанет скрейпиться либо начнёт отдавать
+// чужую цену.
+//
+// /card/ сюда БОЛЬШЕ НЕ входит: с 2026-07-19 канон срезает у него query-хвост
+// (см. TestCanonicalProductURL). Его id по-прежнему НЕ сводится к /product/<id>
+// (проверено тёплым ботом — не резолвится), но сам путь /card/<slug>/<id>
+// сохраняется, поэтому «нетронутость пути» проверяется там же.
 func TestCanonicalYMLeavesUnverifiedForms(t *testing.T) {
 	cases := map[string]string{
-		// id другой размерности (12 знаков против 10) — похоже на оффер, а не товар;
-		// /product/<этот id> в пробе цены не дал. 4 таких товара, у PS5 96 точек истории.
-		"/card/ — id, похоже, из другого пространства": "https://market.yandex.ru/card/ps5-slim/102947526895?sponsored=1",
 		// Неразвёрнутая короткая ссылка: id в ней нет вовсе, разворачивать должен резолвер.
 		"/cc/ — короткая ссылка, id нет": "https://market.yandex.ru/cc/9w7AHT",
 		// Витрина продавца — вообще не карточка, хотя число в пути есть.
@@ -150,6 +161,18 @@ func TestCanonicalProductURLStaysScrapeable(t *testing.T) {
 		}
 		if got, want := ymExtractSKU(u), ymExtractSKU(raw); got != want {
 			t.Fatalf("канон увёл sku: было %q, стало %q — парсер искал бы чужой id", want, got)
+		}
+
+		// /card/ канонизируется срезанием query (id в /product/ не сводится). После
+		// канона он обязан остаться и распознаваемым (Matches), и парсибельным
+		// (ymExtractSKU достаёт тот же id из пути) — иначе товар молча выпадет.
+		cardRaw := "https://market.yandex.ru/card/kofemashina-jura-e8-15584/5193397317?showOriginalKmEmptyOffer=1&cpc=xxx"
+		cardCanon := CanonicalProductURL(MarketplaceYandexMarket, cardRaw)
+		if !ym.Matches(cardCanon) {
+			t.Fatalf("Matches отверг канон /card/ %q", cardCanon)
+		}
+		if got, want := ymExtractSKU(cardCanon), ymExtractSKU(cardRaw); got != want || got != "5193397317" {
+			t.Fatalf("канон /card/ увёл sku: было %q, стало %q", want, got)
 		}
 	})
 }

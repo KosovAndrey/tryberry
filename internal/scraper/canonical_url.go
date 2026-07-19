@@ -1,6 +1,10 @@
 package scraper
 
-import "fmt"
+import (
+	"fmt"
+	"net/url"
+	"strings"
+)
 
 // CanonicalProductURL приводит товарный URL к единственной форме на товар.
 //
@@ -49,6 +53,22 @@ func CanonicalProductURL(m Marketplace, rawURL string) string {
 	case MarketplaceYandexMarket:
 		if id, err := ExtractYandexMarketID(rawURL); err == nil {
 			return fmt.Sprintf("https://market.yandex.ru/product/%s", id)
+		}
+		// /card/<slug>/<id> — рекламная форма из выдачи (юзеры шлют ссылки с cpc=/
+		// sponsored=). id из неё НЕ канонизируется в /product/<id>: проверено на
+		// прод-IP 2026-07-19 через тёплый бот — и 10-, и 12-значные id из /card/
+		// не резолвятся как /product/ («не удалось получить данные»). Но САМА
+		// /card/-форма рабочая (имя/цена/OOS парсятся) — рушит её только query-хвост:
+		// cpc/sponsored/do-waremd5/showOriginalKmEmptyOffer протухают, и повторный
+		// скрейп сохранённого URL теряет цену (товар гниёт — возраст 1–30 дней против
+		// 1 мин у /product/). Поэтому канон /card/ = срезать query, путь со слагом
+		// оставить (по нему ymExtractSKU берёт id для цены; slug-less /card/<id> не
+		// проверен). OOS-хвост showOriginalKmEmptyOffer scraper вернёт сам при
+		// надобности (ymOOSFullCardURL).
+		if u, err := url.Parse(rawURL); err == nil && strings.Contains(u.Path, "/card/") {
+			u.RawQuery = ""
+			u.Fragment = ""
+			return u.String()
 		}
 	}
 	return rawURL
