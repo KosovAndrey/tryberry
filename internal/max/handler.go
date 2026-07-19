@@ -19,15 +19,16 @@ import (
 	"gitlab.com/KosovAndrey/tryberrybot/internal/repository/postgres"
 	redisrepo "gitlab.com/KosovAndrey/tryberrybot/internal/repository/redis"
 	"gitlab.com/KosovAndrey/tryberrybot/internal/scraper"
+	"gitlab.com/KosovAndrey/tryberrybot/internal/searchsub"
 )
 
 // Команды кнопок (payload). Роутим по ним, а не по label.
 const (
 	cmdProfile     = "profile"
-	cmdLinkTG      = "linktg"   // привязать Telegram (выдать код max2tg)
-	cmdLinkVK      = "linkvk"   // привязать VK (выдать код max2vk)
-	cmdUnlinkTG    = "unlinktg" // отвязать Telegram (k=confirm)
-	cmdUnlinkVK    = "unlinkvk" // отвязать VK (k=confirm)
+	cmdLinkTG      = "linktg"    // привязать Telegram (выдать код max2tg)
+	cmdLinkVK      = "linkvk"    // привязать VK (выдать код max2vk)
+	cmdUnlinkTG    = "unlinktg"  // отвязать Telegram (k=confirm)
+	cmdUnlinkVK    = "unlinkvk"  // отвязать VK (k=confirm)
 	cmdNotify      = "notify"    // экран выбора канала уведомлений
 	cmdNotifySet   = "notifyset" // сохранить канал (k=tg|vk|max|all)
 	cmdEmail       = "email"
@@ -94,17 +95,20 @@ type Bot struct {
 	priceRepo       *postgres.PriceHistoryRepo
 	searchQueryRepo *postgres.SearchQueryRepo
 	searchSubRepo   *postgres.SearchSubscriptionRepo
-	promoRepo       *postgres.PromoRepo
-	referralRepo    *postgres.ReferralRepo
-	registry        *scraper.Registry
-	resolver        *scraper.LinkResolver // короткие ссылки приложений (ozon.ru/t/…, market.yandex.ru/cc/…) — паритет с TG
-	linkCodes       *redisrepo.LinkCodeStore
-	rdb             *redis.Client
-	botURL          string // ссылка на MAX-бота для приглашений
-	tgBotURL        string // ссылка на TG-бота для одноклик-привязки ("" — не показывать)
-	vkBotURL        string // ссылка на VK-бота для одноклик-привязки ("" — не показывать)
-	chartBaseURL    string
-	adminIDs        map[int64]bool
+	// Мгновенная первая оценка below_target (оба nil — выключено). См. searchsub.instant.
+	searchResults searchsub.InstantResults
+	searchEvents  searchsub.EventSink
+	promoRepo     *postgres.PromoRepo
+	referralRepo  *postgres.ReferralRepo
+	registry      *scraper.Registry
+	resolver      *scraper.LinkResolver // короткие ссылки приложений (ozon.ru/t/…, market.yandex.ru/cc/…) — паритет с TG
+	linkCodes     *redisrepo.LinkCodeStore
+	rdb           *redis.Client
+	botURL        string // ссылка на MAX-бота для приглашений
+	tgBotURL      string // ссылка на TG-бота для одноклик-привязки ("" — не показывать)
+	vkBotURL      string // ссылка на VK-бота для одноклик-привязки ("" — не показывать)
+	chartBaseURL  string
+	adminIDs      map[int64]bool
 
 	payments  *payment.Service
 	discounts *redisrepo.DiscountStore
@@ -797,4 +801,11 @@ func cutAnyPrefix(s string, prefixes ...string) (string, bool) {
 		}
 	}
 	return "", false
+}
+
+// SetInstantSearchEval включает мгновенную первую оценку below_target при
+// создании поиск-подписки (по сохранённой выдаче, событие в search-events).
+func (b *Bot) SetInstantSearchEval(results searchsub.InstantResults, events searchsub.EventSink) {
+	b.searchResults = results
+	b.searchEvents = events
 }

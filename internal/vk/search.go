@@ -10,6 +10,7 @@ import (
 
 	"gitlab.com/KosovAndrey/tryberrybot/internal/domain"
 	"gitlab.com/KosovAndrey/tryberrybot/internal/metrics"
+	"gitlab.com/KosovAndrey/tryberrybot/internal/searchsub"
 )
 
 // Поиск-подписки из VK: тот же флоу, что в telegram/search.go — ссылка →
@@ -294,6 +295,18 @@ func (b *Bot) createSearchSub(ctx context.Context, vkID int64, user *domain.User
 	// baseline заведёт планировщик при первом скрейпе.
 	if _, err := b.searchSubRepo.BackfillBaselines(ctx, sub.ID, queryID); err != nil {
 		b.log.Warn("vk: backfill baselines", "sub_id", sub.ID, "err", err)
+	}
+
+	// Мгновенная первая оценка below_target по сохранённой выдаче — паритет с TG.
+	if b.searchResults != nil && b.searchEvents != nil {
+		if q, err := b.searchQueryRepo.GetByID(ctx, queryID); err == nil {
+			n, err := searchsub.SendInstantBelowTarget(ctx, b.searchResults, b.searchSubRepo, b.searchEvents, sub, q, user.TelegramID)
+			if err != nil {
+				b.log.Warn("vk: instant search eval", "sub_id", sub.ID, "err", err)
+			} else if n > 0 {
+				b.log.Info("vk: instant search hits queued", "sub_id", sub.ID, "items", n)
+			}
+		}
 	}
 
 	b.send(ctx, vkID, "✅ Готово! "+domain.TriggerDescription(trigger, target, pct)+

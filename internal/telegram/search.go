@@ -13,6 +13,7 @@ import (
 
 	"gitlab.com/KosovAndrey/tryberrybot/internal/domain"
 	"gitlab.com/KosovAndrey/tryberrybot/internal/metrics"
+	"gitlab.com/KosovAndrey/tryberrybot/internal/searchsub"
 )
 
 // fsmTTL — сколько ждём ввод порога/процента, прежде чем состояние протухнет.
@@ -431,6 +432,20 @@ func (b *Bot) createSearchSub(ctx context.Context, chatID int64, user *domain.Us
 	// планировщик при первом скрейпе.
 	if _, err := b.searchSubRepo.BackfillBaselines(ctx, sub.ID, queryID); err != nil {
 		b.log.Warn("backfill baselines", "sub_id", sub.ID, "err", err)
+	}
+
+	// Мгновенная первая оценка below_target по сохранённой выдаче: иначе
+	// подписка, созданная между скрейпами, ждёт следующего (Ozon-пол 15м,
+	// free 6ч) при уже лежащих в БД подходящих товарах. См. searchsub.instant.
+	if b.searchResults != nil && b.searchEvents != nil {
+		if q, err := b.searchQueryRepo.GetByID(ctx, queryID); err == nil {
+			n, err := searchsub.SendInstantBelowTarget(ctx, b.searchResults, b.searchSubRepo, b.searchEvents, sub, q, user.TelegramID)
+			if err != nil {
+				b.log.Warn("instant search eval", "sub_id", sub.ID, "err", err)
+			} else if n > 0 {
+				b.log.Info("instant search hits queued", "sub_id", sub.ID, "items", n)
+			}
+		}
 	}
 
 	keyboard := tgbotapi.NewInlineKeyboardMarkup(

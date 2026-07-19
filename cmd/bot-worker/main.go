@@ -94,6 +94,7 @@ func run(log *slog.Logger) error {
 	priceHistoryRepo := postgres.NewPriceHistoryRepo(pool)
 	searchQueryRepo := postgres.NewSearchQueryRepo(pool)
 	searchSubRepo := postgres.NewSearchSubscriptionRepo(pool)
+	searchResultRepo := postgres.NewSearchResultRepo(pool)
 	promoRepo := postgres.NewPromoRepo(pool)
 	referralRepo := postgres.NewReferralRepo(pool)
 	paymentRepo := postgres.NewPaymentRepo(pool)
@@ -180,6 +181,13 @@ func run(log *slog.Logger) error {
 		return fmt.Errorf("init bot: %w", err)
 	}
 
+	// Мгновенная первая оценка below_target при создании поиск-подписки: событие
+	// в search-events (дальше штатный нотифаер), вместо ожидания следующего
+	// скрейпа (Ozon-пол 15м, free 6ч). См. searchsub.SendInstantBelowTarget.
+	searchEvents := kafka.NewProducer(kafkaBrokers, "search-events")
+	defer searchEvents.Close()
+	bot.SetInstantSearchEval(searchResultRepo, searchEvents)
+
 	// ── VK-консьюмер (фаза 1: привязка аккаунтов + ответы в ЛС) ─────────────
 	// Включается только при заданном VK_GROUP_TOKEN. vk.com доступен напрямую,
 	// прокси не нужен.
@@ -195,6 +203,7 @@ func run(log *slog.Logger) error {
 			getEnv("MAX_BOT_URL", ""),
 			getEnv("PUBLIC_BASE_URL", "https://tryberry.ru"),
 			parseAdminIDs(getEnv("VK_ADMIN_IDS", "")))
+		vkBot.SetInstantSearchEval(searchResultRepo, searchEvents)
 		vkConsumer := kafka.NewConsumer(kafkaBrokers, "vk-updates", "vk-workers")
 		defer vkConsumer.Close()
 		go func() {
@@ -234,6 +243,7 @@ func run(log *slog.Logger) error {
 				getEnv("VK_BOT_URL", ""),
 				getEnv("PUBLIC_BASE_URL", "https://tryberry.ru"),
 				parseAdminIDs(getEnv("MAX_ADMIN_IDS", "")))
+			maxBot.SetInstantSearchEval(searchResultRepo, searchEvents)
 			maxConsumer := kafka.NewConsumer(kafkaBrokers, "max-updates", "max-workers")
 			defer maxConsumer.Close()
 			go func() {

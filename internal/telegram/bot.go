@@ -14,6 +14,7 @@ import (
 	"gitlab.com/KosovAndrey/tryberrybot/internal/repository/postgres"
 	redisrepo "gitlab.com/KosovAndrey/tryberrybot/internal/repository/redis"
 	"gitlab.com/KosovAndrey/tryberrybot/internal/scraper"
+	"gitlab.com/KosovAndrey/tryberrybot/internal/searchsub"
 )
 
 type Bot struct {
@@ -30,6 +31,11 @@ type Bot struct {
 	searchQueryRepo *postgres.SearchQueryRepo
 	searchSubRepo   *postgres.SearchSubscriptionRepo
 	rdb             *redis.Client // FSM для ввода порога (может быть nil)
+
+	// Мгновенная первая оценка below_target при создании подписки (оба nil —
+	// выключено, оценит первый скрейп). Wiring: SetInstantSearchEval из main.
+	searchResults searchsub.InstantResults
+	searchEvents  searchsub.EventSink
 
 	promoRepo    *postgres.PromoRepo
 	referralRepo *postgres.ReferralRepo
@@ -87,6 +93,13 @@ func (b *Bot) SetPayments(svc *payment.Service) {
 // SetBilling подключает репозиторий подписок (для экрана «Моя подписка» и отмены).
 func (b *Bot) SetBilling(repo *postgres.BillingSubscriptionRepo) {
 	b.billing = repo
+}
+
+// SetInstantSearchEval включает мгновенную первую оценку below_target при
+// создании поиск-подписки (по сохранённой выдаче, событие в search-events).
+func (b *Bot) SetInstantSearchEval(results searchsub.InstantResults, events searchsub.EventSink) {
+	b.searchResults = results
+	b.searchEvents = events
 }
 
 func NewBot(

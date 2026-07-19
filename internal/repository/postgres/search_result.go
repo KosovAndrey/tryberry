@@ -2,6 +2,7 @@ package postgres
 
 import (
 	"context"
+	"math"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -88,6 +89,41 @@ func (r *SearchResultRepo) UpsertBatch(ctx context.Context, queryID int64, rows 
 		}
 	}
 	return nil
+}
+
+// ListHitItemsBelow — товары текущей выдачи с ценой ≤ maxPrice, обогащённые
+// карточкой (JOIN products: имя/URL/фото) — готовые SearchHitItem для события
+// уведомления. Для МГНОВЕННОЙ первой оценки below_target при создании подписки:
+// выдача уже лежит в search_results, ждать следующего скрейпа (Ozon-пол 15м,
+// free 6ч) незачем. Prev == текущей цене (baseline новой подписки только что
+// зафиксирован ею же) — рендер не покажет ложное «было X ₽».
+// Сортировка по цене: самые дешёвые первыми (они же самые интересные юзеру).
+func (r *SearchResultRepo) ListHitItemsBelow(ctx context.Context, queryID int64, maxPrice float64) ([]domain.SearchHitItem, error) {
+	const q = `
+		SELECT sr.product_id, p.name, p.url, COALESCE(p.image_url, ''), sr.last_price
+		FROM search_results sr
+		JOIN products p ON p.id = sr.product_id
+		WHERE sr.search_query_id = $1 AND sr.last_price > 0 AND sr.last_price <= $2
+		ORDER BY sr.last_price`
+
+	rows, err := r.db.Query(ctx, q, queryID, maxPrice)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var out []domain.SearchHitItem
+	for rows.Next() {
+		var it domain.SearchHitItem
+		var price float64
+		if err := rows.Scan(&it.ProductID, &it.Name, &it.URL, &it.ImageURL, &price); err != nil {
+			return nil, err
+		}
+		k := int64(math.Round(price * 100))
+		it.PriceKopecks, it.EffectiveKopecks, it.PrevPriceKopecks = k, k, k
+		out = append(out, it)
+	}
+	return out, rows.Err()
 }
 
 // GetByQueryID — текущая выдача запроса, по позиции.

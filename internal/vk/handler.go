@@ -17,6 +17,7 @@ import (
 	"gitlab.com/KosovAndrey/tryberrybot/internal/repository/postgres"
 	redisrepo "gitlab.com/KosovAndrey/tryberrybot/internal/repository/redis"
 	"gitlab.com/KosovAndrey/tryberrybot/internal/scraper"
+	"gitlab.com/KosovAndrey/tryberrybot/internal/searchsub"
 )
 
 // CallbackEvent — событие VK Callback API (сырой формат, публикуется в Kafka
@@ -51,7 +52,7 @@ const (
 	cmdUnlinkMax   = "unlinkmax" // отвязать MAX (k=confirm — подтверждено)
 	cmdNotify      = "notify"    // экран выбора канала уведомлений
 	cmdNotifySet   = "notifyset" // сохранить канал (k=tg|vk|max|all)
-	cmdEmail       = "email"    // сменить email для чека 54-ФЗ
+	cmdEmail       = "email"     // сменить email для чека 54-ФЗ
 	cmdHelp        = "help"
 	cmdAdd         = "add"
 	cmdList        = "list"
@@ -117,16 +118,19 @@ type Bot struct {
 	priceRepo       *postgres.PriceHistoryRepo // honest-price подсказки целевой цены (nilable)
 	searchQueryRepo *postgres.SearchQueryRepo
 	searchSubRepo   *postgres.SearchSubscriptionRepo
-	promoRepo       *postgres.PromoRepo
-	referralRepo    *postgres.ReferralRepo
-	registry        *scraper.Registry
-	resolver        *scraper.LinkResolver // короткие ссылки приложений (ozon.ru/t/…, market.yandex.ru/cc/…) — паритет с TG
-	linkCodes       *redisrepo.LinkCodeStore
-	rdb             *redis.Client // FSM ввода порога (может быть nil)
-	botURL          string        // ссылка на VK-бота для приглашений ("" — не показывать)
-	maxBotURL       string        // ссылка на MAX-бота для кнопки привязки ("" — не показывать)
-	chartBaseURL    string        // PUBLIC_BASE_URL для ссылки «📈 График цены» → /p/<public_id>; "" — не показывать
-	adminIDs        map[int64]bool // VK_ADMIN_IDS — операторы для админ-команд (grant/revoke/promo…)
+	// Мгновенная первая оценка below_target (оба nil — выключено). См. searchsub.instant.
+	searchResults searchsub.InstantResults
+	searchEvents  searchsub.EventSink
+	promoRepo     *postgres.PromoRepo
+	referralRepo  *postgres.ReferralRepo
+	registry      *scraper.Registry
+	resolver      *scraper.LinkResolver // короткие ссылки приложений (ozon.ru/t/…, market.yandex.ru/cc/…) — паритет с TG
+	linkCodes     *redisrepo.LinkCodeStore
+	rdb           *redis.Client  // FSM ввода порога (может быть nil)
+	botURL        string         // ссылка на VK-бота для приглашений ("" — не показывать)
+	maxBotURL     string         // ссылка на MAX-бота для кнопки привязки ("" — не показывать)
+	chartBaseURL  string         // PUBLIC_BASE_URL для ссылки «📈 График цены» → /p/<public_id>; "" — не показывать
+	adminIDs      map[int64]bool // VK_ADMIN_IDS — операторы для админ-команд (grant/revoke/promo…)
 
 	// Оплата (как в TG): payments == nil → заглушка; discounts хранит
 	// «ожидающую скидку» (nil без redis); billing — рекуррентные подписки.
@@ -877,4 +881,11 @@ func cutAnyPrefix(s string, prefixes ...string) (string, bool) {
 		}
 	}
 	return "", false
+}
+
+// SetInstantSearchEval включает мгновенную первую оценку below_target при
+// создании поиск-подписки (по сохранённой выдаче, событие в search-events).
+func (b *Bot) SetInstantSearchEval(results searchsub.InstantResults, events searchsub.EventSink) {
+	b.searchResults = results
+	b.searchEvents = events
 }
