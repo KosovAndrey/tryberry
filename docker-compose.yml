@@ -538,10 +538,23 @@ services:
         # Дорожка 0 (legacy-фолбэк). Доп. дорожки — OZON_LANE_1_PROXY/_COOKIE и т.д.
         OZON_PROXY_URL: "${OZON_PROXY_URL:-}"
         OZON_COOKIE: "${OZON_COOKIE:-}"
+        # Дорожки 1..7: без этих строк переменная из .env до контейнера НЕ доедет
+        # (на проде уже гоняли OZON_POOL_SIZE=8, а проброшены были только 1-2).
+        # Пусто → дорожка идёт direct с IP сервера, это штатный режим.
         OZON_LANE_1_PROXY: "${OZON_LANE_1_PROXY:-}"
         OZON_LANE_1_COOKIE: "${OZON_LANE_1_COOKIE:-}"
         OZON_LANE_2_PROXY: "${OZON_LANE_2_PROXY:-}"
         OZON_LANE_2_COOKIE: "${OZON_LANE_2_COOKIE:-}"
+        OZON_LANE_3_PROXY: "${OZON_LANE_3_PROXY:-}"
+        OZON_LANE_3_COOKIE: "${OZON_LANE_3_COOKIE:-}"
+        OZON_LANE_4_PROXY: "${OZON_LANE_4_PROXY:-}"
+        OZON_LANE_4_COOKIE: "${OZON_LANE_4_COOKIE:-}"
+        OZON_LANE_5_PROXY: "${OZON_LANE_5_PROXY:-}"
+        OZON_LANE_5_COOKIE: "${OZON_LANE_5_COOKIE:-}"
+        OZON_LANE_6_PROXY: "${OZON_LANE_6_PROXY:-}"
+        OZON_LANE_6_COOKIE: "${OZON_LANE_6_COOKIE:-}"
+        OZON_LANE_7_PROXY: "${OZON_LANE_7_PROXY:-}"
+        OZON_LANE_7_COOKIE: "${OZON_LANE_7_COOKIE:-}"
         # Человекоподобный интервал между запросами одной дорожки + джиттер.
         OZON_LANE_MIN_INTERVAL_MS: "${OZON_LANE_MIN_INTERVAL_MS:-1500}"
         OZON_LANE_JITTER: "${OZON_LANE_JITTER:-0.4}"

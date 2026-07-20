@@ -312,14 +312,34 @@ class Lane:
                       self.idx, _first_line(e))
             return False
 
+    def _warm_backoff(self, reason: str):
+        """Пометить дорожку нездоровой и отложить следующий прогрев (экспонента):
+        не долбим FAB — именно частые неудачные прогревы и жгут IP."""
+        self.healthy = False
+        self._warm_fails += 1
+        backoff = min(MAINT_INTERVAL_S * (2 ** self._warm_fails), WARM_BACKOFF_MAX_S)
+        self._next_warm = time.monotonic() + backoff
+        log.warning("дорожка %d: %s (попыток подряд %d) — backoff %.0fс",
+                    self.idx, reason, self._warm_fails, backoff)
+
     async def warm(self):
         """Навигация на карточку + ожидание, что FAB пройден (тестовый fetch=200).
         Успех → healthy, сброс backoff. Неудача → экспоненциальный backoff."""
+        # Браузера может не быть вовсе: start() упал (напр. Playwright не умеет
+        # socks5 с авторизацией — "Browser does not support socks5 proxy
+        # authentication"), а дорожка всё равно кладётся в пул. Без этой проверки
+        # цикл ниже сыпал "'NoneType' object has no attribute 'evaluate'" каждые
+        # 3с весь WARM_WAIT_S, забивая логи и маскируя настоящие ошибки.
+        if self._page is None and not await self._relaunch():
+            self._warm_backoff("браузер не поднялся")
+            return
         log.info("дорожка %d: прогрев — навигация на %s", self.idx, WARM_URL)
+        nav_ok = True
         try:
             await self._page.goto(WARM_URL, wait_until="domcontentloaded",
                                   timeout=int(NAV_TIMEOUT_S * 1000))
         except Exception as e:  # noqa: BLE001
+            nav_ok = False
             log.warning("дорожка %d: навигация прогрева: %s",
                         self.idx, _first_line(e))
             # Драйвер мёртв → пересоздать браузер и повторить навигацию один раз.
@@ -327,12 +347,16 @@ class Lane:
                 try:
                     await self._page.goto(WARM_URL, wait_until="domcontentloaded",
                                           timeout=int(NAV_TIMEOUT_S * 1000))
+                    nav_ok = True
                 except Exception as e2:  # noqa: BLE001
                     log.warning("дорожка %d: навигация после пересоздания: %s",
                                 self.idx, _first_line(e2))
         self.egress_ip = await self._egress_ip()
-        log.info("дорожка %d: навигация ок (egress=%s), жду прохождения FAB…",
-                 self.idx, self.egress_ip or "?")
+        # Навигацию не бросаем даже при ошибке: страница может быть жива (частичная
+        # загрузка), и in-page fetch ниже иногда всё равно проходит. Но и «ок» тут
+        # писать нельзя — на спалённом IP лог врал «навигация ок» после RST.
+        log.info("дорожка %d: навигация %s (egress=%s), жду прохождения FAB…",
+                 self.idx, "ок" if nav_ok else "НЕ прошла", self.egress_ip or "?")
         deadline = time.time() + WARM_WAIT_S
         warm_path = _product_path(WARM_PRODUCT_ID)
         while time.time() < deadline:
@@ -354,12 +378,7 @@ class Lane:
             except Exception:  # noqa: BLE001
                 await asyncio.sleep(3)
         # не прогрелась — backoff, чтобы не долбить FAB (это и жжёт IP)
-        self.healthy = False
-        self._warm_fails += 1
-        backoff = min(MAINT_INTERVAL_S * (2 ** self._warm_fails), WARM_BACKOFF_MAX_S)
-        self._next_warm = time.monotonic() + backoff
-        log.warning("дорожка %d: прогрев не дал 200 (попыток подряд %d) — backoff %.0fс",
-                    self.idx, self._warm_fails, backoff)
+        self._warm_backoff("прогрев не дал 200")
 
     async def rotate(self):
         """Дёрнуть switch-ссылку провайдера (смена exit-IP) и пере-прогреться."""
