@@ -181,6 +181,8 @@ func run(log *slog.Logger) error {
 		defaultInterval: defaultInterval,
 		// Анти-спам below_target на широких/ротирующихся выдачах (Ozon отдаёт
 		// ~8 ротирующихся позиций → каждый скрейп новые дешёвые SKU). 0 — выкл.
+		// ФОЛБЭК: основной зазор задаёт план владельца (Plan.SearchCooldown),
+		// сюда падаем только для планов без своего значения (legacy basic).
 		belowTargetCooldown: time.Duration(getEnvInt("SEARCH_BELOW_TARGET_COOLDOWN_MINUTES", 360)) * time.Minute,
 	}
 

@@ -79,3 +79,27 @@ func TestEffectiveSearchInterval(t *testing.T) {
 		t.Errorf("empty plan: got %v, want %v", got, def)
 	}
 }
+
+func TestEffectiveSearchCooldown(t *testing.T) {
+	def := 6 * time.Hour
+	// free: зазор равен его же кадансу — поведение до фикса.
+	if got := Plans["free"].EffectiveSearchCooldown(def); got != 6*time.Hour {
+		t.Errorf("free: got %v, want 6h", got)
+	}
+	// Платные — короче, чем дефолтные 6ч.
+	if got := Plans["pro"].EffectiveSearchCooldown(def); got != time.Hour {
+		t.Errorf("pro: got %v, want 1h", got)
+	}
+	// Перекупы — зазора нет: частоту ограничивает только каданс скрейпа.
+	// Регрессия основного бага: единый зазор 6ч съедал минутный тариф.
+	if got := Plans["reseller_pro"].EffectiveSearchCooldown(def); got != 0 {
+		t.Errorf("reseller_pro: got %v, want 0 (off)", got)
+	}
+	// План без своего значения (legacy basic) — фолбэк на env-ручку.
+	if got := Plans["basic"].EffectiveSearchCooldown(def); got != def {
+		t.Errorf("basic: got %v, want %v", got, def)
+	}
+	if got := (Plan{}).EffectiveSearchCooldown(def); got != def {
+		t.Errorf("empty plan: got %v, want %v", got, def)
+	}
+}
