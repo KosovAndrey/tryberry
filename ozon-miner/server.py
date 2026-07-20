@@ -460,7 +460,13 @@ class Lane:
             return ""
 
     def due_rotate(self, now: float) -> bool:
-        return ROTATE_INTERVAL_S > 0 and (now - self._last_rotate) >= ROTATE_INTERVAL_S
+        # Без switch-ссылки менять НЕЧЕГО: rotate() пропустит смену IP и всё равно
+        # дойдёт до warm(), т.е. выбросит прогретую сессию и заново пройдёт FAB с
+        # ТОГО ЖЕ адреса. На проде так и было (интервал 30м при пустом ROTATE_URL,
+        # все дорожки direct) — лишние челленджи FAB, а это и жжёт IP.
+        # Живые сессии поддерживает keepalive, ротация — только под прокси.
+        return (bool(ROTATE_URL) and ROTATE_INTERVAL_S > 0
+                and (now - self._last_rotate) >= ROTATE_INTERVAL_S)
 
     def due_keepalive(self, now: float) -> bool:
         return (self.healthy and WARM_KEEPALIVE_S > 0
@@ -666,10 +672,15 @@ async def main():
         raise SystemExit("нет ни одной сконфигурённой дорожки: задай OZON_COOKIE "
                          "(дорожка 0) или OZON_LANE_<i>_COOKIE")
     n_authed = sum(1 for c in configs if "__Secure-access-token" in c["cookie"])
+    rotate_on = bool(ROTATE_URL) and ROTATE_INTERVAL_S > 0
+    if ROTATE_INTERVAL_S > 0 and not ROTATE_URL:
+        log.warning("OZON_ROTATE_INTERVAL_MINUTES=%.0f задан, но OZON_PROXY_ROTATE_URL пуст "
+                    "— ротация ВЫКЛЮЧЕНА (менять IP нечем). Сессии держит keepalive.",
+                    ROTATE_INTERVAL_S / 60)
     log.info("старт ozon-miner: port=%d дорожек=%d (аноним=%d authed=%d, POOL_SIZE=%d) "
              "движок=camoufox ротация=%s keepalive=%.0fмин",
              PORT, len(configs), len(configs) - n_authed, n_authed, POOL_SIZE,
-             f"{ROTATE_INTERVAL_S/60:.0f}мин" if ROTATE_INTERVAL_S > 0 else "выкл",
+             f"{ROTATE_INTERVAL_S/60:.0f}мин" if rotate_on else "выкл",
              WARM_KEEPALIVE_S / 60)
 
     lanes = []
