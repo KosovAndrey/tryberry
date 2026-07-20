@@ -38,6 +38,14 @@ type Plan struct {
 	// каданс фри-поиска как хука/воронки.
 	SearchInterval time.Duration
 
+	// SearchCooldown — анти-спам below_target: минимальный зазор между
+	// уведомлениями одной поиск-подписке. Дампер СВЕРХ каданса: широкая выдача
+	// (Ozon отдаёт ~8 ротирующихся позиций) на каждом скрейпе показывает новые
+	// дешёвые SKU, и без зазора below_target сыпал бы каждый цикл. Чем дороже
+	// тариф, тем короче зазор; перекупам он не нужен — они платят за скорость.
+	// CooldownOff → выключен, 0 → фолбэк на SEARCH_BELOW_TARGET_COOLDOWN_MINUTES.
+	SearchCooldown time.Duration
+
 	// PriceRub — цена разовой оплаты в рублях. 0 → план не покупается.
 	PriceRub int
 
@@ -46,20 +54,24 @@ type Plan struct {
 	SubPriceRub int
 }
 
+// CooldownOff — явное «зазор не нужен» в Plan.SearchCooldown. Отличаем от нуля:
+// ноль = поле не задано (фолбэк на env-ручку), как у Interval/SearchInterval.
+const CooldownOff = -1 * time.Second
+
 // Plans — каталог тарифов. ЦИФРЫ МЕНЯЮТСЯ ЗДЕСЬ.
 var Plans = map[string]Plan{
-	"free":           {Name: "free", Title: "Free", MaxProduct: 5, MaxSearch: 1, Interval: 60 * time.Minute, SearchInterval: 6 * time.Hour, PriceRub: 0},
-	"trial":          {Name: "trial", Title: "Триал (10 дней)", MaxProduct: 100, MaxSearch: 10, Interval: 15 * time.Minute, PriceRub: 0},
-	"lite":           {Name: "lite", Title: "Lite", MaxProduct: 20, MaxSearch: 3, Interval: 30 * time.Minute, PriceRub: 199, SubPriceRub: 189},
-	"pro":            {Name: "pro", Title: "Pro", MaxProduct: 100, MaxSearch: 10, Interval: 15 * time.Minute, PriceRub: 499, SubPriceRub: 479},
-	"reseller_start": {Name: "reseller_start", Title: "Reseller Start", MaxProduct: 5, MaxSearch: 1, Interval: time.Minute, PriceRub: 990, SubPriceRub: 940},
-	"reseller_pro":   {Name: "reseller_pro", Title: "Reseller Pro", MaxProduct: 15, MaxSearch: 3, Interval: time.Minute, PriceRub: 1990, SubPriceRub: 1890},
-	"unlimited":      {Name: "unlimited", Title: "Unlimited", MaxProduct: 100000, MaxSearch: 100000, Interval: time.Minute, PriceRub: 0},
+	"free":           {Name: "free", Title: "Free", MaxProduct: 5, MaxSearch: 1, Interval: 60 * time.Minute, SearchInterval: 6 * time.Hour, SearchCooldown: 6 * time.Hour, PriceRub: 0},
+	"trial":          {Name: "trial", Title: "Триал (10 дней)", MaxProduct: 100, MaxSearch: 10, Interval: 15 * time.Minute, SearchCooldown: time.Hour, PriceRub: 0},
+	"lite":           {Name: "lite", Title: "Lite", MaxProduct: 20, MaxSearch: 3, Interval: 30 * time.Minute, SearchCooldown: 2 * time.Hour, PriceRub: 199, SubPriceRub: 189},
+	"pro":            {Name: "pro", Title: "Pro", MaxProduct: 100, MaxSearch: 10, Interval: 15 * time.Minute, SearchCooldown: time.Hour, PriceRub: 499, SubPriceRub: 479},
+	"reseller_start": {Name: "reseller_start", Title: "Reseller Start", MaxProduct: 5, MaxSearch: 1, Interval: time.Minute, SearchCooldown: CooldownOff, PriceRub: 990, SubPriceRub: 940},
+	"reseller_pro":   {Name: "reseller_pro", Title: "Reseller Pro", MaxProduct: 15, MaxSearch: 3, Interval: time.Minute, SearchCooldown: CooldownOff, PriceRub: 1990, SubPriceRub: 1890},
+	"unlimited":      {Name: "unlimited", Title: "Unlimited", MaxProduct: 100000, MaxSearch: 100000, Interval: time.Minute, SearchCooldown: CooldownOff, PriceRub: 0},
 
 	// Legacy-алиасы: чтобы users.plan со старыми именами не откатывался на free
 	// до миграции (см. 010_per_plan_intervals.sql). Не предлагаются в /grant.
 	"basic":    {Name: "basic", Title: "Basic (legacy)", MaxProduct: 100, MaxSearch: 0, Interval: 30 * time.Minute, PriceRub: 0},
-	"reseller": {Name: "reseller", Title: "Reseller (legacy)", MaxProduct: 15, MaxSearch: 3, Interval: time.Minute, PriceRub: 1990},
+	"reseller": {Name: "reseller", Title: "Reseller (legacy)", MaxProduct: 15, MaxSearch: 3, Interval: time.Minute, SearchCooldown: CooldownOff, PriceRub: 1990},
 }
 
 const planFree = "free"
@@ -106,6 +118,21 @@ func (p Plan) EffectiveSearchInterval(def time.Duration) time.Duration {
 		return p.SearchInterval
 	}
 	return p.EffectiveInterval(def)
+}
+
+// EffectiveSearchCooldown — анти-спам-зазор below_target для плана: SearchCooldown,
+// либо переданный дефолт (env-ручка), если план его не задаёт. CooldownOff → 0,
+// то есть зазор выключен и уведомление уходит на каждой оценке подписки —
+// частоту в этом случае ограничивает только каданс скрейпа (EffectiveSearchInterval
+// плюс пол площадки, напр. Ozon-поиск не чаще OZON_SEARCH_MIN_INTERVAL_MINUTES).
+func (p Plan) EffectiveSearchCooldown(def time.Duration) time.Duration {
+	if p.SearchCooldown < 0 {
+		return 0
+	}
+	if p.SearchCooldown > 0 {
+		return p.SearchCooldown
+	}
+	return def
 }
 
 // ShowTrialOffer — годится ли план для предложения бесплатного триала поиска на

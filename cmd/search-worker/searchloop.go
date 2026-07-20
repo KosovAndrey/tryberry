@@ -312,13 +312,22 @@ func (w *searchWorker) evaluateSubscription(ctx context.Context, q *domain.Searc
 	// ротирующихся позиций) иначе сыплет новыми дешёвыми SKU каждый скрейп. Если
 	// этой подписке слали недавно — пропускаем (хиты никуда не денутся, всплывут
 	// после окна). any_drop/discount не троттлим — там событие = реальная просадка.
-	if w.belowTargetCooldown > 0 && sub.TriggerType == domain.TriggerBelowTarget {
+	//
+	// Зазор берём ПО ПЛАНУ владельца (EffectiveSearchCooldown), а не глобальной
+	// константой: единый зазор 6ч обнулял минутный каданс перекупа — запрос
+	// скрейпился каждые 30м, подписка оценивалась, но 11 из 12 уведомлений
+	// выбрасывались здесь. env-ручка осталась фолбэком для планов без своего
+	// значения (legacy basic).
+	cooldown := domain.EffectivePlanFor(sub.OwnerPlan, sub.OwnerPlanExpiresAt, time.Now()).
+		EffectiveSearchCooldown(w.belowTargetCooldown)
+	if cooldown > 0 && sub.TriggerType == domain.TriggerBelowTarget {
 		if last, ok, err := w.notifs.GetLastNotifiedAt(ctx, sub.ID); err != nil {
 			w.log.Warn("get last notified at", "sub_id", sub.ID, "err", err)
-		} else if ok && time.Since(last) < w.belowTargetCooldown {
+		} else if ok && time.Since(last) < cooldown {
 			w.log.Info("below_target throttled", "sub_id", sub.ID,
+				"plan", sub.OwnerPlan,
 				"since", time.Since(last).Round(time.Minute).String(),
-				"cooldown", w.belowTargetCooldown.String())
+				"cooldown", cooldown.String())
 			return nil
 		}
 	}
