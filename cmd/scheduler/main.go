@@ -72,6 +72,9 @@ func run(log *slog.Logger) error {
 	// Пол интервала для Ozon-ПОИСКА (отдельно от товарного): выдача ротируется
 	// и тянется через одну прогретую дорожку сайдкара — частить нельзя. 0 — выкл.
 	ozonSearchMin := time.Duration(getEnvInt("OZON_SEARCH_MIN_INTERVAL_MINUTES", 30)) * time.Minute
+	// Джиттер пола Ozon-поиска: доля от ozonSearchMin, на которую интервал гуляет
+	// вверх/вниз (0.4 → ±40%). 0 — ровная сетка, как было.
+	ozonSearchJitter := getEnvFloat("OZON_SEARCH_JITTER", 0)
 	if ozonMult < 1 {
 		ozonMult = 1
 	}
@@ -125,7 +128,7 @@ func run(log *slog.Logger) error {
 		"tick", tick.String())
 
 	go runProductScheduler(ctx, log, productRepo, productProducer, ozonProducer, tick, defaultInterval, ozonMinInterval, ozonMult)
-	go runSearchScheduler(ctx, log, searchQueryRepo, searchProducer, resellerProducer, tick, defaultInterval, ozonSearchMin)
+	go runSearchScheduler(ctx, log, searchQueryRepo, searchProducer, resellerProducer, tick, defaultInterval, ozonSearchMin, ozonSearchJitter)
 
 	<-ctx.Done()
 	return nil
@@ -315,9 +318,10 @@ func runSearchScheduler(
 	queryRepo *postgres.SearchQueryRepo,
 	searchProducer, resellerProducer *kafka.Producer,
 	tickInterval, defaultInterval, ozonSearchMin time.Duration,
+	ozonSearchJitter float64,
 ) {
 	tick := func() {
-		if err := searchSchedulerTick(ctx, log, queryRepo, searchProducer, resellerProducer, defaultInterval, ozonSearchMin); err != nil {
+		if err := searchSchedulerTick(ctx, log, queryRepo, searchProducer, resellerProducer, defaultInterval, ozonSearchMin, ozonSearchJitter); err != nil {
 			log.Error("search scheduler tick failed", "err", err)
 		}
 	}
@@ -339,6 +343,37 @@ func runSearchScheduler(
 // проходят, обычные (15/30/60) — нет.
 const resellerLaneCutoff = 2 * time.Minute
 
+// jitterFactor — множитель в [1-j, 1+j], ДЕТЕРМИНИРОВАННЫЙ для пары
+// (запрос, начало цикла). Стабильность внутри цикла обязательна: планировщик
+// проверяет «пора?» каждый тик, и если разыгрывать порог заново на каждом
+// тике, сработает первый же тик, которому выпало маленькое значение — всё
+// распределение съедет к нижней границе (вместо 3.6–8.4 мин получим ~3.6).
+// Привязка к lastEnqueued даёт новый множитель на каждый следующий цикл.
+func jitterFactor(id int64, lastEnqueued *time.Time, j float64) float64 {
+	if j <= 0 {
+		return 1
+	}
+	if j > 0.9 {
+		j = 0.9 // ниже 10% от пола не опускаемся ни при какой конфигурации
+	}
+	seed := uint64(id) * 2654435761
+	if lastEnqueued != nil {
+		seed ^= uint64(lastEnqueued.UnixNano())
+	}
+	// xorshift64 — перемешать биты: без него соседние id/времена дают соседние
+	// множители, и запросы синхронизируются вместо того, чтобы размазаться.
+	seed ^= seed << 13
+	seed ^= seed >> 7
+	seed ^= seed << 17
+	u := float64(seed%10000) / 10000.0 // [0,1)
+	return 1 + j*(2*u-1)
+}
+
+// scaleDuration — d × factor с округлением до секунды (для читаемых логов).
+func scaleDuration(d time.Duration, factor float64) time.Duration {
+	return time.Duration(float64(d) * factor).Round(time.Second)
+}
+
 // dueQuery — созревший запрос, готовый к эмиссии.
 type dueQuery struct {
 	id   int64
@@ -353,6 +388,7 @@ func searchSchedulerTick(
 	queryRepo *postgres.SearchQueryRepo,
 	searchProducer, resellerProducer *kafka.Producer,
 	defaultInterval, ozonSearchMin time.Duration,
+	ozonSearchJitter float64,
 ) error {
 	rows, err := queryRepo.GetSchedulable(ctx)
 	if err != nil {
@@ -400,10 +436,16 @@ func searchSchedulerTick(
 	// дорожку сайдкара и сильно ротируется — частый скрейп жжёт сессию и спамит
 	// below_target новыми позициями. Поэтому Ozon не чаще ozonSearchMin даже на
 	// быстрых тарифах (заодно уводит Ozon с reseller-дорожки на нормальную).
+	// Джиттер размазывает пол: без него запрос, упёршийся в ozonSearchMin, ходит
+	// по ровной сетке (видно по батчам уведомлений — 11:05/11:15/11:35). Тот же
+	// приём, что у спейсинга дорожек внутри сайдкара (OZON_LANE_JITTER).
+	// Применяем ТОЛЬКО к запросам, реально прижатым полом: у медленных тарифов
+	// (free-поиск 6ч) ±40% — это ±2.4ч, чего нам не надо.
 	if ozonSearchMin > 0 {
-		for _, a := range byQuery {
+		for id, a := range byQuery {
 			if a.mp == "ozon" && a.eff < ozonSearchMin {
-				a.eff = ozonSearchMin
+				a.eff = scaleDuration(ozonSearchMin,
+					jitterFactor(id, a.lastEn, ozonSearchJitter))
 			}
 		}
 	}
@@ -472,6 +514,15 @@ func getEnvInt(key string, fallback int) int {
 	if v := os.Getenv(key); v != "" {
 		if n, err := strconv.Atoi(v); err == nil {
 			return n
+		}
+	}
+	return fallback
+}
+
+func getEnvFloat(key string, fallback float64) float64 {
+	if v := os.Getenv(key); v != "" {
+		if f, err := strconv.ParseFloat(v, 64); err == nil {
+			return f
 		}
 	}
 	return fallback
