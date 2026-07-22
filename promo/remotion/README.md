@@ -15,34 +15,28 @@ hero-чате сайта; палитра и шрифты совпадают с t
 кнопок и ответов, которых в боте нет. Цифры в алертах — из
 `scripts/sql/shorts-candidates.sql`, не выдумывать.
 
-## Установка
+## Рабочий цикл: рендер на WINDOWS (GoLand), не в WSL
 
-```bash
-cd promo/remotion
-npm install
+⚠️ В WSL этой машины рендер НЕ работает: режим `networkingMode=mirrored`
+ломает loopback (127.0.0.1 недостижим → Chrome DevTools не коннектится).
+Решение: код правится где угодно, **рендер — из терминала GoLand на Windows**
+(та же схема, что с Blender для hero-айфона). На Windows нужен Node LTS
+(https://nodejs.org, winget: `winget install OpenJS.NodeJS.LTS`).
+
+```powershell
+cd promo\remotion
+npm install          # разово; headless-Chrome Remotion скачает сам
+npm run dev          # Remotion Studio: живое превью в браузере, тут смотрим и крутим
+npx remotion render ChatAlert  out/alert.mp4   # денежный кадр C1/C4
+npx remotion render ChatSearch out/search.mp4  # подписка на выдачу C2 (ядро)
 ```
 
-Рендер использует headless-Chrome (Remotion скачивает сам). В WSL/минимальном
-Linux ему не хватает системных библиотек — поставить один раз:
+`npm run dev` — самый удобный вход: открывает Studio на localhost, там обе
+композиции, скраббинг по таймлайну и правка props на лету. Сначала смотри там,
+рендери когда картинка устроит.
 
-```bash
-sudo apt-get update && sudo apt-get install -y \
-  libnss3 libnspr4 libatk1.0-0 libatk-bridge2.0-0 libcups2 libdrm2 \
-  libgbm1 libasound2 libpango-1.0-0 libcairo2 libxcomposite1 \
-  libxdamage1 libxfixes3 libxrandr2 libxkbcommon0
-```
-
-(На нашей машине `ldd` жаловался только на `libnss3`/`libnspr4`/`libnssutil3` —
-остальное в списке на всякий случай, чтобы Chrome не открыл вторую партию
-недостающих либ.)
-
-## Использование
-
-```bash
-npm run dev                              # Remotion Studio: превью в браузере
-npm run render ChatAlert  out/alert.mp4  # денежный кадр C1/C4
-npm run render ChatSearch out/search.mp4 # подписка на выдачу C2 (ядро)
-```
+`out/` и `node_modules/` в git не попадают (.gitignore) — готовые MP4 складывай
+в `/промо/assets/` как остальные ассеты (реестр: docs/content/asset-library.md).
 
 Новый диалог: добавь запись в `src/data.ts` и композицию в `src/Root.tsx`.
 Схема сообщения — в `src/ChatScene.tsx` (тип `Msg`): текст / карточка-алерт,
@@ -56,5 +50,5 @@ npm run render ChatSearch out/search.mp4 # подписка на выдачу C2
 - `src/data.ts` — диалоги (данные, не верстка).
 - `src/Root.tsx` — композиции (один шаблон × разные данные).
 
-Проверено: `npm run typecheck` и `npm run bundle` проходят. Рендер в MP4 ждёт
-установки системных либ выше.
+Проверено в WSL: `npm run typecheck` и `npm run bundle` проходят. Рендер в MP4 —
+только с Windows-стороны (loopback, см. выше).
