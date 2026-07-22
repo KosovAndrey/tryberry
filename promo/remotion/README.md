@@ -27,8 +27,9 @@ hero-чате сайта; палитра и шрифты совпадают с t
 cd promo\remotion
 npm install          # разово; headless-Chrome Remotion скачает сам
 npm run dev          # Remotion Studio: живое превью в браузере, тут смотрим и крутим
-npx remotion render ChatAlert  out/alert.mp4   # денежный кадр C1/C4
-npx remotion render ChatSearch out/search.mp4  # подписка на выдачу C2 (ядро)
+npx remotion render ChatAlertIphone out/alert-iphone.mp4   # товарный алерт + график
+npx remotion render ChatSearchIphone out/search-iphone.mp4 # подписка на выдачу (ядро)
+# также: ChatAlertBuds / ChatSearchBuds / Endcard
 ```
 
 `npm run dev` — самый удобный вход: открывает Studio на localhost, там обе

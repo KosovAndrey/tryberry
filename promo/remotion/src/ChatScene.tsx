@@ -45,11 +45,13 @@ export type Msg =
       now: number;
       img?: string;
       buy?: string; // текст CTA-кнопки, как в hero: «Купить на Ozon за 71 305 ₽ →»
-      // Поисковая выдача: та же модель у других продавцов (названия чуть
-      // отличаются, суть одна), все удовлетворяют порог, чуть дороже hero.
+      // Вторичная кнопка: в товарном алерте «📈 График цены» (реальная кнопка
+      // notifier.go), в поисковом «🔎 Открыть выдачу» (единственная реальная
+      // кнопка searchAlertKeyboard). pressAt — симуляция тапа.
+      secondary?: {label: string; pressAt?: number};
+      // Остальные подешевевшие позиции выдачи (реальный алерт их перечисляет).
       itemsTitle?: string;
       items?: {name: string; price: number}[];
-      chartPressAt?: number; // сек: анимация нажатия «📈 График цены»
     }
   | {
       // Упрощённый график истории цены — как на /p/, но в пузыре чата.
@@ -399,36 +401,38 @@ const AlertCard: React.FC<{m: Extract<Msg, {kind: 'alert'}>}> = ({m}) => {
               >
                 {m.buy}
               </div>
-              {(() => {
-                // Тап по «График цены»: подсветка и отпускание (как живой палец)
-                const p = m.chartPressAt
-                  ? spring({frame: frame - m.chartPressAt * fps, fps, config: {damping: 12, mass: 0.5}})
-                  : 0;
-                const active =
-                  m.chartPressAt !== undefined &&
-                  frame >= m.chartPressAt * fps &&
-                  frame < (m.chartPressAt + PRESS_HOLD) * fps;
-                return (
-                  <div
-                    style={{
-                      textAlign: 'center',
-                      padding: '18px 14px',
-                      borderRadius: 20,
-                      border: `2px solid ${active ? BRAND.bright : 'rgba(255,255,255,.16)'}`,
-                      background: active
-                        ? `linear-gradient(120deg, ${BRAND.berry}, ${BRAND.deep})`
-                        : 'rgba(255,255,255,.05)',
-                      color: BRAND.cream,
-                      fontFamily: body,
-                      fontSize: 31,
-                      fontWeight: 600,
-                      transform: `scale(${1 + 0.06 * Math.sin(Math.min(p, 1) * Math.PI)})`,
-                    }}
-                  >
-                    📈 График цены
-                  </div>
-                );
-              })()}
+              {m.secondary &&
+                (() => {
+                  const sec = m.secondary;
+                  // Тап: подсветка и отпускание (как живой палец)
+                  const p = sec.pressAt
+                    ? spring({frame: frame - sec.pressAt * fps, fps, config: {damping: 12, mass: 0.5}})
+                    : 0;
+                  const active =
+                    sec.pressAt !== undefined &&
+                    frame >= sec.pressAt * fps &&
+                    frame < (sec.pressAt + PRESS_HOLD) * fps;
+                  return (
+                    <div
+                      style={{
+                        textAlign: 'center',
+                        padding: '18px 14px',
+                        borderRadius: 20,
+                        border: `2px solid ${active ? BRAND.bright : 'rgba(255,255,255,.16)'}`,
+                        background: active
+                          ? `linear-gradient(120deg, ${BRAND.berry}, ${BRAND.deep})`
+                          : 'rgba(255,255,255,.05)',
+                        color: BRAND.cream,
+                        fontFamily: body,
+                        fontSize: 31,
+                        fontWeight: 600,
+                        transform: `scale(${1 + 0.06 * Math.sin(Math.min(p, 1) * Math.PI)})`,
+                      }}
+                    >
+                      {sec.label}
+                    </div>
+                  );
+                })()}
             </div>
           )}
           {m.items && m.items.length > 0 && (
