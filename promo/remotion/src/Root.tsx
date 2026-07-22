@@ -14,7 +14,7 @@ export const RemotionRoot: React.FC = () => {
       <Composition
         id="ChatAlert"
         component={ChatScene}
-        durationInFrames={dur(15.8)}
+        durationInFrames={dur(16.0)}
         fps={30}
         width={1080}
         height={1920}

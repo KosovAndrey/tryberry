@@ -44,8 +44,11 @@ export type Msg =
       was: number;
       now: number;
       img?: string;
-      link?: string; // ссылка на товар — в реальном алерте она есть в тексте
-      items?: {name: string; price: number}[]; // хвост поисковой выдачи
+      buy?: string; // текст CTA-кнопки, как в hero: «Купить на Ozon за 71 305 ₽ →»
+      // Поисковая выдача: та же модель у других продавцов (названия чуть
+      // отличаются, суть одна), все удовлетворяют порог, чуть дороже hero.
+      itemsTitle?: string;
+      items?: {name: string; price: number}[];
       chartPressAt?: number; // сек: анимация нажатия «📈 График цены»
     }
   | {
@@ -59,6 +62,7 @@ export type Msg =
       min: number; // опорная «минимум» (good)
       usual: number; // опорная «обычная» (gold)
       caption: string; // «История цены · 90 дней»
+      note?: string; // подпись под графиком, как в hero: «Обычно ~87 000 ₽…»
     };
 
 export type ChatData = {title: string; messages: Msg[]};
@@ -165,6 +169,9 @@ const TextBubble: React.FC<{m: Extract<Msg, {kind: 'text'}>}> = ({m}) => {
   );
 };
 
+// Имитация тапа: кнопка подсвечивается и ОТПУСКАЕТСЯ — возвращается как была.
+const PRESS_HOLD = 0.55; // сек подсветки
+
 const ButtonsBubble: React.FC<{m: Extract<Msg, {kind: 'buttons'}>}> = ({m}) => {
   const enter = useEnter(m.at);
   const frame = useCurrentFrame();
@@ -192,7 +199,10 @@ const ButtonsBubble: React.FC<{m: Extract<Msg, {kind: 'buttons'}>}> = ({m}) => {
                 const p = pressed
                   ? spring({frame: frame - m.press!.at * fps, fps, config: {damping: 12, mass: 0.5}})
                   : 0;
-                const active = pressed && frame >= m.press!.at * fps;
+                const active =
+                  pressed &&
+                  frame >= m.press!.at * fps &&
+                  frame < (m.press!.at + PRESS_HOLD) * fps;
                 return (
                   <div
                     key={c}
@@ -370,46 +380,34 @@ const AlertCard: React.FC<{m: Extract<Msg, {kind: 'alert'}>}> = ({m}) => {
               </div>
             </div>
           </div>
-          {m.items && m.items.length > 0 && (
-            <div style={{marginTop: 24, borderTop: '1px solid rgba(255,255,255,.10)', paddingTop: 16}}>
-              <div style={{fontSize: 27, opacity: 0.5, marginBottom: 12, letterSpacing: '.03em'}}>ЕЩЁ В ВЫДАЧЕ</div>
-              {m.items.map((it, i) => (
-                <div
-                  key={i}
-                  style={{display: 'flex', justifyContent: 'space-between', fontSize: 31, opacity: 0.75, marginBottom: 10}}
-                >
-                  <span style={{overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', maxWidth: '68%'}}>
-                    {it.name}
-                  </span>
-                  <span style={{fontWeight: 600}}>{rub(it.price)}</span>
-                </div>
-              ))}
-            </div>
-          )}
-          {/* Ссылка на товар — в реальном алерте она в тексте сообщения; кнопка
-              графика — реальная inline-кнопка (notifier.go priceAlertKeyboard) */}
-          {m.link && (
-            <div style={{marginTop: 22, display: 'flex', flexDirection: 'column', gap: 12}}>
+          {/* CTA относятся к hero-товару и стоят СРАЗУ под ним, до списка
+              вариантов. «Купить…» — как в hero-видео сайта; «📈 График цены» —
+              реальная inline-кнопка (notifier.go priceAlertKeyboard). */}
+          {m.buy && (
+            <div style={{marginTop: 24, display: 'flex', flexDirection: 'column', gap: 12}}>
               <div
                 style={{
                   textAlign: 'center',
-                  padding: '20px 14px',
-                  borderRadius: 20,
-                  background: `linear-gradient(120deg, ${BRAND.berry}, ${BRAND.deep})`,
+                  padding: '22px 14px',
+                  borderRadius: 22,
+                  background: `linear-gradient(120deg, ${BRAND.bright}, ${BRAND.deep})`,
                   color: '#fff',
                   fontFamily: body,
-                  fontSize: 33,
+                  fontSize: 35,
                   fontWeight: 700,
                 }}
               >
-                🛒 Открыть товар · {m.link}
+                {m.buy}
               </div>
               {(() => {
-                // Симуляция нажатия «График цены» (chartPressAt) — как в ButtonsBubble
+                // Тап по «График цены»: подсветка и отпускание (как живой палец)
                 const p = m.chartPressAt
                   ? spring({frame: frame - m.chartPressAt * fps, fps, config: {damping: 12, mass: 0.5}})
                   : 0;
-                const active = m.chartPressAt !== undefined && frame >= m.chartPressAt * fps;
+                const active =
+                  m.chartPressAt !== undefined &&
+                  frame >= m.chartPressAt * fps &&
+                  frame < (m.chartPressAt + PRESS_HOLD) * fps;
                 return (
                   <div
                     style={{
@@ -431,6 +429,24 @@ const AlertCard: React.FC<{m: Extract<Msg, {kind: 'alert'}>}> = ({m}) => {
                   </div>
                 );
               })()}
+            </div>
+          )}
+          {m.items && m.items.length > 0 && (
+            <div style={{marginTop: 24, borderTop: '1px solid rgba(255,255,255,.10)', paddingTop: 16}}>
+              <div style={{fontSize: 27, opacity: 0.5, marginBottom: 12, letterSpacing: '.03em'}}>
+                {(m.itemsTitle ?? 'ещё варианты').toUpperCase()}
+              </div>
+              {m.items.map((it, i) => (
+                <div
+                  key={i}
+                  style={{display: 'flex', justifyContent: 'space-between', fontSize: 31, opacity: 0.75, marginBottom: 10}}
+                >
+                  <span style={{overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', maxWidth: '68%'}}>
+                    {it.name}
+                  </span>
+                  <span style={{fontWeight: 600}}>{rub(it.price)}</span>
+                </div>
+              ))}
             </div>
           )}
           <div style={{display: 'flex', justifyContent: 'flex-end', marginTop: 14}}>
@@ -471,9 +487,13 @@ const ChartBubble: React.FC<{m: Extract<Msg, {kind: 'chart'}>}> = ({m}) => {
   const hi = Math.max(...m.series, m.usual) * 1.04;
   const x = (i: number) => PAD.l + (i / (m.series.length - 1)) * (W - PAD.l - PAD.r);
   const y = (v: number) => PAD.t + (1 - (v - lo) / (hi - lo)) * (H - PAD.t - PAD.b);
-  const pts = m.series.map((v, i) => `${x(i)},${y(v)}`);
-  const line = `M ${pts.join(' L ')}`;
-  const area = `${line} L ${x(m.series.length - 1)},${H - PAD.b} L ${x(0)},${H - PAD.b} Z`;
+  // Ступенчатый путь (step-after) — цена меняется РЕЗКО и держится уровнями,
+  // как на реальном графике /p/ и в hero-видео. Никаких наклонных отрезков.
+  let line = `M ${x(0)},${y(m.series[0])}`;
+  for (let i = 1; i < m.series.length; i++) {
+    line += ` H ${x(i)} V ${y(m.series[i])}`;
+  }
+  const area = `${line} V ${H - PAD.b} H ${x(0)} Z`;
   const last = m.series[m.series.length - 1];
 
   const refLine = (v: number, color: string, label: string) => (
@@ -570,6 +590,20 @@ const ChartBubble: React.FC<{m: Extract<Msg, {kind: 'chart'}>}> = ({m}) => {
             {rub(last)}
           </text>
         </svg>
+        {m.note && (
+          <div
+            style={{
+              fontFamily: body,
+              fontSize: 29,
+              lineHeight: 1.4,
+              color: 'rgba(255,233,241,.65)',
+              margin: '10px 10px 0',
+              opacity: refsIn,
+            }}
+          >
+            {m.note}
+          </div>
+        )}
         <div style={{display: 'flex', justifyContent: 'flex-end', marginTop: 6, paddingRight: 10}}>
           <Stamp time={m.time} />
         </div>
