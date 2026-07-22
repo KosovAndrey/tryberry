@@ -2,6 +2,7 @@ import React from 'react';
 import {Composition} from 'remotion';
 import {ChatScene} from './ChatScene';
 import {Endcard} from './Endcard';
+import {FakeDiscount, DropAlert, Rollercoaster} from './Charts';
 import {alertIphone, alertBuds, searchIphone, searchBuds} from './data';
 
 // Длительность = последнее сообщение + хвост на прочтение.
@@ -29,6 +30,11 @@ export const RemotionRoot: React.FC = () => {
       {chat('ChatSearchBuds', searchBuds, 10.8)}
       {/* B1 — эндкард, одинаковый во всех роликах (отличительный актив) */}
       <Composition id="Endcard" component={Endcard} durationInFrames={120} fps={30} width={1080} height={1920} />
+      {/* Блок G — полноэкранные графики-доказательства для C1-роликов.
+          Титры-нарратив кладутся на монтаже, тут только данные. */}
+      <Composition id="G1FakeDiscount" component={FakeDiscount} durationInFrames={210} fps={30} width={1080} height={1920} />
+      <Composition id="G2DropAlert" component={DropAlert} durationInFrames={210} fps={30} width={1080} height={1920} />
+      <Composition id="G3Rollercoaster" component={Rollercoaster} durationInFrames={210} fps={30} width={1080} height={1920} />
     </>
   );
 };
