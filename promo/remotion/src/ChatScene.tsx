@@ -39,11 +39,12 @@ export type Msg =
       kind: 'alert';
       at: number;
       time?: string;
-      title: string; // «🔔 Цена упала» / «🔎 Найдено дешевле …»
+      title: string; // реальный: «📉 Цена снизилась!» (notifier.go)
       name: string;
       was: number;
       now: number;
       img?: string;
+      link?: string; // ссылка на товар — в реальном алерте она есть в тексте
       items?: {name: string; price: number}[]; // хвост поисковой выдачи
     };
 
@@ -60,7 +61,7 @@ const estHeight = (m: Msg): number => {
     case 'daybreak':
       return 110;
     case 'alert':
-      return 640 + (m.items?.length ?? 0) * 104;
+      return 800 + (m.items?.length ?? 0) * 104;
   }
 };
 
@@ -122,6 +123,8 @@ const bubbleBase: React.CSSProperties = {
 const TextBubble: React.FC<{m: Extract<Msg, {kind: 'text'}>}> = ({m}) => {
   const enter = useEnter(m.at);
   const isUser = m.from === 'user';
+  // Ссылки выглядят ссылками — подчёркивание, как в настоящем мессенджере.
+  const isLink = /^https?:\/\//i.test(m.text) || /\.[a-z]{2}\//i.test(m.text);
   return (
     <Row align={isUser ? 'right' : 'left'} enter={enter}>
       <div
@@ -133,7 +136,14 @@ const TextBubble: React.FC<{m: Extract<Msg, {kind: 'text'}>}> = ({m}) => {
           color: isUser ? BRAND.userText : BRAND.botText,
         }}
       >
-        <span style={{whiteSpace: 'pre-line'}}>{m.text}</span>
+        <span
+          style={{
+            whiteSpace: 'pre-line',
+            ...(isLink ? {textDecoration: 'underline', wordBreak: 'break-all', textUnderlineOffset: 6} : null),
+          }}
+        >
+          {m.text}
+        </span>
         <Stamp time={m.time} dark={isUser} />
       </div>
     </Row>
@@ -292,9 +302,10 @@ const AlertCard: React.FC<{m: Extract<Msg, {kind: 'alert'}>}> = ({m}) => {
     extrapolateRight: 'clamp',
   });
   const drop = m.was - m.now;
+  const pct = Math.round((drop / m.was) * 100);
   return (
     <Row align="left" enter={enter}>
-      <div style={{position: 'relative', maxWidth: '92%'}}>
+      <div style={{position: 'relative', maxWidth: '92%', width: '92%'}}>
         <div
           style={{
             position: 'absolute',
@@ -316,41 +327,41 @@ const AlertCard: React.FC<{m: Extract<Msg, {kind: 'alert'}>}> = ({m}) => {
             color: BRAND.botText,
           }}
         >
-          <div style={{display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 20}}>
-            <span style={{fontSize: 32, opacity: 0.9}}>{m.title}</span>
-            <Stamp time={m.time} />
-          </div>
+          <div style={{fontSize: 34, fontWeight: 600, marginBottom: 22}}>{m.title}</div>
           <div style={{display: 'flex', gap: 26, alignItems: 'center'}}>
-            <ProductImage img={m.img} size={200} />
-            <div>
-              <div style={{fontSize: 36, fontWeight: 600, marginBottom: 14, lineHeight: 1.25}}>{m.name}</div>
-              <div style={{fontSize: 32, opacity: 0.6, textDecoration: 'line-through'}}>{rub(m.was)}</div>
-              <div style={{fontFamily: display, fontSize: 64, fontWeight: 700, color: BRAND.cream}}>
-                {rub(m.now)}
+            <ProductImage img={m.img} size={190} />
+            <div style={{minWidth: 0}}>
+              <div style={{fontSize: 36, fontWeight: 600, marginBottom: 12, lineHeight: 1.25}}>{m.name}</div>
+              <div style={{display: 'flex', alignItems: 'baseline', gap: 18, flexWrap: 'wrap'}}>
+                <span style={{fontSize: 32, opacity: 0.55, textDecoration: 'line-through'}}>{rub(m.was)}</span>
+                <span style={{fontFamily: display, fontSize: 60, fontWeight: 700, color: BRAND.cream}}>
+                  {rub(m.now)}
+                </span>
+              </div>
+              <div
+                style={{
+                  marginTop: 14,
+                  display: 'inline-block',
+                  padding: '8px 22px',
+                  borderRadius: 100,
+                  background: `linear-gradient(120deg, ${BRAND.bright}, ${BRAND.deep})`,
+                  color: '#fff',
+                  fontFamily: display,
+                  fontSize: 32,
+                  fontWeight: 700,
+                }}
+              >
+                Скидка: {rub(drop)} (−{pct}%)
               </div>
             </div>
           </div>
-          <div
-            style={{
-              marginTop: 22,
-              display: 'inline-block',
-              padding: '12px 26px',
-              borderRadius: 100,
-              background: `linear-gradient(120deg, ${BRAND.bright}, ${BRAND.deep})`,
-              color: '#fff',
-              fontFamily: display,
-              fontSize: 38,
-              fontWeight: 700,
-            }}
-          >
-            −{rub(drop)}
-          </div>
           {m.items && m.items.length > 0 && (
-            <div style={{marginTop: 24, borderTop: '1px solid rgba(255,255,255,.10)', paddingTop: 18}}>
+            <div style={{marginTop: 24, borderTop: '1px solid rgba(255,255,255,.10)', paddingTop: 16}}>
+              <div style={{fontSize: 27, opacity: 0.5, marginBottom: 12, letterSpacing: '.03em'}}>ЕЩЁ В ВЫДАЧЕ</div>
               {m.items.map((it, i) => (
                 <div
                   key={i}
-                  style={{display: 'flex', justifyContent: 'space-between', fontSize: 32, opacity: 0.75, marginBottom: 10}}
+                  style={{display: 'flex', justifyContent: 'space-between', fontSize: 31, opacity: 0.75, marginBottom: 10}}
                 >
                   <span style={{overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', maxWidth: '68%'}}>
                     {it.name}
@@ -360,6 +371,44 @@ const AlertCard: React.FC<{m: Extract<Msg, {kind: 'alert'}>}> = ({m}) => {
               ))}
             </div>
           )}
+          {/* Ссылка на товар — в реальном алерте она в тексте сообщения; кнопка
+              графика — реальная inline-кнопка (notifier.go priceAlertKeyboard) */}
+          {m.link && (
+            <div style={{marginTop: 22, display: 'flex', flexDirection: 'column', gap: 12}}>
+              <div
+                style={{
+                  textAlign: 'center',
+                  padding: '20px 14px',
+                  borderRadius: 20,
+                  background: `linear-gradient(120deg, ${BRAND.berry}, ${BRAND.deep})`,
+                  color: '#fff',
+                  fontFamily: body,
+                  fontSize: 33,
+                  fontWeight: 700,
+                }}
+              >
+                🛒 Открыть товар · {m.link}
+              </div>
+              <div
+                style={{
+                  textAlign: 'center',
+                  padding: '18px 14px',
+                  borderRadius: 20,
+                  border: '2px solid rgba(255,255,255,.16)',
+                  background: 'rgba(255,255,255,.05)',
+                  color: BRAND.cream,
+                  fontFamily: body,
+                  fontSize: 31,
+                  fontWeight: 600,
+                }}
+              >
+                📈 График цены
+              </div>
+            </div>
+          )}
+          <div style={{display: 'flex', justifyContent: 'flex-end', marginTop: 14}}>
+            <Stamp time={m.time} />
+          </div>
         </div>
       </div>
     </Row>

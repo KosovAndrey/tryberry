@@ -68,10 +68,38 @@ export const Endcard: React.FC = () => {
         >
           Цену проверяет он, а не ты
         </div>
+        {/* Три мессенджера — как ряд бейджей в hero сайта */}
+        <div
+          style={{
+            display: 'flex',
+            justifyContent: 'center',
+            gap: 20,
+            marginTop: 40,
+            opacity: titleIn,
+          }}
+        >
+          {['Telegram', 'VK', 'MAX'].map((m) => (
+            <div
+              key={m}
+              style={{
+                padding: '14px 34px',
+                borderRadius: 100,
+                border: '2px solid rgba(255,255,255,.18)',
+                background: 'rgba(255,255,255,.06)',
+                fontFamily: body,
+                fontSize: 34,
+                fontWeight: 600,
+                color: BRAND.cream,
+              }}
+            >
+              {m}
+            </div>
+          ))}
+        </div>
         <div
           style={{
             display: 'inline-block',
-            marginTop: 44,
+            marginTop: 40,
             padding: '22px 54px',
             borderRadius: 100,
             background: `linear-gradient(120deg, ${BRAND.bright}, ${BRAND.deep})`,
@@ -86,7 +114,19 @@ export const Endcard: React.FC = () => {
         </div>
         <div
           style={{
-            marginTop: 56,
+            marginTop: 36,
+            fontFamily: display,
+            fontSize: 38,
+            fontWeight: 500,
+            color: BRAND.bright,
+            opacity: pillIn,
+          }}
+        >
+          tryberry.ru
+        </div>
+        <div
+          style={{
+            marginTop: 36,
             fontFamily: body,
             fontSize: 36,
             color: 'rgba(255,247,251,.75)',

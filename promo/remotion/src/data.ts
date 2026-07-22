@@ -1,12 +1,17 @@
 import {ChatData} from './ChatScene';
 
-// Демо-диалоги. Тексты бота и кнопки — РЕАЛЬНЫЕ, из кода бота:
-// internal/telegram/track.go (trackTriggerKeyboard, promptManualTarget,
-// подтверждение порога) и internal/telegram/search.go (стратегия для поиска).
-// Цифры товаров — ⟨ПОДСТАВИТЬ⟩ из scripts/sql/shorts-candidates.sql перед
-// финальным рендером; текущие — вёрсточные болванки.
+// Демо-диалоги. Тексты бота, кнопки и структура алерта — РЕАЛЬНЫЕ, из кода:
+// internal/telegram/track.go (trackTriggerKeyboard, promptManualTarget, порог),
+// internal/telegram/search.go (стратегия поиска), internal/telegram/notifier.go
+// («📉 Цена снизилась!», «Скидка: N ₽ (P%)», ссылка на товар в тексте,
+// кнопка «📈 График цены»).
+//
+// Модели и фото — ⟨ПОДСТАВИТЬ⟩: финальные берём из shorts-candidates.sql,
+// фото кладём в public/products/ (брендовый дуотон применится сам).
+// Разрыв времени НАМЕРЕННО без конкретики («спустя несколько часов») — момент
+// падения цены мы не контролируем, обещать «6 дней» или «час» нельзя.
 
-// ── C1/C4: товар. Полный флоу: ссылка → стратегия → порог → [дни] → алерт ──
+// ── C1/C4: товар. Полный флоу: ссылка → стратегия → порог → [часы] → алерт ──
 export const alertDemo: ChatData = {
   title: 'TryBerry',
   messages: [
@@ -16,7 +21,7 @@ export const alertDemo: ChatData = {
       from: 'bot',
       at: 2.4,
       time: '10:21',
-      text: '✅ Отслеживаю: Наушники Sonic Air Pro\n12 990 ₽ · Wildberries\n\n🔻 уведомлю при любом снижении цены',
+      text: '✅ Отслеживаю: Наушники Sonic Air Pro 2\n12 990 ₽ · Wildberries\n\n🔻 уведомлю при любом снижении цены',
       buttons: [
         ['✓ 🔻 Любое снижение'],
         ['📉 Ниже цены', '％ Скидка %'],
@@ -31,30 +36,32 @@ export const alertDemo: ChatData = {
       time: '10:21',
       text: '💰 Введи целевую цену в рублях (например 1499).\nУведомлю, когда цена опустится до неё или ниже.',
     },
-    {kind: 'text', from: 'user', at: 7.2, time: '10:22', text: '9 990'},
+    // Порог круглый — как ставят живые люди.
+    {kind: 'text', from: 'user', at: 7.2, time: '10:22', text: '10 000'},
     {
       kind: 'text',
       from: 'bot',
       at: 8.6,
       time: '10:22',
-      text: '✅ Порог 9 990 ₽ установлен.\n📉 уведомлю, когда цена опустится ниже 9 990 ₽',
+      text: '✅ Порог 10 000 ₽ установлен.\n📉 уведомлю, когда цена опустится ниже 10 000 ₽',
     },
     // Разрыв времени — сердце сообщения: дальше смотрит ОН, а не ты.
-    {kind: 'daybreak', at: 10.6, label: 'спустя 6 дней · 134 проверки цены'},
+    {kind: 'daybreak', at: 10.6, label: 'спустя несколько часов'},
     {
       kind: 'alert',
       at: 12.2,
-      time: '09:12',
-      title: '🔔 Цена упала',
-      name: 'Наушники Sonic Air Pro',
+      time: '17:48',
+      title: '📉 Цена снизилась!',
+      name: 'Наушники Sonic Air Pro 2',
       was: 12990,
       now: 9490,
-      // img: 'products/headphones.png' — положить стилизованное фото в public/
+      link: 'wildberries.ru/catalog/2049…',
+      // img: 'products/headphones.png',
     },
   ],
 };
 
-// ── C2 (ядро): поиск. Ссылка на ВЫДАЧУ → стратегия → [дни] → мульти-алерт ──
+// ── C2 (ядро): поиск. Ссылка на ВЫДАЧУ → стратегия → [часы] → мульти-алерт ──
 export const searchDemo: ChatData = {
   title: 'TryBerry',
   messages: [
@@ -64,7 +71,7 @@ export const searchDemo: ChatData = {
       from: 'bot',
       at: 2.4,
       time: '19:04',
-      text: '🔎 Это поиск, а не товар — слежу за ВСЕЙ выдачей.\n\nКак уведомлять о снижении цены?',
+      text: '🔎 Поиск: «наушники беспроводные» — слежу за всей выдачей, не за одним товаром.\n\nЕсли подборка устраивает — выбери, как уведомлять, и я начну следить 👇',
       buttons: [['🔻 Любое снижение'], ['📉 Ниже цены']],
       press: {row: 1, col: 0, at: 4.4},
     },
@@ -76,19 +83,21 @@ export const searchDemo: ChatData = {
       text: '💰 Введи целевую цену в рублях (например 59990).\nУведомлю, когда найдётся товар дешевле.',
     },
     {kind: 'text', from: 'user', at: 7.2, time: '19:05', text: '5 000'},
-    {kind: 'daybreak', at: 9.2, label: 'спустя 3 дня · 87 проверок выдачи'},
+    {kind: 'daybreak', at: 9.2, label: 'спустя несколько часов'},
     {
       kind: 'alert',
       at: 10.8,
-      time: '08:40',
+      time: '23:17',
       title: '🔎 Найдено дешевле 5 000 ₽',
-      name: 'TWS-наушники AirBuds S',
+      name: 'Наушники Redmi Buds 6 Active', // ⟨ПОДСТАВИТЬ⟩ модель из выдачи
       was: 6490,
       now: 4290,
+      link: 'wildberries.ru/catalog/1187…',
       items: [
-        {name: 'Наушники Soundcore P3', price: 4790},
-        {name: 'TWS Redmi Buds 5', price: 4990},
+        {name: 'Soundcore P3 by Anker', price: 4790},
+        {name: 'QCY MeloBuds T13', price: 4990},
       ],
+      // img: 'products/redmi-buds.png',
     },
   ],
 };
