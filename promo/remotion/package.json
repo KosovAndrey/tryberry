@@ -1,0 +1,23 @@
+{
+  "name": "tryberry-promo-remotion",
+  "private": true,
+  "version": "1.0.0",
+  "description": "Переиспользуемые видео-ассеты для промо-шортсов tryberrybot: стилизованный чат бота и карточки-алерты, рендерятся кодом (см. docs/PROMO-SHORTS-PLAN.md §4).",
+  "scripts": {
+    "dev": "remotion studio",
+    "render": "remotion render",
+    "bundle": "remotion bundle",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@remotion/cli": "4.0.496",
+    "@remotion/google-fonts": "4.0.496",
+    "react": "18.3.1",
+    "react-dom": "18.3.1",
+    "remotion": "4.0.496"
+  },
+  "devDependencies": {
+    "@types/react": "18.3.12",
+    "typescript": "5.6.3"
+  }
+}

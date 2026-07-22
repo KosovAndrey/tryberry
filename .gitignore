@@ -73,3 +73,6 @@ render/iphone/assets/
 *.glb
 *.fbx
 /seed-loadtest
+promo/remotion/node_modules/
+promo/remotion/out/
+promo/remotion/build/

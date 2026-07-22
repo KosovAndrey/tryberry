@@ -46,10 +46,53 @@
 | B2 | Подложка-титр | Анимированная плашка для текстов поверх футажа | ⬜ |
 | B3 | Прайс-каунтер | Анимация цифр «4 720 ₽ → 2 890 ₽» (шаблон с подставляемыми числами) | ⬜ |
 
-## H. AI-хуки (Seedance/Kling, промпты в сценариях батчей)
+## H. AI-сцены (Seedance/Kling) — БЕЗЛИКИЙ переиспользуемый b-roll
 
-Генерятся под конкретный сценарий, но удачные складываем сюда и переиспользуем
-(H1, H2, ...). Правила промптов — в скилле `tryberry-shorts`.
+Правило разделения (канон §4): диффузия трогает **только фон** — руки, предметы,
+среда, эмоция без реплик. Она НЕ рисует наш интерфейс, НЕ показывает текст в
+кадре, НЕ ведёт одного персонажа через ролик (лицо «плывёт» между генерациями).
+Продукт = Remotion-рендер (блок P) + график-страница; текст = титры на монтаже.
+
+Генерим по одному разу 5-сек клипы, складываем сюда, режем во все батчи. Один
+клип закрывает хук ИЛИ связку в десятках роликов — меняются титры и порядок.
+Все промпты: вертикаль 9:16, 5 сек, без говорящих ртов, без читаемого текста.
+
+| ID | Клип | EN-промпт | Куда | Статус |
+|---|---|---|---|---|
+| H1 | Руки с телефоном, скролл ленты | `Vertical 9:16. Close-up of hands scrolling endlessly on a smartphone, screen glow on fingers, dim room, cinematic, shallow depth of field, no readable text on screen.` | C1, C2, джебы | ⬜ |
+| H2 | Посылка на столе, распаковка | `Vertical 9:16. Hands unboxing a plain cardboard parcel on a table, top-down, soft natural light, documentary style, no logos, no text.` | C3, C4 | ⬜ |
+| H3 | Телефон экраном вниз + кофе | `Vertical 9:16. A phone lies face down next to a coffee cup, morning light, a person moves in soft-focus background, calm, warm tones, no text.` | джеб «не проверяю цены» | ⬜ |
+| H4 | Лицо в свете экрана, вечер | `Vertical 9:16. A person lies in bed at night, face lit only by a phone screen, slow zoom on tired eyes, moody teal grading, no text.` | C1, C5 | ⬜ |
+| H5 | Календарь, отрывают дни | `Vertical 9:16. Calendar pages being torn off rapidly, dramatic side light, shallow depth of field, cinematic, no readable text.` | C1, C5 | ⬜ |
+| H6 | Полки склада, ряды коробок | `Vertical 9:16. Slow dolly through warehouse shelves stacked with plain boxes, cool light, cinematic, anonymous, no logos or text.` | C4, C1 | ⬜ |
+| H7 | Палец завис над «Купить» | `Vertical 9:16. Extreme close-up of a thumb hovering hesitantly over a phone screen button, blurred UI, tension, cinematic, no readable text.` | C3, C5 | ⬜ |
+| H8 | Корзина вещей на столе | `Vertical 9:16. Top-down of assorted everyday products laid out on a table being sorted into two piles by hands, soft light, no logos, no text.` | C3 | ⬜ |
+| H9 | Человек со спины у окна | `Vertical 9:16. A person seen from behind looking out a window holding a phone, natural backlight, contemplative, cinematic, faceless, no text.` | джебы, C5 | ⬜ |
+| H10 | Уведомление светит в темноте | `Vertical 9:16. A phone on a nightstand lights up with a notification in a dark room, glow spills onto the table, cinematic, no readable text.` | C1, C4 | ⬜ |
+| H11 | Много открытых вкладок | `Vertical 9:16. Fast cuts of switching between many browser tabs and apps on a phone, accelerating, motion blur, no readable text.` | C2, джебы | ⬜ |
+| H12 | Руки считают на калькуляторе | `Vertical 9:16. Hands tapping numbers on a calculator next to a phone and receipts, top-down, warm light, no readable digits.` | C6, C1 | ⬜ |
+| H13 | Кофейня, кто-то смотрит в телефон | `Vertical 9:16. A person at a bright cafe looking at a phone, expression shifting, slow push-in, natural window light, no text.` | C2, джебы | ⬜ |
+| H14 | Смахивающий монтаж витрины | `Vertical 9:16. Abstract swipe transitions over blurred product-grid colors and price tags, fast rhythmic motion, no readable text.` | связки везде | ⬜ |
+| H15 | Спокойные руки, чай, покой | `Vertical 9:16. Hands wrapped around a warm mug, unhurried, soft home light, phone untouched on the table, cozy, cinematic, no text.` | джеб «живу спокойно» | ⬜ |
+
+Ещё 5 слотов (H16–H20) держим под удачные хуки из будущих батчей.
+
+## P. Продукт кодом — Remotion (`promo/remotion/`)
+
+Стилизованный фирменный чат бота и карточки-алертов, отрендеренные из HTML/React,
+а не снятые с экрана. База — тот же приём, что в hero-чате сайта; палитра и
+шрифты совпадают с tryberry.ru (`brand.ts`). Меняешь данные диалога (`src/data.ts`)
+→ перерендериваешь: один шаблон = любой диалог. Держит красную линию — контейнер
+стилизован, но тексты и поведение бота настоящие.
+
+| ID | Композиция | Содержание | Статус |
+|---|---|---|---|
+| P1 | `ChatAlert` | «кинул ссылку → пришёл алерт было→стало −N₽» (C1/C4) | ✅ шаблон |
+| P2 | `ChatSearch` | подписка на ВЫДАЧУ, не на товар (C2, ядро) | ✅ шаблон |
+
+Рендер: `npm run render <id> out/<id>.mp4` (нужен headless-Chrome, разовая
+установка системных либ — см. `promo/remotion/README.md`). График остаётся
+отдельным ассетом (блок G) — он уже страница `/p/<public_id>`.
 
 ## Сборка (Premiere/AE/CapCut)
 
