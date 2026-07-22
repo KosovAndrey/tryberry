@@ -64,9 +64,11 @@ export const Endcard: React.FC = () => {
             color: BRAND.rose,
             marginTop: 18,
             opacity: titleIn,
+            whiteSpace: 'pre-line',
+            lineHeight: 1.3,
           }}
         >
-          Цену проверяет он, а не ты
+          {'Проверять цены вручную\nбольше не нужно'}
         </div>
         {/* Три мессенджера — как ряд бейджей в hero сайта */}
         <div

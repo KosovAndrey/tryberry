@@ -46,6 +46,19 @@ export type Msg =
       img?: string;
       link?: string; // ссылка на товар — в реальном алерте она есть в тексте
       items?: {name: string; price: number}[]; // хвост поисковой выдачи
+      chartPressAt?: number; // сек: анимация нажатия «📈 График цены»
+    }
+  | {
+      // Упрощённый график истории цены — как на /p/, но в пузыре чата.
+      // Цвета = сайт (chart.js): линия berry, опорные good/gold пунктиром
+      // с подписями (не только цветом — подписи обязательны).
+      kind: 'chart';
+      at: number;
+      time?: string;
+      series: number[]; // цены по времени, последняя = текущая
+      min: number; // опорная «минимум» (good)
+      usual: number; // опорная «обычная» (gold)
+      caption: string; // «История цены · 90 дней»
     };
 
 export type ChatData = {title: string; messages: Msg[]};
@@ -62,6 +75,8 @@ const estHeight = (m: Msg): number => {
       return 110;
     case 'alert':
       return 800 + (m.items?.length ?? 0) * 104;
+    case 'chart':
+      return 560;
   }
 };
 
@@ -389,26 +404,174 @@ const AlertCard: React.FC<{m: Extract<Msg, {kind: 'alert'}>}> = ({m}) => {
               >
                 🛒 Открыть товар · {m.link}
               </div>
-              <div
-                style={{
-                  textAlign: 'center',
-                  padding: '18px 14px',
-                  borderRadius: 20,
-                  border: '2px solid rgba(255,255,255,.16)',
-                  background: 'rgba(255,255,255,.05)',
-                  color: BRAND.cream,
-                  fontFamily: body,
-                  fontSize: 31,
-                  fontWeight: 600,
-                }}
-              >
-                📈 График цены
-              </div>
+              {(() => {
+                // Симуляция нажатия «График цены» (chartPressAt) — как в ButtonsBubble
+                const p = m.chartPressAt
+                  ? spring({frame: frame - m.chartPressAt * fps, fps, config: {damping: 12, mass: 0.5}})
+                  : 0;
+                const active = m.chartPressAt !== undefined && frame >= m.chartPressAt * fps;
+                return (
+                  <div
+                    style={{
+                      textAlign: 'center',
+                      padding: '18px 14px',
+                      borderRadius: 20,
+                      border: `2px solid ${active ? BRAND.bright : 'rgba(255,255,255,.16)'}`,
+                      background: active
+                        ? `linear-gradient(120deg, ${BRAND.berry}, ${BRAND.deep})`
+                        : 'rgba(255,255,255,.05)',
+                      color: BRAND.cream,
+                      fontFamily: body,
+                      fontSize: 31,
+                      fontWeight: 600,
+                      transform: `scale(${1 + 0.06 * Math.sin(Math.min(p, 1) * Math.PI)})`,
+                    }}
+                  >
+                    📈 График цены
+                  </div>
+                );
+              })()}
             </div>
           )}
           <div style={{display: 'flex', justifyContent: 'flex-end', marginTop: 14}}>
             <Stamp time={m.time} />
           </div>
+        </div>
+      </div>
+    </Row>
+  );
+};
+
+// Упрощённый график истории цены — оформление 1в1 с /p/ (web/assets/chart.js):
+// линия BERRY c заливкой, опорные «минимум»(good)/«обычная»(gold) пунктиром,
+// сетка едва заметная, маркер последней точки как cursor-point сайта.
+const CHART = {
+  berry: '#e8336c',
+  berryHi: '#ff5d8f',
+  grid: 'rgba(232,51,108,.10)',
+  good: '#3fe0a8',
+  gold: '#ffc24a',
+  fill: 'rgba(232,51,108,.10)',
+};
+
+const ChartBubble: React.FC<{m: Extract<Msg, {kind: 'chart'}>}> = ({m}) => {
+  const frame = useCurrentFrame();
+  const {fps} = useVideoConfig();
+  const enter = useEnter(m.at);
+  const local = frame - m.at * fps;
+  // Линия отрисовывается слева направо ~1.4с, затем маркер и опорные.
+  const draw = interpolate(local, [6, 48], [0, 1], {extrapolateLeft: 'clamp', extrapolateRight: 'clamp'});
+  const refsIn = interpolate(local, [30, 52], [0, 1], {extrapolateLeft: 'clamp', extrapolateRight: 'clamp'});
+  const markerIn = spring({frame: local - 46, fps, config: {damping: 10, mass: 0.5}});
+
+  const W = 820;
+  const H = 400;
+  const PAD = {l: 26, r: 26, t: 30, b: 34};
+  const lo = Math.min(...m.series, m.min) * 0.97;
+  const hi = Math.max(...m.series, m.usual) * 1.04;
+  const x = (i: number) => PAD.l + (i / (m.series.length - 1)) * (W - PAD.l - PAD.r);
+  const y = (v: number) => PAD.t + (1 - (v - lo) / (hi - lo)) * (H - PAD.t - PAD.b);
+  const pts = m.series.map((v, i) => `${x(i)},${y(v)}`);
+  const line = `M ${pts.join(' L ')}`;
+  const area = `${line} L ${x(m.series.length - 1)},${H - PAD.b} L ${x(0)},${H - PAD.b} Z`;
+  const last = m.series[m.series.length - 1];
+
+  const refLine = (v: number, color: string, label: string) => (
+    <>
+      <line
+        x1={PAD.l}
+        y1={y(v)}
+        x2={W - PAD.r}
+        y2={y(v)}
+        stroke={color}
+        strokeWidth={2.5}
+        strokeDasharray="12 10"
+        opacity={refsIn * 0.75}
+      />
+      <text
+        x={PAD.l + 4}
+        y={y(v) - 10}
+        fill={color}
+        opacity={refsIn * 0.95}
+        style={{fontFamily: body, fontSize: 24, fontWeight: 600}}
+      >
+        {label}
+      </text>
+    </>
+  );
+
+  return (
+    <Row align="left" enter={enter}>
+      <div
+        style={{
+          width: '92%',
+          padding: '28px 24px 18px',
+          borderRadius: BRAND.radius,
+          borderBottomLeftRadius: 10,
+          background: BRAND.botBubble,
+          border: '1px solid rgba(232,51,108,.25)',
+        }}
+      >
+        <div
+          style={{
+            fontFamily: body,
+            fontSize: 31,
+            fontWeight: 600,
+            color: BRAND.botText,
+            margin: '0 10px 16px',
+          }}
+        >
+          {m.caption}
+        </div>
+        <svg width="100%" viewBox={`0 0 ${W} ${H}`}>
+          {/* сетка — рецессивная, как на сайте */}
+          {[0.25, 0.5, 0.75].map((t) => (
+            <line
+              key={t}
+              x1={PAD.l}
+              y1={PAD.t + t * (H - PAD.t - PAD.b)}
+              x2={W - PAD.r}
+              y2={PAD.t + t * (H - PAD.t - PAD.b)}
+              stroke={CHART.grid}
+              strokeWidth={1.5}
+            />
+          ))}
+          <path d={area} fill={CHART.fill} opacity={draw} />
+          <path
+            d={line}
+            fill="none"
+            stroke={CHART.berry}
+            strokeWidth={5}
+            strokeLinejoin="round"
+            strokeLinecap="round"
+            pathLength={1}
+            strokeDasharray={1}
+            strokeDashoffset={1 - draw}
+          />
+          {refLine(m.usual, CHART.gold, `обычная ${rub(m.usual)}`)}
+          {refLine(m.min, CHART.good, `минимум ${rub(m.min)}`)}
+          {/* маркер последней цены — как cursor-point uPlot на сайте */}
+          <circle
+            cx={x(m.series.length - 1)}
+            cy={y(last)}
+            r={11 * Math.min(markerIn, 1.15)}
+            fill={CHART.berryHi}
+            stroke={BRAND.bg}
+            strokeWidth={4}
+          />
+          <text
+            x={x(m.series.length - 1) - 16}
+            y={y(last) - 24}
+            textAnchor="end"
+            fill={BRAND.cream}
+            opacity={Math.min(markerIn, 1)}
+            style={{fontFamily: display, fontSize: 34, fontWeight: 700}}
+          >
+            {rub(last)}
+          </text>
+        </svg>
+        <div style={{display: 'flex', justifyContent: 'flex-end', marginTop: 6, paddingRight: 10}}>
+          <Stamp time={m.time} />
         </div>
       </div>
     </Row>
@@ -468,7 +631,7 @@ export const ChatScene: React.FC<ChatData> = ({title, messages}) => {
   const showTyping =
     next &&
     next.kind !== 'daybreak' &&
-    (next.kind === 'alert' || next.from === 'bot') &&
+    (next.kind === 'alert' || next.kind === 'chart' || next.from === 'bot') &&
     now >= next.at - TYPING_SEC;
 
   // Плавный сдвиг ленты: компенсируем мгновенный прыжок flex-end пружиной.
@@ -498,6 +661,8 @@ export const ChatScene: React.FC<ChatData> = ({title, messages}) => {
                   return <Daybreak key={i} m={m} />;
                 case 'alert':
                   return <AlertCard key={i} m={m} />;
+                case 'chart':
+                  return <ChartBubble key={i} m={m} />;
               }
             })}
             {showTyping && <TypingBubble />}
