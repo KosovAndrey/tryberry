@@ -54,7 +54,7 @@ export const alertIphone: ChatData = {
       now: 71305,
       buy: 'Купить на Ozon за 71 305 ₽ →',
       secondary: {label: '📈 График цены', pressAt: 14.8},
-      // img: 'products/iphone.png',
+      img: 'products/iphone.png',
     },
     {
       kind: 'chart',
@@ -69,7 +69,8 @@ export const alertIphone: ChatData = {
   ],
 };
 
-// ── A2. Наушники, товарный алерт (утро → вечер) ──
+// ── A2. AirPods Pro 3, товарный алерт (утро → вечер) ──
+// Цифры от владельца: было ~18 тыс., уведомление 13 216 ₽, порог круглый 14 000.
 export const alertBuds: ChatData = {
   title: 'TryBerry',
   messages: [
@@ -79,7 +80,7 @@ export const alertBuds: ChatData = {
       from: 'bot',
       at: 2.4,
       time: '08:47',
-      text: '✅ Отслеживаю: Наушники Redmi Buds 6 Active\n6 490 ₽ · Wildberries\n\n🔻 уведомлю при любом снижении цены',
+      text: '✅ Отслеживаю: Apple AirPods Pro 3\n17 990 ₽ · Wildberries\n\n🔻 уведомлю при любом снижении цены',
       buttons: [['✓ 🔻 Любое снижение'], ['📉 Ниже цены', '％ Скидка %'], ['📈 График цены']],
       press: {row: 1, col: 0, at: 4.4},
     },
@@ -90,36 +91,36 @@ export const alertBuds: ChatData = {
       time: '08:47',
       text: '💰 Введи целевую цену в рублях (например 1499).\nУведомлю, когда цена опустится до неё или ниже.',
     },
-    {kind: 'text', from: 'user', at: 7.2, time: '08:48', text: '5 000'},
+    {kind: 'text', from: 'user', at: 7.2, time: '08:48', text: '14 000'},
     {
       kind: 'text',
       from: 'bot',
       at: 8.6,
       time: '08:48',
-      text: '✅ Порог 5 000 ₽ установлен.\n📉 уведомлю, когда цена опустится ниже 5 000 ₽',
+      text: '✅ Порог 14 000 ₽ установлен.\n📉 уведомлю, когда цена опустится ниже 14 000 ₽',
     },
     {kind: 'daybreak', at: 10.6, label: 'спустя несколько часов'},
     {
       kind: 'alert',
       at: 12.2,
       time: '18:05',
-      title: '🎯 Ниже твоего порога — 5 000 ₽',
-      name: 'Наушники Redmi Buds 6 Active', // ⟨ПОДСТАВИТЬ⟩
-      was: 6490,
-      now: 4290,
-      buy: 'Купить на WB за 4 290 ₽ →',
+      title: '🎯 Ниже твоего порога — 14 000 ₽',
+      name: 'Apple AirPods Pro 3',
+      was: 17990,
+      now: 13216,
+      buy: 'Купить на WB за 13 216 ₽ →',
       secondary: {label: '📈 График цены', pressAt: 14.8},
-      // img: 'products/buds.png',
+      img: 'products/airpods.png',
     },
     {
       kind: 'chart',
       at: 16.0,
       time: '18:06',
       caption: '📈 История цены · 90 дней',
-      series: [6290, 6290, 6090, 6490, 5990, 5790, 5990, 6290, 6490, 6290, 6690, 6390, 4290],
-      usual: 6300,
-      min: 4290,
-      note: 'Обычно ~6 300 ₽. Сейчас 4 290 ₽ — дешевле не было · Wildberries',
+      series: [17990, 17990, 17490, 18490, 16990, 16490, 16990, 17490, 17990, 17490, 18990, 17490, 13216],
+      usual: 17500,
+      min: 13216,
+      note: 'Обычно ~17 500 ₽. Сейчас 13 216 ₽ — дешевле не было · Wildberries',
     },
   ],
 };
@@ -162,22 +163,22 @@ export const searchIphone: ChatData = {
         {name: 'iPhone 17 Pro Max 256 ГБ (ростест)', price: 72990},
         {name: 'Apple iPhone 17 Pro Max 256GB, White', price: 74490},
       ],
-      // img: 'products/iphone.png',
+      img: 'products/iphone.png',
     },
   ],
 };
 
-// ── S2. Наушники, подписка на ВЫДАЧУ (утро → вечер) ──
+// ── S2. AirPods Pro 3, подписка на ВЫДАЧУ (утро → вечер) ──
 export const searchBuds: ChatData = {
   title: 'TryBerry',
   messages: [
-    {kind: 'text', from: 'user', at: 0.5, time: '09:14', text: 'wildberries.ru/…search=наушники беспроводные'},
+    {kind: 'text', from: 'user', at: 0.5, time: '09:14', text: 'wildberries.ru/…search=airpods pro 3'},
     {
       kind: 'buttons',
       from: 'bot',
       at: 2.4,
       time: '09:14',
-      text: '🔎 Поиск: «наушники беспроводные» — слежу за всей выдачей, не за одним товаром.\n\nЕсли подборка устраивает — выбери, как уведомлять, и я начну следить 👇',
+      text: '🔎 Поиск: «airpods pro 3» — слежу за всей выдачей, не за одним товаром.\n\nЕсли подборка устраивает — выбери, как уведомлять, и я начну следить 👇',
       buttons: [['🔻 Любое снижение'], ['📉 Ниже цены']],
       press: {row: 1, col: 0, at: 4.4},
     },
@@ -188,24 +189,24 @@ export const searchBuds: ChatData = {
       time: '09:14',
       text: '💰 Введи целевую цену в рублях (например 59990).\nУведомлю, когда найдётся товар дешевле.',
     },
-    {kind: 'text', from: 'user', at: 7.2, time: '09:15', text: '5 000'},
+    {kind: 'text', from: 'user', at: 7.2, time: '09:15', text: '14 000'},
     {kind: 'daybreak', at: 9.2, label: 'спустя несколько часов'},
     {
       kind: 'alert',
       at: 10.8,
       time: '18:12',
-      title: '🔎 По запросу «наушники беспроводные» подешевело 3 товара',
-      name: 'Наушники Redmi Buds 6 Active', // ⟨ПОДСТАВИТЬ⟩
-      was: 6490,
-      now: 4290,
-      buy: 'Купить на WB за 4 290 ₽ →',
+      title: '🔎 По запросу «airpods pro 3» подешевело 3 товара',
+      name: 'Apple AirPods Pro 3',
+      was: 17990,
+      now: 13216,
+      buy: 'Купить на WB за 13 216 ₽ →',
       secondary: {label: '🔎 Открыть выдачу'},
       itemsTitle: 'Ещё варианты',
       items: [
-        {name: 'Наушники TWS Redmi Buds 6 Active', price: 4490},
-        {name: 'Xiaomi Redmi Buds 6 Active, black', price: 4590},
+        {name: 'AirPods Pro 3 (USB-C)', price: 13490},
+        {name: 'Наушники Apple AirPods Pro 3', price: 13790},
       ],
-      // img: 'products/buds.png',
+      img: 'products/airpods.png',
     },
   ],
 };

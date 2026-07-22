@@ -261,8 +261,9 @@ const Daybreak: React.FC<{m: Extract<Msg, {kind: 'daybreak'}>}> = ({m}) => {
   );
 };
 
-// Брендовый глиф товара (наушники) — когда нет фото. Дуотон под палитру.
-const ProductGlyph: React.FC<{size: number}> = ({size}) => (
+// Брендовый глиф товара — фолбэк, когда нет фото. Телефон или наушники —
+// по названию товара (айфону наушники не рисуем).
+const ProductGlyph: React.FC<{size: number; kind: 'phone' | 'buds'}> = ({size, kind}) => (
   <svg width={size} height={size} viewBox="0 0 100 100">
     <defs>
       <linearGradient id="pg" x1="0" y1="0" x2="1" y2="1">
@@ -270,19 +271,29 @@ const ProductGlyph: React.FC<{size: number}> = ({size}) => (
         <stop offset="100%" stopColor={BRAND.deep} />
       </linearGradient>
     </defs>
-    <path
-      d="M20 62 v-8 a30 30 0 0 1 60 0 v8"
-      fill="none"
-      stroke="url(#pg)"
-      strokeWidth="9"
-      strokeLinecap="round"
-    />
-    <rect x="12" y="58" width="18" height="30" rx="9" fill="url(#pg)" />
-    <rect x="70" y="58" width="18" height="30" rx="9" fill="url(#pg)" />
+    {kind === 'phone' ? (
+      <>
+        <rect x="28" y="10" width="44" height="80" rx="10" fill="none" stroke="url(#pg)" strokeWidth="7" />
+        <line x1="42" y1="20" x2="58" y2="20" stroke="url(#pg)" strokeWidth="6" strokeLinecap="round" />
+        <circle cx="50" cy="79" r="4.5" fill="url(#pg)" />
+      </>
+    ) : (
+      <>
+        <path
+          d="M20 62 v-8 a30 30 0 0 1 60 0 v8"
+          fill="none"
+          stroke="url(#pg)"
+          strokeWidth="9"
+          strokeLinecap="round"
+        />
+        <rect x="12" y="58" width="18" height="30" rx="9" fill="url(#pg)" />
+        <rect x="70" y="58" width="18" height="30" rx="9" fill="url(#pg)" />
+      </>
+    )}
   </svg>
 );
 
-const ProductImage: React.FC<{img?: string; size: number}> = ({img, size}) => (
+const ProductImage: React.FC<{img?: string; size: number; glyph: 'phone' | 'buds'}> = ({img, size, glyph}) => (
   <div
     style={{
       width: size,
@@ -314,7 +325,7 @@ const ProductImage: React.FC<{img?: string; size: number}> = ({img, size}) => (
         />
       </div>
     ) : (
-      <ProductGlyph size={size * 0.72} />
+      <ProductGlyph size={size * 0.72} kind={glyph} />
     )}
   </div>
 );
@@ -356,7 +367,11 @@ const AlertCard: React.FC<{m: Extract<Msg, {kind: 'alert'}>}> = ({m}) => {
         >
           <div style={{fontSize: 34, fontWeight: 600, marginBottom: 22}}>{m.title}</div>
           <div style={{display: 'flex', gap: 26, alignItems: 'center'}}>
-            <ProductImage img={m.img} size={190} />
+            <ProductImage
+              img={m.img}
+              size={190}
+              glyph={/iphone|телефон|смартфон/i.test(m.name) ? 'phone' : 'buds'}
+            />
             <div style={{minWidth: 0}}>
               <div style={{fontSize: 36, fontWeight: 600, marginBottom: 12, lineHeight: 1.25}}>{m.name}</div>
               <div style={{display: 'flex', alignItems: 'baseline', gap: 18, flexWrap: 'wrap'}}>
@@ -652,7 +667,11 @@ const Header: React.FC<{title: string}> = ({title}) => (
     <Img src={staticFile('logo.png')} style={{width: 76, height: 76, borderRadius: 22}} />
     <div>
       <div style={{fontFamily: display, fontWeight: 700, fontSize: 40, color: BRAND.cream}}>{title}</div>
-      <div style={{fontFamily: body, fontSize: 28, color: BRAND.bright}}>в сети · слежу за ценами</div>
+      <div style={{display: 'flex', alignItems: 'center', gap: 12}}>
+        {/* зелёная точка «онлайн» — как в настоящем мессенджере */}
+        <div style={{width: 14, height: 14, borderRadius: 7, background: '#3fe0a8'}} />
+        <span style={{fontFamily: body, fontSize: 28, color: BRAND.bright}}>в сети · слежу за ценами</span>
+      </div>
     </div>
   </div>
 );
