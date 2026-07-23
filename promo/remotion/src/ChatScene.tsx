@@ -67,7 +67,17 @@ export type Msg =
       note?: string; // подпись под графиком, как в hero: «Обычно ~87 000 ₽…»
     };
 
-export type ChatData = {title: string; messages: Msg[]};
+// Камера: ключи наездов (панчи на карточку/цену). Между ключами — пружина.
+export type CamKey = {at: number; scale: number; y?: number};
+
+export type ChatData = {
+  title: string;
+  messages: Msg[];
+  // «Новый формат» удержания (см. batch-02 / фидбек друзей):
+  coldOpenSec?: number; // cold open: показать алерт-награду ДО флоу, N сек
+  camera?: CamKey[]; // зум-панчи; поверх всегда лёгкий дрейф
+  typingOnlyAlert?: boolean; // typing только перед алертом (минус мёртвое время)
+};
 
 // Оценка высоты сообщения — для плавного сдвига ленты вверх (реальную высоту
 // до рендера не узнать; на глаз с запасом, расхождение съедает пружина).
@@ -676,56 +686,108 @@ const Header: React.FC<{title: string}> = ({title}) => (
   </div>
 );
 
-export const ChatScene: React.FC<ChatData> = ({title, messages}) => {
+export const ChatScene: React.FC<ChatData> = ({title, messages, coldOpenSec, camera, typingOnlyAlert}) => {
   const frame = useCurrentFrame();
   const {fps} = useVideoConfig();
-  const now = frame / fps;
+
+  // Cold open: N секунд показываем НАГРАДУ (алерт крупно), потом флоу.
+  // Открытая петля: зритель уже видел деньги — досматривает, как к ним пришли.
+  const coldFrames = (coldOpenSec ?? 0) * fps;
+  const inColdOpen = coldFrames > 0 && frame < coldFrames;
+  const chatFrame = Math.max(frame - coldFrames, 0);
+  const now = chatFrame / fps;
+
+  const alertMsg = messages.find((m): m is Extract<Msg, {kind: 'alert'}> => m.kind === 'alert');
 
   const visible = messages.filter((m) => m.at <= now);
-  // Типинг: перед ближайшим будущим сообщением бота (кроме daybreak/alert по вкусу
-  // показываем и перед алертом — он тоже «приходит от бота»).
   const next = messages.find((m) => m.at > now);
   const showTyping =
     next &&
     next.kind !== 'daybreak' &&
-    (next.kind === 'alert' || next.kind === 'chart' || next.from === 'bot') &&
+    (typingOnlyAlert
+      ? next.kind === 'alert'
+      : next.kind === 'alert' || next.kind === 'chart' || next.from === 'bot') &&
     now >= next.at - TYPING_SEC;
 
   // Плавный сдвиг ленты: компенсируем мгновенный прыжок flex-end пружиной.
   let shift = 0;
   for (const m of visible) {
-    const s = spring({frame: frame - m.at * fps, fps, config: {damping: 16, mass: 0.6}});
+    const s = spring({frame: chatFrame - m.at * fps, fps, config: {damping: 16, mass: 0.6}});
     shift += estHeight(m) * (1 - s);
   }
+
+  // Камера: пружинный блендинг по ключам + постоянный лёгкий дрейф (статичный
+  // кадр дольше 2 сек не держит — правило из реестра ассетов).
+  let camScale = 1;
+  let camY = 0;
+  for (const k of camera ?? []) {
+    const s = spring({frame: chatFrame - k.at * fps, fps, config: {damping: 15, mass: 0.8}});
+    camScale += (k.scale - camScale) * s;
+    camY += ((k.y ?? 0) - camY) * s;
+  }
+  const drift = 1 + 0.004 * now;
+
+  // Вспышка на стыке cold open → чат
+  const flash =
+    coldFrames > 0
+      ? interpolate(frame, [coldFrames - 3, coldFrames, coldFrames + 6], [0, 0.8, 0], {
+          extrapolateLeft: 'clamp',
+          extrapolateRight: 'clamp',
+        })
+      : 0;
 
   return (
     <AbsoluteFill style={{background: BRAND.bg}}>
       <AbsoluteFill
         style={{background: `radial-gradient(60% 40% at 80% 0%, ${BRAND.deep}55, transparent 70%)`}}
       />
-      <AbsoluteFill style={{flexDirection: 'column'}}>
-        <Header title={title} />
-        <div style={{flex: 1, overflow: 'hidden', display: 'flex', flexDirection: 'column', justifyContent: 'flex-end'}}>
-          {/* нижний отступ 180 — сейф-зона под UI площадок (кнопки/подписи) */}
-          <div style={{padding: '40px 40px 180px', transform: `translateY(${shift}px)`}}>
-            {visible.map((m, i) => {
-              switch (m.kind) {
-                case 'text':
-                  return <TextBubble key={i} m={m} />;
-                case 'buttons':
-                  return <ButtonsBubble key={i} m={m} />;
-                case 'daybreak':
-                  return <Daybreak key={i} m={m} />;
-                case 'alert':
-                  return <AlertCard key={i} m={m} />;
-                case 'chart':
-                  return <ChartBubble key={i} m={m} />;
-              }
-            })}
-            {showTyping && <TypingBubble />}
+      {inColdOpen && alertMsg ? (
+        // ── Cold open: алерт крупно, наезд, без кнопок ──
+        <AbsoluteFill style={{justifyContent: 'center', alignItems: 'center'}}>
+          <div
+            style={{
+              width: '100%',
+              padding: '0 30px',
+              transform: `scale(${1.35 + 0.12 * (frame / Math.max(coldFrames, 1))}) translateY(-40px)`,
+            }}
+          >
+            <AlertCard m={{...alertMsg, at: 0, buy: undefined, secondary: undefined, items: undefined}} />
           </div>
-        </div>
-      </AbsoluteFill>
+        </AbsoluteFill>
+      ) : (
+        <AbsoluteFill
+          style={{
+            flexDirection: 'column',
+            transform: `scale(${camScale * drift}) translateY(${camY}px)`,
+            transformOrigin: '50% 42%',
+          }}
+        >
+          <Header title={title} />
+          <div style={{flex: 1, overflow: 'hidden', display: 'flex', flexDirection: 'column', justifyContent: 'flex-end'}}>
+            {/* нижний отступ 180 — сейф-зона под UI площадок (кнопки/подписи) */}
+            <div style={{padding: '40px 40px 180px', transform: `translateY(${shift}px)`}}>
+              {visible.map((m, i) => {
+                switch (m.kind) {
+                  case 'text':
+                    return <TextBubble key={i} m={m} />;
+                  case 'buttons':
+                    return <ButtonsBubble key={i} m={m} />;
+                  case 'daybreak':
+                    return <Daybreak key={i} m={m} />;
+                  case 'alert':
+                    return <AlertCard key={i} m={m} />;
+                  case 'chart':
+                    return <ChartBubble key={i} m={m} />;
+                }
+              })}
+              {showTyping && <TypingBubble />}
+            </div>
+          </div>
+        </AbsoluteFill>
+      )}
+      {flash > 0 && (
+        <AbsoluteFill style={{background: BRAND.berry, opacity: flash, pointerEvents: 'none'}} />
+      )}
     </AbsoluteFill>
   );
 };

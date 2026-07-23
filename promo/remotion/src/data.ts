@@ -14,57 +14,48 @@ import {ChatData} from './ChatScene';
 // Времена во всех четырёх различаются; «спустя несколько часов» — без
 // конкретики, момент падения цены мы не контролируем.
 
-// ── A1. iPhone, товарный алерт: ссылка → стратегия → порог → алерт → график ──
+// ── A1. iPhone — НОВЫЙ ФОРМАТ удержания (сравниваем с наушниками-старыми) ──
+// Cold open (награда первой) → сжатый флоу без мёртвого времени → алерт.
+// Одна мысль на ролик: график НЕ показываем (он в отдельном ролике). Typing
+// только перед алертом. Камера: панч на алерт, потом на цену. ~10 сек.
 export const alertIphone: ChatData = {
   title: 'TryBerry',
+  coldOpenSec: 1.0,
+  typingOnlyAlert: true,
+  camera: [
+    {at: 5.9, scale: 1.16, y: 60}, // панч на пришедший алерт
+    {at: 7.6, scale: 1.28, y: 90}, // доезд на цену/бейдж
+  ],
   messages: [
-    {kind: 'text', from: 'user', at: 0.5, time: '10:21', text: 'ozon.ru/product/iphone-17-pro-max-256…'},
+    {kind: 'text', from: 'user', at: 0.2, time: '10:21', text: 'ozon.ru/product/iphone-17-pro-max-256…'},
     {
       kind: 'buttons',
       from: 'bot',
-      at: 2.4,
+      at: 1.1,
       time: '10:21',
-      text: '✅ Отслеживаю: iPhone 17 Pro Max, 256 ГБ, белый\n89 990 ₽ · Ozon\n\n🔻 уведомлю при любом снижении цены',
-      buttons: [['✓ 🔻 Любое снижение'], ['📉 Ниже цены', '％ Скидка %'], ['📈 График цены']],
-      press: {row: 1, col: 0, at: 4.4},
+      text: '✅ Отслеживаю: iPhone 17 Pro Max, 256 ГБ, белый\n89 990 ₽ · Ozon',
+      buttons: [['✓ 🔻 Любое снижение'], ['📉 Ниже цены', '％ Скидка %']],
+      press: {row: 1, col: 0, at: 2.3},
     },
+    // «Введи цену» + ввод юзера вырезаны: зритель достроит сам, инфы ноль.
     {
       kind: 'text',
       from: 'bot',
-      at: 5.6,
-      time: '10:21',
-      text: '💰 Введи целевую цену в рублях (например 1499).\nУведомлю, когда цена опустится до неё или ниже.',
-    },
-    {kind: 'text', from: 'user', at: 7.2, time: '10:22', text: '75 000'},
-    {
-      kind: 'text',
-      from: 'bot',
-      at: 8.6,
+      at: 3.1,
       time: '10:22',
-      text: '✅ Порог 75 000 ₽ установлен.\n📉 уведомлю, когда цена опустится ниже 75 000 ₽',
+      text: '✅ Порог 75 000 ₽ установлен.\n📉 сообщу, когда цена опустится ниже',
     },
-    {kind: 'daybreak', at: 10.6, label: 'спустя несколько часов'},
+    {kind: 'daybreak', at: 4.3, label: 'спустя несколько часов'},
     {
       kind: 'alert',
-      at: 12.2,
+      at: 5.6,
       time: '17:48',
       title: '🎯 Ниже твоего порога — 75 000 ₽',
       name: 'iPhone 17 Pro Max, 256 ГБ, белый',
       was: 89990,
       now: 71305,
       buy: 'Купить на Ozon за 71 305 ₽ →',
-      secondary: {label: '📈 График цены', pressAt: 14.8},
       img: 'products/iphone.png',
-    },
-    {
-      kind: 'chart',
-      at: 16.0,
-      time: '17:49',
-      caption: '📈 История цены · 90 дней',
-      series: [87990, 87990, 86490, 88990, 85990, 83490, 82990, 86990, 88490, 87490, 89990, 86990, 71305],
-      usual: 87000,
-      min: 71305,
-      note: 'Обычно ~87 000 ₽. Сейчас 71 305 ₽ — дешевле не было · Ozon',
     },
   ],
 };
@@ -125,32 +116,37 @@ export const alertBuds: ChatData = {
   ],
 };
 
-// ── S1. iPhone, подписка на ВЫДАЧУ ──
+// ── S1. iPhone, подписка на ВЫДАЧУ — НОВЫЙ ФОРМАТ ──
 export const searchIphone: ChatData = {
   title: 'TryBerry',
+  coldOpenSec: 1.0,
+  typingOnlyAlert: true,
+  camera: [
+    {at: 5.9, scale: 1.14, y: 50},
+    {at: 7.8, scale: 1.22, y: 120}, // доезд на список вариантов
+  ],
   messages: [
-    {kind: 'text', from: 'user', at: 0.5, time: '11:03', text: 'ozon.ru/search/?text=iphone 17 pro max 256'},
+    {kind: 'text', from: 'user', at: 0.2, time: '11:03', text: 'ozon.ru/search/?text=iphone 17 pro max 256'},
     {
       kind: 'buttons',
       from: 'bot',
-      at: 2.4,
+      at: 1.1,
       time: '11:03',
-      text: '🔎 Поиск: «iphone 17 pro max 256» — слежу за всей выдачей, не за одним товаром.\n\nЕсли подборка устраивает — выбери, как уведомлять, и я начну следить 👇',
+      text: '🔎 Это поиск — слежу за ВСЕЙ выдачей,\nне за одним товаром.',
       buttons: [['🔻 Любое снижение'], ['📉 Ниже цены']],
-      press: {row: 1, col: 0, at: 4.4},
+      press: {row: 1, col: 0, at: 2.3},
     },
     {
       kind: 'text',
       from: 'bot',
-      at: 5.6,
-      time: '11:03',
-      text: '💰 Введи целевую цену в рублях (например 59990).\nУведомлю, когда найдётся товар дешевле.',
+      at: 3.1,
+      time: '11:04',
+      text: '✅ Порог 75 000 ₽ установлен.\n🔎 сообщу, когда в выдаче будет дешевле',
     },
-    {kind: 'text', from: 'user', at: 7.2, time: '11:04', text: '75 000'},
-    {kind: 'daybreak', at: 9.2, label: 'спустя несколько часов'},
+    {kind: 'daybreak', at: 4.3, label: 'спустя несколько часов'},
     {
       kind: 'alert',
-      at: 10.8,
+      at: 5.6,
       time: '18:26',
       title: '🔎 По запросу «iphone 17 pro max» подешевело 3 товара',
       name: 'iPhone 17 Pro Max, 256 ГБ, белый',
