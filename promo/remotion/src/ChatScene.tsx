@@ -1,7 +1,9 @@
 import React from 'react';
 import {
   AbsoluteFill,
+  Audio,
   Img,
+  Sequence,
   staticFile,
   useCurrentFrame,
   useVideoConfig,
@@ -729,6 +731,38 @@ export const ChatScene: React.FC<ChatData> = ({title, messages, coldOpen, camera
   }
   const drift = camera && camera.length > 0 ? 1 + 0.004 * now : 1;
 
+  // ── Звуковые события (public/sfx, синтезированы ffmpeg — свои, заменяемы) ──
+  // ding = звук-сигнатура алерта (отличительный актив канона §4, один во всех
+  // роликах). Остальное: пузыри pop, тапы, whoosh на разрыве времени и вспышке.
+  const coldSec = coldOpen?.sec ?? 0;
+  const sounds: {at: number; src: string; vol: number}[] = [];
+  if (coldOpen) {
+    sounds.push({at: 0.05, src: 'sfx/ding.wav', vol: 0.8}); // награда первым кадром
+    sounds.push({at: Math.max(coldSec - 0.1, 0), src: 'sfx/whoosh.wav', vol: 0.7});
+  }
+  for (const m of messages) {
+    const base = coldSec + m.at;
+    switch (m.kind) {
+      case 'text':
+        sounds.push({at: base, src: m.from === 'user' ? 'sfx/pop-user.wav' : 'sfx/pop-bot.wav', vol: 0.6});
+        break;
+      case 'buttons':
+        sounds.push({at: base, src: 'sfx/pop-bot.wav', vol: 0.6});
+        if (m.press) sounds.push({at: coldSec + m.press.at, src: 'sfx/tap.wav', vol: 0.7});
+        break;
+      case 'daybreak':
+        sounds.push({at: base, src: 'sfx/whoosh.wav', vol: 0.5});
+        break;
+      case 'alert':
+        sounds.push({at: base, src: 'sfx/ding.wav', vol: 0.85});
+        if (m.secondary?.pressAt) sounds.push({at: coldSec + m.secondary.pressAt, src: 'sfx/tap.wav', vol: 0.7});
+        break;
+      case 'chart':
+        sounds.push({at: base, src: 'sfx/sweep.wav', vol: 0.55});
+        break;
+    }
+  }
+
   // Вспышка на стыке cold open → чат
   const flash =
     coldFrames > 0
@@ -804,6 +838,11 @@ export const ChatScene: React.FC<ChatData> = ({title, messages, coldOpen, camera
       {flash > 0 && (
         <AbsoluteFill style={{background: BRAND.berry, opacity: flash, pointerEvents: 'none'}} />
       )}
+      {sounds.map((s, i) => (
+        <Sequence key={`snd-${i}`} from={Math.round(s.at * fps)}>
+          <Audio src={staticFile(s.src)} volume={s.vol} />
+        </Sequence>
+      ))}
     </AbsoluteFill>
   );
 };
