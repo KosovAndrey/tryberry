@@ -17,15 +17,11 @@ import {ChatData} from './ChatScene';
 // ── A1. iPhone — НОВЫЙ ФОРМАТ удержания (сравниваем с наушниками-старыми) ──
 // Cold open (награда первой) → сжатый флоу без мёртвого времени → алерт.
 // Одна мысль на ролик: график НЕ показываем (он в отдельном ролике). Typing
-// только перед алертом. Камера: панч на алерт, потом на цену. ~10 сек.
+// только перед алертом. Зум забракован на рендере — камера не используется.
 export const alertIphone: ChatData = {
   title: 'TryBerry',
-  coldOpenSec: 1.0,
+  coldOpen: {sec: 1.5, text: 'Как не пропускать скидки?'},
   typingOnlyAlert: true,
-  camera: [
-    {at: 5.9, scale: 1.16, y: 60}, // панч на пришедший алерт
-    {at: 7.6, scale: 1.28, y: 90}, // доезд на цену/бейдж
-  ],
   messages: [
     {kind: 'text', from: 'user', at: 0.2, time: '10:21', text: 'ozon.ru/product/iphone-17-pro-max-256…'},
     {
@@ -119,12 +115,8 @@ export const alertBuds: ChatData = {
 // ── S1. iPhone, подписка на ВЫДАЧУ — НОВЫЙ ФОРМАТ ──
 export const searchIphone: ChatData = {
   title: 'TryBerry',
-  coldOpenSec: 1.0,
+  coldOpen: {sec: 1.5, text: 'Не знаешь, где купить выгодно?'},
   typingOnlyAlert: true,
-  camera: [
-    {at: 5.9, scale: 1.14, y: 50},
-    {at: 7.8, scale: 1.22, y: 120}, // доезд на список вариантов
-  ],
   messages: [
     {kind: 'text', from: 'user', at: 0.2, time: '11:03', text: 'ozon.ru/search/?text=iphone 17 pro max 256'},
     {

@@ -74,8 +74,10 @@ export type ChatData = {
   title: string;
   messages: Msg[];
   // «Новый формат» удержания (см. batch-02 / фидбек друзей):
-  coldOpenSec?: number; // cold open: показать алерт-награду ДО флоу, N сек
-  camera?: CamKey[]; // зум-панчи; поверх всегда лёгкий дрейф
+  // Cold open: вопрос-обращение к зрителю + алерт-награда СТАТИЧНО (без зума —
+  // зум-версия забракована), потом вспышка и флоу.
+  coldOpen?: {sec: number; text: string};
+  camera?: CamKey[]; // зум-панчи; НЕ используются (забракованы), механика оставлена
   typingOnlyAlert?: boolean; // typing только перед алертом (минус мёртвое время)
 };
 
@@ -686,13 +688,13 @@ const Header: React.FC<{title: string}> = ({title}) => (
   </div>
 );
 
-export const ChatScene: React.FC<ChatData> = ({title, messages, coldOpenSec, camera, typingOnlyAlert}) => {
+export const ChatScene: React.FC<ChatData> = ({title, messages, coldOpen, camera, typingOnlyAlert}) => {
   const frame = useCurrentFrame();
   const {fps} = useVideoConfig();
 
-  // Cold open: N секунд показываем НАГРАДУ (алерт крупно), потом флоу.
+  // Cold open: N секунд показываем НАГРАДУ (алерт) + вопрос зрителю, потом флоу.
   // Открытая петля: зритель уже видел деньги — досматривает, как к ним пришли.
-  const coldFrames = (coldOpenSec ?? 0) * fps;
+  const coldFrames = (coldOpen?.sec ?? 0) * fps;
   const inColdOpen = coldFrames > 0 && frame < coldFrames;
   const chatFrame = Math.max(frame - coldFrames, 0);
   const now = chatFrame / fps;
@@ -716,8 +718,8 @@ export const ChatScene: React.FC<ChatData> = ({title, messages, coldOpenSec, cam
     shift += estHeight(m) * (1 - s);
   }
 
-  // Камера: пружинный блендинг по ключам + постоянный лёгкий дрейф (статичный
-  // кадр дольше 2 сек не держит — правило из реестра ассетов).
+  // Камера: пружинный блендинг по ключам. Дрейф только вместе с ключами —
+  // сам по себе на рендере смотрелся плохо (фидбек 2026-07-23).
   let camScale = 1;
   let camY = 0;
   for (const k of camera ?? []) {
@@ -725,7 +727,7 @@ export const ChatScene: React.FC<ChatData> = ({title, messages, coldOpenSec, cam
     camScale += (k.scale - camScale) * s;
     camY += ((k.y ?? 0) - camY) * s;
   }
-  const drift = 1 + 0.004 * now;
+  const drift = camera && camera.length > 0 ? 1 + 0.004 * now : 1;
 
   // Вспышка на стыке cold open → чат
   const flash =
@@ -741,19 +743,33 @@ export const ChatScene: React.FC<ChatData> = ({title, messages, coldOpenSec, cam
       <AbsoluteFill
         style={{background: `radial-gradient(60% 40% at 80% 0%, ${BRAND.deep}55, transparent 70%)`}}
       />
-      {inColdOpen && alertMsg ? (
-        // ── Cold open: алерт крупно, наезд, без кнопок ──
-        <AbsoluteFill style={{justifyContent: 'center', alignItems: 'center'}}>
-          <div
-            style={{
-              width: '100%',
-              padding: '0 30px',
-              transform: `scale(${1.35 + 0.12 * (frame / Math.max(coldFrames, 1))}) translateY(-40px)`,
-            }}
-          >
-            <AlertCard m={{...alertMsg, at: 0, buy: undefined, secondary: undefined, items: undefined}} />
-          </div>
-        </AbsoluteFill>
+      {inColdOpen && alertMsg && coldOpen ? (
+        // ── Cold open: вопрос-обращение + алерт СТАТИЧНО (один вход, без зума) ──
+        (() => {
+          const qIn = spring({frame, fps, config: {damping: 14, mass: 0.6}});
+          return (
+            <AbsoluteFill style={{justifyContent: 'center', padding: '0 50px'}}>
+              <div
+                style={{
+                  fontFamily: display,
+                  fontWeight: 700,
+                  fontSize: 72,
+                  lineHeight: 1.15,
+                  textAlign: 'center',
+                  color: BRAND.cream,
+                  marginBottom: 56,
+                  opacity: qIn,
+                  transform: `translateY(${interpolate(qIn, [0, 1], [24, 0])}px)`,
+                }}
+              >
+                {coldOpen.text}
+              </div>
+              <div style={{transform: 'scale(1.06)'}}>
+                <AlertCard m={{...alertMsg, at: 0.12, buy: undefined, secondary: undefined, items: undefined}} />
+              </div>
+            </AbsoluteFill>
+          );
+        })()
       ) : (
         <AbsoluteFill
           style={{
