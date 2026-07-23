@@ -27,7 +27,7 @@ export const RemotionRoot: React.FC = () => {
           ВСЕ в новом формате (вопрос-cold-open + сжатый флоу, ~8.5-9с).
           У каждого ролика свой паттерн вопроса — мини-тест формулировок. */}
       {chat('ChatAlertIphone', alertIphone, 7.1)}
-      {chat('ChatAlertBuds', alertBuds, 7.1)}
+      {chat('ChatAlertBuds', alertBuds, 11.8)}
       {chat('ChatSearchIphone', searchIphone, 7.5)}
       {chat('ChatSearchBuds', searchBuds, 7.5)}
       {/* B1 — эндкард, одинаковый во всех роликах (отличительный актив) */}
