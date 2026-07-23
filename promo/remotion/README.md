@@ -43,6 +43,20 @@ npx remotion render ChatSearchIphone out/search-iphone.mp4 # подписка н
 Схема сообщения — в `src/ChatScene.tsx` (тип `Msg`): текст / карточка-алерт,
 поле `at` = секунда появления.
 
+## Звуки
+
+`public/sfx/` — активные слоты, на которые ссылается код (`ding` — сигнатура
+алерта, `pop-user`/`pop-bot`, `tap`, `whoosh`, `sweep`). Источник — Mixkit
+(https://mixkit.co/license/#sfxFree: бесплатно, коммерчески, без атрибуции).
+`public/sfx/alt/` — скачанные альтернативы (5 алертов, 4 попа, 3 тапа,
+3 whoosh). Поменять звук: сконвертировать кандидата в активный слот —
+
+```bash
+ffmpeg -y -i public/sfx/alt/alert-bell.mp3   -af "silenceremove=start_periods=1:start_threshold=-45dB,loudnorm=I=-16:TP=-1.5"   -ar 44100 -ac 1 public/sfx/ding.wav
+```
+
+Громкость каждого события крутится в коде (ChatScene, массив sounds).
+
 ## Структура
 
 - `src/brand.ts` — фирменные токены (цвета/радиусы), совпадают с сайтом.
