@@ -731,36 +731,22 @@ export const ChatScene: React.FC<ChatData> = ({title, messages, coldOpen, camera
   }
   const drift = camera && camera.length > 0 ? 1 + 0.004 * now : 1;
 
-  // ── Звуковые события (public/sfx, синтезированы ffmpeg — свои, заменяемы) ──
-  // ding = звук-сигнатура алерта (отличительный актив канона §4, один во всех
-  // роликах). Остальное: пузыри pop, тапы, whoosh на разрыве времени и вспышке.
+  // ── Звук: МИНИМАЛЬНАЯ схема (решение 2026-07-23, зоопарк из 6 звуков
+  // забракован). Два звука Mixkit: «Message pop alert» на каждое сообщение,
+  // «Long pop» — ТОЛЬКО на финальное (график, а без него алерт). Финальный
+  // звук = сигнатура завершения во всех роликах. Тапы/whoosh/ding выключены.
   const coldSec = coldOpen?.sec ?? 0;
   const sounds: {at: number; src: string; vol: number}[] = [];
-  if (coldOpen) {
-    sounds.push({at: 0.05, src: 'sfx/ding.wav', vol: 0.8}); // награда первым кадром
-    sounds.push({at: Math.max(coldSec - 0.1, 0), src: 'sfx/whoosh.wav', vol: 0.7});
-  }
-  for (const m of messages) {
-    const base = coldSec + m.at;
-    switch (m.kind) {
-      case 'text':
-        sounds.push({at: base, src: m.from === 'user' ? 'sfx/pop-user.wav' : 'sfx/pop-bot.wav', vol: 0.6});
-        break;
-      case 'buttons':
-        sounds.push({at: base, src: 'sfx/pop-bot.wav', vol: 0.6});
-        if (m.press) sounds.push({at: coldSec + m.press.at, src: 'sfx/tap.wav', vol: 0.7});
-        break;
-      case 'daybreak':
-        sounds.push({at: base, src: 'sfx/whoosh.wav', vol: 0.5});
-        break;
-      case 'alert':
-        sounds.push({at: base, src: 'sfx/ding.wav', vol: 0.85});
-        if (m.secondary?.pressAt) sounds.push({at: coldSec + m.secondary.pressAt, src: 'sfx/tap.wav', vol: 0.7});
-        break;
-      case 'chart':
-        sounds.push({at: base, src: 'sfx/sweep.wav', vol: 0.55});
-        break;
-    }
+  if (coldOpen) sounds.push({at: 0.05, src: 'sfx/pop-last.wav', vol: 0.8});
+  const audible = messages.filter((m) => m.kind !== 'daybreak');
+  const lastAudible = audible[audible.length - 1];
+  for (const m of audible) {
+    const isLast = m === lastAudible;
+    sounds.push({
+      at: coldSec + m.at,
+      src: isLast ? 'sfx/pop-last.wav' : 'sfx/pop.wav',
+      vol: isLast ? 0.85 : 0.6,
+    });
   }
 
   // Вспышка на стыке cold open → чат
