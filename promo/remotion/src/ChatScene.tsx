@@ -81,6 +81,9 @@ export type ChatData = {
   coldOpen?: {sec: number; text: string};
   camera?: CamKey[]; // зум-панчи; НЕ используются (забракованы), механика оставлена
   typingOnlyAlert?: boolean; // typing только перед алертом (минус мёртвое время)
+  // Войсовер: фразы по битам, время АБСОЛЮТНОЕ (включая cold open) — в отличие
+  // от messages.at. Файлы в public/vo/, генерация edge-tts (см. README).
+  vo?: {at: number; src: string; vol?: number}[];
 };
 
 // Оценка высоты сообщения — для плавного сдвига ленты вверх (реальную высоту
@@ -690,7 +693,7 @@ const Header: React.FC<{title: string}> = ({title}) => (
   </div>
 );
 
-export const ChatScene: React.FC<ChatData> = ({title, messages, coldOpen, camera, typingOnlyAlert}) => {
+export const ChatScene: React.FC<ChatData> = ({title, messages, coldOpen, camera, typingOnlyAlert, vo}) => {
   const frame = useCurrentFrame();
   const {fps} = useVideoConfig();
 
@@ -827,6 +830,11 @@ export const ChatScene: React.FC<ChatData> = ({title, messages, coldOpen, camera
       {sounds.map((s, i) => (
         <Sequence key={`snd-${i}`} from={Math.round(s.at * fps)}>
           <Audio src={staticFile(s.src)} volume={s.vol} />
+        </Sequence>
+      ))}
+      {(vo ?? []).map((v, i) => (
+        <Sequence key={`vo-${i}`} from={Math.round(v.at * fps)}>
+          <Audio src={staticFile(v.src)} volume={v.vol ?? 1} />
         </Sequence>
       ))}
     </AbsoluteFill>

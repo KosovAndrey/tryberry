@@ -22,6 +22,15 @@ export const alertIphone: ChatData = {
   title: 'TryBerry',
   coldOpen: {sec: 1.5, text: 'Как не пропускать скидки?'},
   typingOnlyAlert: true,
+  // ПРОБНЫЙ войсовер (Дмитрий; свап на Светлану = замена -dmitry на -svetlana).
+  // Времена абсолютные, фразы уложены между битами без наложений.
+  vo: [
+    {at: 0.15, src: 'vo/alert-iphone/01-dmitry.mp3'}, // «Айфон дешевле на 18 тыс. Смотри.»
+    {at: 3.35, src: 'vo/alert-iphone/02-dmitry.mp3'}, // «Кинул ссылку.»
+    {at: 4.2, src: 'vo/alert-iphone/03-dmitry.mp3'}, // «Порог — 75. Дальше следит бот.»
+    {at: 7.5, src: 'vo/alert-iphone/05-dmitry.mp3'}, // «Через пару часов — минус 18 тысяч.»
+    {at: 10.4, src: 'vo/alert-iphone/06-dmitry.mp3'}, // «График: дешевле не было.»
+  ],
   messages: [
     {kind: 'text', from: 'user', at: 0.2, time: '10:21', text: 'ozon.ru/product/iphone-17-pro-max-256…'},
     {
