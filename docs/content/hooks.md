@@ -25,10 +25,29 @@ Endcard во всех роликах один: логотип · @tryberrybot ·
 основной промпт остаётся чисто описательным). Вертикаль 9:16, 5 сек (в монтаж
 берём ~3), люди не говорят (липсинк палится) — драма визуальная, речь в VO.
 
-**Общий негативный промпт** (один для всех хуков):
-`talking, open mouth, speaking, deformed hands, extra fingers, text, letters,
-numbers, watermark, logo, brand marks, user interface, screen content, cuts,
-transitions, distortion, extra objects, blurry, low quality`
+**Формула промпта** (из `marketing-skills/video/ai-video-prompting.md`):
+`[Субъект] + [Действие] + [Движение камеры] + [Стиль] + [Свет] + [Технические]`,
+50–100 слов. Движение камеры указывать ВСЕГДА (иначе модель дёргает случайно):
+static · slow push · dolly in/out · pan · tilt · orbit · tracking · handheld.
+Kling любит простые сцены с малым числом субъектов — не усложнять.
+
+**Три правила, выведенные production-опытом** (`ad-creative/motion-video-ads.md`):
+1. ⛔ **НИКОГДА не упоминать руки — даже в негативе.** «no hands / deformed hands» —
+   ловушка внимания, модель начинает лезть руками в кадр ИМЕННО из-за этого.
+   Вместо этого не описывать действий-«handling» (вынимает, нажимает, держит и
+   вертит) — движение отдавать камере или предмету.
+2. **Одно доминирующее движение на кадр.** Два = хаос на скорости ленты.
+3. **QC последних 2 секунд** — там вылезают посторонние объекты и дрейф стиля.
+   Нам нужны первые ~3 сек, конец режем не глядя.
+
+**Общий негативный промпт** (без единого упоминания рук):
+`talking, open mouth, speaking, text, letters, numbers, watermark, logo,
+brand marks, user interface, screen content, cuts, transitions, scene change,
+morphing, distortion, blurry, low quality`
+
+💡 **Экономия кредитов:** Kling умеет image-to-video. Сгенерировать кадр картинкой
+(бесплатно) и оживить его — дешевле и точнее, чем text-to-video: композиция
+зафиксирована референсом, промахов меньше.
 
 ---
 
@@ -38,7 +57,7 @@ transitions, distortion, extra objects, blurry, low quality`
 - **VO:** «Взял айфон на восемнадцать тысяч дешевле рынка. Без серых схем.»
 - **Титр:** `71 305 ₽` ~~`89 990 ₽`~~ (влетает на 1.5с)
 - **Визуал:** момент распаковки — человек достаёт новый телефон из коробки
-- **Kling:** `Vertical 9:16. A young man sits on the floor of a warm-lit apartment with an opened delivery box in his lap, lifting a new smartphone out of the packaging. He turns it slowly in the light with a small satisfied smile, looking down at the device, never at the camera. Soft evening window light, shallow depth of field, natural documentary colors, slow gentle push-in, single continuous shot.`
+- **Kling:** `A young man sits on the floor of a warm-lit apartment, an opened delivery box beside him, a new smartphone resting in his lap as he looks down at it with a quiet satisfied smile. Camera slow push-in. Handheld documentary style, natural evening window light through a window behind him, shallow depth of field, warm color grading, vertical 9:16, 1080p.`
 - **Beauty-вставка:** `web/hero-iphone-turn.webm` — наш Blender-рендер, идёт ПОСЛЕ хука
 - **Середина:** ChatAlertIphone (алерт → тап → график)
 
@@ -46,43 +65,43 @@ transitions, distortion, extra objects, blurry, low quality`
 - **VO:** «Я больше не переплачиваю. Вообще.»
 - **Титр:** `−18 000 ₽` в этом месяце (или без цифры, если нет реальной)
 - **Визуал:** телефон роняют экраном вниз на диван, рядом кофе — расслабленность
-- **Kling:** `Vertical 9:16. A smartphone drops face-down onto a soft couch next to a coffee cup, morning light, calm cozy mood, slow gentle motion, cinematic, warm tones. Single continuous shot.`
+- **Kling:** `A smartphone lies face-down on a soft couch cushion next to a coffee mug, a blanket rumpled around it. Camera static, slow ambient drift of morning light across the fabric. Calm cozy living room, natural window light, cinematic warm color grading, shallow depth of field, vertical 9:16, 1080p.`
 - **Середина:** любой alert-ролик
 
 ### H3. «Способ для ленивых» — развилка ×4 (общий / Ozon / WB / Я.Маркет)
 - **VO:** «Как не переплачивать на ⟨WB и Озоне⟩ — способ для ленивых.»
 - **Титр:** `СПОСОБ ДЛЯ ЛЕНИВЫХ` + логотип маркетплейса
 - **Визуал:** человек падает на диван, телефон опускается на грудь — лень
-- **Kling:** `Vertical 9:16. A phone lowers onto someone's chest as they sink back into a sofa, lazy relaxed evening, warm lamp light, slow motion, cinematic, faceless framing from chest down. Single continuous shot.`
+- **Kling:** `A person sinks backwards into a deep sofa and settles motionless, framed from the chest down, a phone resting on the blanket beside them. Camera static, slight handheld sway. Lazy relaxed evening at home, warm lamp light from one side, cinematic shallow depth of field, muted cozy tones, vertical 9:16, 1080p.`
 - **Развилка:** маркетплейс меняется в VO, титре (логотип) и продуктовом бите
 
 ### H4. «Я один устал проверять цены?»
 - **VO:** «Я один захожу на ВБ по десять раз в день просто глянуть цену?»
 - **Титр:** `ЗНАКОМО?`
 - **Визуал:** лицо в свете экрана вечером, бесконечный скролл (= блок H4 реестра)
-- **Kling:** `Vertical 9:16. A person lies in bed at night, face lit only by a phone screen, endless scrolling reflected in tired eyes, moody teal grading, cinematic. Single continuous shot.`
+- **Kling:** `A young woman lies in bed at night, her face lit only by the glow of a phone screen below the frame, eyes tired and unfocused, blinking slowly. Camera very slow push-in on her face. Dark bedroom, single cold light source, moody teal-and-orange cinematic grading, shallow depth of field, vertical 9:16, 1080p.`
 - **Середина:** search-ролик · тип: джеб (мягкий CTA)
 
 ### H5. «Товары надо покупать на падении»
 - **VO:** «Товары надо покупать на падении. Вопрос — как его поймать.»
 - **Титр:** `ПОКУПАЙ НА ДНЕ`
 - **Визуал:** человек в магазине смотрит на ценник и кладёт товар обратно на полку
-- **Kling:** `Vertical 9:16. A person in a bright electronics store picks up a boxed product, glances at the price label, hesitates and puts it back on the shelf, then walks out of frame. Handheld documentary style, natural store lighting, shot from behind and to the side, face not visible, single continuous shot.`
+- **Kling:** `A shopper stands still in a bright electronics store aisle facing a shelf of boxed products, shoulders dropping in hesitation, then turns and walks away out of frame. Camera static, subtle handheld sway. Documentary style seen from behind, face not visible, even fluorescent store lighting, natural colors, vertical 9:16, 1080p.`
 - **Середина:** график-ролик (показать волатильность)
 
 ### H6. «Когда цена упадёт?» (кликбейт → честное раскрытие)
 - **VO хука:** «Когда цена упадёт — не знает никто.»
 - **VO раскрытия (сразу после):** «Но можно узнать первым.»
 - **Титр:** `КОГДА УПАДЁТ ЦЕНА?`
-- **Визуал:** палец завис над кнопкой «Купить», нерешительность (блок H7)
-- **Kling:** `Vertical 9:16. Extreme close-up of a thumb hovering hesitantly over a glowing phone button, blurred interface, tension, cinematic shallow focus. Single continuous shot.`
+- **Визуал:** человек застыл в проходе магазина, смотрит в телефон, не решается
+- **Kling:** `A man stands frozen in a supermarket aisle staring down at a phone below the frame, completely motionless while the blurred aisle stretches behind him. Camera very slow push-in. Tense indecisive mood, cool overhead store lighting, shallow depth of field, cinematic muted grading, vertical 9:16, 1080p.`
 - **Середина:** alert или search
 
 ### H7. «Уведомление на снижение цены» — развилка ×3 (Ozon / WB / Я.Маркет)
 - **VO:** «Уведомление, когда цена упадёт на ⟨Озоне⟩? Да, так можно.»
 - **Титр:** `КАК ПОСТАВИТЬ УВЕДОМЛЕНИЕ О ЦЕНЕ` + логотип
 - **Визуал:** телефон в темноте загорается уведомлением (блок H10)
-- **Kling:** `Vertical 9:16. A phone on a nightstand lights up with a notification in a dark room, the glow spilling onto the surface, cinematic, atmospheric. Single continuous shot.`
+- **Kling:** `A phone lying face-up on a wooden nightstand suddenly lights up in a pitch-dark bedroom, its glow spilling across the surface and the edge of a pillow. Camera static, macro framing. Night interior, single light source from the screen, deep shadows, cinematic atmospheric grading, shallow depth of field, vertical 9:16, 1080p.`
 - **Заголовок площадки = дословный поисковый запрос, не менять.** Самый горячий интент.
 
 ### H8. «Когда будет скидка?» (кликбейт → раскрытие)
@@ -90,7 +109,7 @@ transitions, distortion, extra objects, blurry, low quality`
 - **VO раскрытия:** «Но можно её не пропустить.»
 - **Титр:** `КОГДА БУДЕТ СКИДКА?`
 - **Визуал:** человек у витрины с ярлыками распродажи, скептически щурится
-- **Kling:** `Vertical 9:16. A shopper stands in front of a shop window covered in red sale tags, tilts their head skeptically and narrows their eyes, arms crossed. Street reflection in the glass, overcast daylight, handheld documentary framing, shot from the side, single continuous shot.`
+- **Kling:** `A woman stands in front of a shop window plastered with red sale posters, arms crossed, narrowing her eyes skeptically at the display. Camera static, slight handheld sway. Street reflections in the glass, overcast daylight, documentary style seen from the side, natural desaturated colors, vertical 9:16, 1080p.`
 - **Середина:** график-ролик (доказать, что «скидка» бывает ненастоящей)
 
 ---
@@ -101,15 +120,15 @@ transitions, distortion, extra objects, blurry, low quality`
 - **VO:** «Закупаться на 1688 больше не модно.»
 - **Титр:** `1688 — ВСЁ?`
 - **Визуал:** гора одинаковых коробок, медленный наезд
-- **Kling:** `Vertical 9:16. Rows of identical plain cardboard boxes stacked in a dim warehouse, slow dolly push-in, cool light, cinematic, anonymous. Single continuous shot.`
+- **Kling:** `Rows of identical plain cardboard boxes stacked high in a dim empty warehouse, dust drifting in the air. Camera slow dolly push-in down the aisle. Cold industrial lighting from above, long shadows, cinematic desaturated grading, deep perspective, vertical 9:16, 1080p.`
 - ⚠️ Тренд-формат «X больше не модно». Аудитория — перекупы; держать вне общих
   волн или мерить отдельно.
 
 ### H10. «Как я зарабатываю на маркетплейсах» — развилка ×4
 - **VO:** «Как я зарабатываю, перепродавая с ⟨Вайлдберриз⟩.»
 - **Титр:** `ПЕРЕПРОДАЖА` + логотип
-- **Визуал:** руки считают купюры рядом с телефоном (без лиц)
-- **Kling:** `Vertical 9:16. Banknotes being counted next to a smartphone on a table, top-down, warm light, cinematic, no faces. Single continuous shot.`
+- **Визуал:** купюры веером на столе рядом с телефоном, наезд камеры
+- **Kling:** `A fan of banknotes spread across a wooden table beside a smartphone and a small stack of parcels, seen from directly above. Camera slow push-in from top-down. Warm desk lamp light from one side, shallow depth of field, cinematic rich color grading, vertical 9:16, 1080p.`
 - ⚠️ Только для reseller-аудитории; «зарабатываю» честно лишь в этом контексте.
 
 ---
