@@ -45,6 +45,19 @@ Kling любит простые сцены с малым числом субъе
 brand marks, user interface, screen content, cuts, transitions, scene change,
 morphing, distortion, blurry, low quality`
 
+## ⚠️ ГЛАВНОЕ ТРЕБОВАНИЕ К КАДРУ: стык с нашим чатом
+
+Хук обязан **заканчиваться экраном телефона, заполняющим кадр** — тёмным, с
+лёгким свечением, БЕЗ интерфейса. Тогда переход в наш Remotion-чат читается как
+«камера вошла в экран», а не как склейка двух чужих видео. Тёмный экран вдобавок
+совпадает по тону с фоном чата (`#120a10` + berry-свечение) — стык почти
+незаметен. Поэтому в каждом промпте последнее движение камеры — **push-in на
+телефон**.
+
+Сборка ролика: `[Kling-хук ~3с] → [Remotion-середина] → [Endcard]`, и уже ПОВЕРХ
+всего — одна дорожка озвучки, музыка и субтитры. Внутри композиций озвучки НЕТ
+(решение 2026-07-25) — иначе стык не смонтировать.
+
 💡 **Экономия кредитов:** Kling умеет image-to-video. Сгенерировать кадр картинкой
 (бесплатно) и оживить его — дешевле и точнее, чем text-to-video: композиция
 зафиксирована референсом, промахов меньше.
@@ -57,7 +70,7 @@ morphing, distortion, blurry, low quality`
 - **VO:** «Взял айфон на восемнадцать тысяч дешевле рынка. Без серых схем.»
 - **Титр:** `71 305 ₽` ~~`89 990 ₽`~~ (влетает на 1.5с)
 - **Визуал:** момент распаковки — человек достаёт новый телефон из коробки
-- **Kling:** `A young man sits on the floor of a warm-lit apartment, an opened delivery box beside him, a new smartphone resting in his lap as he looks down at it with a quiet satisfied smile. Camera slow push-in. Handheld documentary style, natural evening window light through a window behind him, shallow depth of field, warm color grading, vertical 9:16, 1080p.`
+- **Kling:** `A young man sits on the floor of a warm-lit apartment, an opened delivery box beside him, a new smartphone resting in his lap with its dark screen facing up. He looks down at it with a quiet satisfied smile. Camera pushes in slowly toward the phone until the dark glowing screen fills most of the frame. Handheld documentary style, natural evening window light, shallow depth of field, warm color grading, vertical 9:16, 1080p.`
 - **Beauty-вставка:** `web/hero-iphone-turn.webm` — наш Blender-рендер, идёт ПОСЛЕ хука
 - **Середина:** ChatAlertIphone (алерт → тап → график)
 
