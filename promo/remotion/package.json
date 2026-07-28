@@ -7,6 +7,7 @@
     "dev": "remotion studio",
     "render": "remotion render",
     "bundle": "remotion bundle",
+    "seam": "node scripts/seam-frame.mjs out/seam-frame.png",
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {

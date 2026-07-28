@@ -10,7 +10,7 @@ import {
   spring,
   interpolate,
 } from 'remotion';
-import {BRAND, rub} from './brand';
+import {BRAND, rub, seamGlowCss} from './brand';
 import {display, body} from './fonts';
 
 // ── Схема данных ролика ──────────────────────────────────────────────
@@ -693,6 +693,31 @@ const Header: React.FC<{title: string}> = ({title}) => (
   </div>
 );
 
+// ── Кадр стыка с AI-хуком ────────────────────────────────────────────
+// Пустая подложка чата = целевой конечный кадр, который отдаём Kling (канон:
+// docs/content/hooks.md, «Конечный кадр — наш PNG»). Держим ОДНИМ компонентом,
+// потому что его рендерят три разных места: фон самого чата, лид-ин перед
+// первым сообщением и композиция SeamFrame для экспорта PNG. Разъедутся —
+// конечный кадр хука перестанет совпадать с первым кадром середины, и весь
+// смысл затеи со стыком пропадёт.
+export const SeamBackdrop: React.FC = () => (
+  <AbsoluteFill style={{background: BRAND.bg}}>
+    <AbsoluteFill style={{background: seamGlowCss()}} />
+  </AbsoluteFill>
+);
+
+// Обёртка: N кадров чистой подложки, затем обычный ChatScene. Sequence сдвигает
+// таймбазу целиком, включая useCurrentFrame внутри вложенных компонентов и
+// позиции звуковых Sequence — поэтому смещать вручную ничего не нужно.
+export const ChatSceneLeadIn: React.FC<ChatData & {leadIn: number}> = ({leadIn, ...data}) => (
+  <AbsoluteFill>
+    <SeamBackdrop />
+    <Sequence from={leadIn}>
+      <ChatScene {...data} />
+    </Sequence>
+  </AbsoluteFill>
+);
+
 export const ChatScene: React.FC<ChatData> = ({title, messages, coldOpen, camera, typingOnlyAlert, vo}) => {
   const frame = useCurrentFrame();
   const {fps} = useVideoConfig();
@@ -762,10 +787,8 @@ export const ChatScene: React.FC<ChatData> = ({title, messages, coldOpen, camera
       : 0;
 
   return (
-    <AbsoluteFill style={{background: BRAND.bg}}>
-      <AbsoluteFill
-        style={{background: `radial-gradient(60% 40% at 80% 0%, ${BRAND.deep}55, transparent 70%)`}}
-      />
+    <AbsoluteFill>
+      <SeamBackdrop />
       {inColdOpen && alertMsg && coldOpen ? (
         // ── Cold open: вопрос-обращение + алерт СТАТИЧНО (один вход, без зума) ──
         (() => {
