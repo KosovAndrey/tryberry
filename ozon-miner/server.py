@@ -81,6 +81,26 @@ ROTATE_INTERVAL_S = float(os.getenv("OZON_ROTATE_INTERVAL_MINUTES", "0")) * 60.0
 # Пауза после дёрганья switch-ссылки, чтобы прокси успел сменить exit-IP.
 ROTATE_SETTLE_S = float(os.getenv("OZON_ROTATE_SETTLE_SECONDS", "6"))
 
+# ── Потолки на ЛЮБОЙ вызов драйвера (защита от дедлока 29-07) ────────────────
+# Инцидент: подвисший драйвер намертво держал лок дорожки (пауза между ретраями
+# шла ЧЕРЕЗ браузер — page.wait_for_timeout), обслуживающий цикл пропускал
+# залоченные дорожки, и пул 11 часов стоял с healthy=4 при нуле работы. Правило
+# теперь простое: ни один await к драйверу не бывает без дедлайна.
+# Потолок ОДНОЙ операции под локом (fetch + ретраи + спейсинг).
+LANE_OP_TIMEOUT_S = float(os.getenv(
+    "OZON_LANE_OP_TIMEOUT_SECONDS",
+    str(SCRAPE_TIMEOUT_S * SCRAPE_RETRIES + RETRY_PAUSE_MS / 1000.0 + 15)))
+# Потолок операции обслуживания (прогрев/ротация — там навигация + ожидание FAB).
+MAINT_OP_TIMEOUT_S = float(os.getenv("OZON_MAINT_OP_TIMEOUT_SECONDS",
+                                     str(NAV_TIMEOUT_S + WARM_WAIT_S + 60)))
+# Потолок «мелких» вызовов драйвера (нудж, egress-IP, закрытие браузера).
+DRIVER_CALL_TIMEOUT_S = float(os.getenv("OZON_DRIVER_CALL_TIMEOUT_SECONDS", "20"))
+# Лок держат дольше этого → дорожка залипла: снимаем healthy (пул её обойдёт) и
+# помечаем на пересоздание браузера. Страховка на случай, если wait_for выше не
+# смог отменить зависший await.
+LANE_STUCK_S = float(os.getenv("OZON_LANE_STUCK_SECONDS",
+                               str(max(LANE_OP_TIMEOUT_S, MAINT_OP_TIMEOUT_S) + 60)))
+
 LOG_LEVEL = os.getenv("LOG_LEVEL", "INFO").upper()
 
 logging.basicConfig(level=getattr(logging, LOG_LEVEL, logging.INFO),
@@ -107,6 +127,31 @@ def _first_line(exc) -> str:
     IndexError, когда у исключения пустой текст (splitlines() → []) — и ронял
     обработчик ошибки вместо логирования."""
     return (str(exc).splitlines() or [""])[0]
+
+
+# Момент последнего УСПЕХА пула (успешный fetch или прогрев). Гонится в метрику
+# ozon_miner_last_success_age_seconds: healthy_lanes врёт при залипании (дорожка
+# числится живой, но не работает), а этот возраст — нет.
+_last_success_at = time.monotonic()
+
+
+def _mark_success():
+    global _last_success_at
+    _last_success_at = time.monotonic()
+
+
+async def _quiet_call(coro, timeout: float, what: str, idx: int):
+    """Вызов драйвера с дедлайном: тайм-аут/ошибка → False, без исключения наверх.
+    Для необязательных операций (нудж, egress-IP, закрытие браузера), где важно
+    только одно — не зависнуть навсегда."""
+    try:
+        await asyncio.wait_for(coro, timeout=timeout)
+        return True
+    except asyncio.TimeoutError:
+        log.warning("дорожка %d: %s не уложился в %.0fс — бросаю", idx, what, timeout)
+    except Exception as e:  # noqa: BLE001
+        log.debug("дорожка %d: %s: %s", idx, what, _first_line(e))
+    return False
 
 # ── Гистограмма латентности скрейпа (без prometheus_client) ───────────────────
 # Меряет латентность ВНУТРИ сайдкара (in-page fetch + спейсинг + ретраи) по метке
@@ -259,6 +304,12 @@ class Lane:
         self.lock = asyncio.Lock()
         self.healthy = False
         self.egress_ip = ""
+        # monotonic взятия лока (0 = свободен) — по нему вотчдог видит залипание.
+        self._lock_since = 0.0
+        # Дорожку надо пересоздать (её драйвер зависал) — сделает обслуживание.
+        self._needs_relaunch = False
+        # Обслуживание уже идёт (задача в полёте) — не запускать вторую.
+        self._servicing = False
         self._last_at = 0.0          # monotonic последнего запроса
         self._last_warm = 0.0        # monotonic последнего успешного прогрева
         self._last_rotate = 0.0      # monotonic последней ротации
@@ -304,9 +355,15 @@ class Lane:
         log.warning("дорожка %d: драйвер мёртв — пересоздаю браузер", self.idx)
         await self.close()
         self._cam = self._browser = self._page = None
+        self._needs_relaunch = False
         try:
-            await self._launch()
+            # Дедлайн: старт camoufox тоже умеет зависнуть (кончились ресурсы,
+            # не поднялся Xvfb) — без него ремонт дорожки встаёт навсегда.
+            await asyncio.wait_for(self._launch(), timeout=MAINT_OP_TIMEOUT_S)
             return True
+        except asyncio.TimeoutError:
+            log.error("дорожка %d: браузер не поднялся за %.0fс", self.idx, MAINT_OP_TIMEOUT_S)
+            return False
         except Exception as e:  # noqa: BLE001
             log.error("дорожка %d: пересоздание браузера упало: %s",
                       self.idx, _first_line(e))
@@ -330,7 +387,9 @@ class Lane:
         # authentication"), а дорожка всё равно кладётся в пул. Без этой проверки
         # цикл ниже сыпал "'NoneType' object has no attribute 'evaluate'" каждые
         # 3с весь WARM_WAIT_S, забивая логи и маскируя настоящие ошибки.
-        if self._page is None and not await self._relaunch():
+        # _needs_relaunch ставит fetch_path, когда его дедлайн сработал: драйвер
+        # подвис, ре-навигация по нему бессмысленна — нужен свежий браузер.
+        if (self._page is None or self._needs_relaunch) and not await self._relaunch():
             self._warm_backoff("браузер не поднялся")
             return
         log.info("дорожка %d: прогрев — навигация на %s", self.idx, WARM_URL)
@@ -366,17 +425,15 @@ class Lane:
                 self._warm_fails = 0
                 self._next_warm = 0.0
                 self._last_warm = time.monotonic()
+                _mark_success()
                 log.info("дорожка %d прогрета: egress=%s, FAB пройден",
                          self.idx, self.egress_ip or "?")
                 return
             await self._nudge()
-            # Не голый wait_for_timeout: на мёртвом драйвере он бросал исключение
-            # ВВЕРХ из warm() (до строк healthy=False/backoff ниже) — дорожка
-            # застревала healthy=True на трупе. Фолбэк на asyncio.sleep.
-            try:
-                await self._page.wait_for_timeout(3000)
-            except Exception:  # noqa: BLE001
-                await asyncio.sleep(3)
+            # Пауза — СВОИМ asyncio.sleep, а не page.wait_for_timeout: паузу
+            # незачем гонять через драйвер, а на подвисшем драйвере она не
+            # возвращается вовсе (ровно этим 29-07 залип пул).
+            await asyncio.sleep(3)
         # не прогрелась — backoff, чтобы не долбить FAB (это и жжёт IP)
         self._warm_backoff("прогрев не дал 200")
 
@@ -402,36 +459,61 @@ class Lane:
         одного вызова это не помогает (доверие восстанавливает только перепрогрев),
         зато растягивает latency (источник хвоста p99=30с) и жжёт IP. Поэтому при FAB
         сразу метим дорожку нездоровой и выходим (перепрогрев сделает maintenance_loop).
-        Ретраим ТОЛЬКО транзиентные пустышки (таймаут/0/иной не-200)."""
+        Ретраим ТОЛЬКО транзиентные пустышки (таймаут/0/иной не-200).
+
+        ДЕДЛАЙН: вся работа под локом ограничена LANE_OP_TIMEOUT_S. Инцидент 29-07:
+        подвисший драйвер держал лок вечно → запросы Go копились на входе в лок
+        (p95 30с), обслуживание пропускало залоченную дорожку, пул стоял 11ч при
+        healthy=4. Таймаут → 504 (Go считает это бедой сайдкара, а не FAB)."""
         async with self.lock:
-            t0 = time.monotonic()
-            spacing = max(0.1, LANE_MIN_INTERVAL_S * (1.0 + LANE_JITTER * (2 * random.random() - 1)))
-            wait = spacing - (t0 - self._last_at)
-            if wait > 0:
-                await asyncio.sleep(wait)
-            waited = time.monotonic() - t0
-            status, body = 0, ""
-            attempt = 0
-            for attempt in range(1, SCRAPE_RETRIES + 1):
-                self._last_at = time.monotonic()
-                status, body = await self._inpage_fetch(path)
-                if status == 200 and not _looks_blocked(status, body):
-                    elapsed = time.monotonic() - t0
-                    _observe_latency("ok", elapsed)
-                    log.info("дорожка %d: %s ок за %.2fс (спейсинг %.2fс, попыток %d)",
-                             self.idx, label, elapsed, waited, attempt)
-                    return 200, body.encode("utf-8")
-                if _looks_blocked(status, body):
-                    break  # FAB — ретрай бесполезен, выходим быстро (см. docstring)
-                if attempt < SCRAPE_RETRIES:  # транзиент — короткая пауза и ещё попытка
-                    await self._nudge()
-                    await self._page.wait_for_timeout(RETRY_PAUSE_MS)
-            self.healthy = False
-            elapsed = time.monotonic() - t0
-            _observe_latency("blocked", elapsed)
-            log.warning("дорожка %d: FAB/блок на %s (status=%s) за %.2fс попыток %d — нездорова",
-                        self.idx, label, status, elapsed, attempt)
-            return 403, (body or "").encode("utf-8")
+            self._lock_since = time.monotonic()
+            try:
+                return await asyncio.wait_for(self._fetch_locked(path, label),
+                                              timeout=LANE_OP_TIMEOUT_S)
+            except asyncio.TimeoutError:
+                self.healthy = False
+                self._needs_relaunch = True
+                _observe_latency("blocked", LANE_OP_TIMEOUT_S)
+                log.error("дорожка %d: %s завис дольше %.0fс — нездорова, "
+                          "браузер на пересоздание", self.idx, label, LANE_OP_TIMEOUT_S)
+                return 504, b""
+            finally:
+                self._lock_since = 0.0
+
+    async def _fetch_locked(self, path: str, label: str):
+        """Тело fetch_path под уже взятым локом (вынесено, чтобы обернуть в
+        wait_for целиком — включая спейсинг и паузы между ретраями)."""
+        t0 = time.monotonic()
+        spacing = max(0.1, LANE_MIN_INTERVAL_S * (1.0 + LANE_JITTER * (2 * random.random() - 1)))
+        wait = spacing - (t0 - self._last_at)
+        if wait > 0:
+            await asyncio.sleep(wait)
+        waited = time.monotonic() - t0
+        status, body = 0, ""
+        attempt = 0
+        for attempt in range(1, SCRAPE_RETRIES + 1):
+            self._last_at = time.monotonic()
+            status, body = await self._inpage_fetch(path)
+            if status == 200 and not _looks_blocked(status, body):
+                elapsed = time.monotonic() - t0
+                _observe_latency("ok", elapsed)
+                _mark_success()
+                log.info("дорожка %d: %s ок за %.2fс (спейсинг %.2fс, попыток %d)",
+                         self.idx, label, elapsed, waited, attempt)
+                return 200, body.encode("utf-8")
+            if _looks_blocked(status, body):
+                break  # FAB — ретрай бесполезен, выходим быстро (см. docstring)
+            if attempt < SCRAPE_RETRIES:  # транзиент — короткая пауза и ещё попытка
+                await self._nudge()
+                # Пауза СВОИМ sleep, не через драйвер: page.wait_for_timeout на
+                # подвисшем драйвере не возвращается (корень дедлока 29-07).
+                await asyncio.sleep(RETRY_PAUSE_MS / 1000.0)
+        self.healthy = False
+        elapsed = time.monotonic() - t0
+        _observe_latency("blocked", elapsed)
+        log.warning("дорожка %d: FAB/блок на %s (status=%s) за %.2fс попыток %d — нездорова",
+                    self.idx, label, status, elapsed, attempt)
+        return 403, (body or "").encode("utf-8")
 
     async def _inpage_fetch(self, path: str):
         try:
@@ -443,21 +525,31 @@ class Lane:
         return int(res.get("status") or 0), (res.get("body") or "")
 
     async def _nudge(self):
-        try:
-            await self._page.mouse.wheel(0, random.randint(200, 900))
-        except Exception:  # noqa: BLE001
-            pass
+        await _quiet_call(self._page.mouse.wheel(0, random.randint(200, 900)),
+                          DRIVER_CALL_TIMEOUT_S, "нудж", self.idx)
 
     async def _egress_ip(self) -> str:
+        # new_page() дедлайна НЕ имеет (в отличие от goto) — на подвисшем драйвере
+        # висит вечно, а вызывается это из warm(), т.е. из обслуживающего цикла.
+        try:
+            return await asyncio.wait_for(self._egress_ip_inner(),
+                                          timeout=DRIVER_CALL_TIMEOUT_S)
+        except Exception:  # noqa: BLE001
+            return ""
+
+    async def _egress_ip_inner(self) -> str:
+        p = None
         try:
             p = await self._browser.new_page(no_viewport=True)
             await p.goto("https://api.ipify.org?format=json", timeout=15000)
             txt = await p.evaluate("() => document.body.innerText")
-            await p.close()
             m = re.search(r'"ip":\s*"([^"]+)"', txt or "")
             return m.group(1) if m else ""
         except Exception:  # noqa: BLE001
             return ""
+        finally:
+            if p is not None:
+                await _quiet_call(p.close(), 5, "закрытие egress-страницы", self.idx)
 
     def due_rotate(self, now: float) -> bool:
         # Без switch-ссылки менять НЕЧЕГО: rotate() пропустит смену IP и всё равно
@@ -475,12 +567,19 @@ class Lane:
     def due_rewarm(self, now: float) -> bool:
         return (not self.healthy) and now >= self._next_warm
 
+    def stuck_for(self, now: float) -> float:
+        """Сколько секунд лок дорожки держат сверх LANE_STUCK_S (0 = не залипла)."""
+        if not self.lock.locked() or not self._lock_since:
+            return 0.0
+        held = now - self._lock_since
+        return held if held > LANE_STUCK_S else 0.0
+
     async def close(self):
-        try:
-            if self._cam:
-                await self._cam.__aexit__(None, None, None)
-        except Exception:  # noqa: BLE001
-            pass
+        # С дедлайном: __aexit__ на подвисшем драйвере не возвращается, а close()
+        # зовётся из _relaunch() внутри обслуживания — зависнет весь ремонт пула.
+        if self._cam:
+            await _quiet_call(self._cam.__aexit__(None, None, None),
+                              DRIVER_CALL_TIMEOUT_S, "закрытие браузера", self.idx)
 
 
 # ── Пул ──────────────────────────────────────────────────────────────────────
@@ -523,31 +622,68 @@ class Pool:
     def authed_healthy_count(self) -> int:
         return sum(1 for l in self.lanes if l.healthy and l.authed)
 
+    def stuck_lanes(self, now: float) -> int:
+        return sum(1 for l in self.lanes if l.stuck_for(now) > 0)
+
     async def maintenance_loop(self):
-        """Раз в MAINT_INTERVAL_S: ротация по расписанию, перепрогрев нездоровых
-        (с backoff), keepalive-прогрев живых. Всё под локом дорожки — не мешает
-        скрейпу в полёте."""
+        """Раз в MAINT_INTERVAL_S: вотчдог залипших дорожек, ротация по расписанию,
+        перепрогрев нездоровых (с backoff), keepalive-прогрев живых.
+
+        Обслуживание КАЖДОЙ дорожки — отдельная задача с дедлайном: раньше цикл
+        шёл последовательно и `await lane.warm()` на подвисшем драйвере морозил
+        ремонт всего пула (инцидент 29-07: 11ч без единого перепрогрева)."""
         while True:
             await asyncio.sleep(MAINT_INTERVAL_S)
             now = time.monotonic()
             for lane in self.lanes:
-                if lane.lock.locked():
+                # Вотчдог: лок держат дольше LANE_STUCK_S → дорожка залипла.
+                # Снимаем healthy (pick() её обойдёт) и метим на пересоздание —
+                # иначе она числится живой и молча съедает трафик.
+                held = lane.stuck_for(now)
+                if held > 0:
+                    if lane.healthy:
+                        log.error("дорожка %d: лок занят %.0fс — залипла, снимаю healthy",
+                                  lane.idx, held)
+                    lane.healthy = False
+                    lane._needs_relaunch = True
                     continue
+                if lane.lock.locked() or lane._servicing:
+                    continue
+                if not (lane.due_rotate(now) or lane.due_rewarm(now)
+                        or lane.due_keepalive(now)):
+                    continue
+                # Флаг ставим ЗДЕСЬ, а не в задаче: между ensure_future и первой
+                # строкой задачи цикл мог бы успеть завести вторую такую же.
+                lane._servicing = True
+                asyncio.ensure_future(self._service_lane(lane))
+
+    async def _service_lane(self, lane):
+        """Обслужить одну дорожку под её локом, с дедлайном на операцию."""
+        try:
+            async with lane.lock:
+                lane._lock_since = time.monotonic()
+                now = time.monotonic()
+                if lane.due_rotate(now):
+                    what, op = "плановая ротация IP", lane.rotate()
+                elif lane.due_rewarm(now):
+                    what, op = "нездорова — перепрогрев", lane.warm()
+                elif lane.due_keepalive(now):
+                    what, op = "keepalive-прогрев", lane.warm()
+                else:
+                    op = None
+                if op is None:
+                    return
+                log.info("дорожка %d: %s", lane.idx, what)
                 try:
-                    if lane.due_rotate(now):
-                        async with lane.lock:
-                            log.info("дорожка %d: плановая ротация IP", lane.idx)
-                            await lane.rotate()
-                    elif lane.due_rewarm(now):
-                        async with lane.lock:
-                            log.info("дорожка %d нездорова — перепрогрев", lane.idx)
-                            await lane.warm()
-                    elif lane.due_keepalive(now):
-                        async with lane.lock:
-                            log.info("дорожка %d: keepalive-прогрев", lane.idx)
-                            await lane.warm()
-                except Exception as e:  # noqa: BLE001
-                    log.error("дорожка %d: обслуживание упало: %s", lane.idx, e)
+                    await asyncio.wait_for(op, timeout=MAINT_OP_TIMEOUT_S)
+                except asyncio.TimeoutError:
+                    lane._warm_backoff(f"обслуживание не уложилось в {MAINT_OP_TIMEOUT_S:.0f}с")
+                    lane._needs_relaunch = True
+        except Exception as e:  # noqa: BLE001
+            log.error("дорожка %d: обслуживание упало: %s", lane.idx, e)
+        finally:
+            lane._lock_since = 0.0
+            lane._servicing = False
 
 
 # ── HTTP ─────────────────────────────────────────────────────────────────────
@@ -655,6 +791,15 @@ async def handle_metrics(request: web.Request) -> web.Response:
         "# HELP ozon_miner_authed_lanes Число живых АВТОРИЗОВАННЫХ дорожек (0 = 18+ товары недоступны)",
         "# TYPE ozon_miner_authed_lanes gauge",
         f"ozon_miner_authed_lanes {pool.authed_healthy_count()}",
+        "# HELP ozon_miner_stuck_lanes Дорожки с локом, занятым дольше порога (залипший драйвер)",
+        "# TYPE ozon_miner_stuck_lanes gauge",
+        f"ozon_miner_stuck_lanes {pool.stuck_lanes(time.monotonic())}",
+        # healthy_lanes ВРЁТ при залипании драйвера: дорожка числится живой, но
+        # ничего не отдаёт (инцидент 29-07 — 11ч простоя при healthy=4, critical-
+        # алерт на ==0 промолчал). Возраст последнего успеха не врёт — алерт на нём.
+        "# HELP ozon_miner_last_success_age_seconds Секунд с последнего успешного скрейпа/прогрева",
+        "# TYPE ozon_miner_last_success_age_seconds gauge",
+        f"ozon_miner_last_success_age_seconds {time.monotonic() - _last_success_at:.0f}",
         "# HELP ozon_miner_lane_healthy Здоровье конкретной дорожки (1=healthy, 0=нет)",
         "# TYPE ozon_miner_lane_healthy gauge",
     ]
