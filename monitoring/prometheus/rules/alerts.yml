@@ -142,6 +142,31 @@ groups:
           summary: "Ozon-сайдкар: нет живых дорожек"
           description: "ozon-miner отвечает, но 0 прогретых дорожек 10+ минут — camoufox не проходит FAB (протух refresh-token/FAB-пропуск). Снять свежий OZON_COOKIE (HTTP Toolkit через мобильный прокси) и пересоздать ozon-miner: docker compose up -d --force-recreate ozon-miner."
 
+      # ГЛАВНЫЙ алерт по Ozon-сайдкару: healthy_lanes ВРЁТ при залипании драйвера.
+      # Инцидент 29-07: подвисший драйвер держал лок дорожки, обслуживание встало,
+      # пул 11ч отдавал нули при healthy_lanes=4 — NoHealthyLanes промолчал, пришли
+      # только warning'и «медленный/ошибочный скрейп ozon». Возраст последнего
+      # успеха не обманешь: он растёт при ЛЮБОЙ причине простоя пула.
+      - alert: OzonMinerStale
+        expr: ozon_miner_last_success_age_seconds > 900
+        for: 5m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Ozon-сайдкар: нет успешных скрейпов 15+ минут"
+          description: "ozon-miner отвечает, но ни одного успешного скрейпа/прогрева 15+ минут (дорожки могут числиться healthy). Смотреть ozon_miner_stuck_lanes и логи pt_ozon_miner; лечение — docker compose up -d --force-recreate ozon-miner."
+
+      # Дорожка держит лок дольше порога = подвисший драйвер. Вотчдог снимает с
+      # неё healthy и пересоздаёт браузер сам; алерт нужен, если это повторяется.
+      - alert: OzonMinerStuckLanes
+        expr: ozon_miner_stuck_lanes > 0
+        for: 15m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Ozon-сайдкар: залипшие дорожки"
+          description: "{{ $value }} дорожек ozon-miner держат лок дольше порога 15+ минут — вотчдог не смог их расклинить (драйвер не отменяется). Нужен --force-recreate ozon-miner и разбор логов."
+
       # WB-search-сайдкар жив, но ни одной прогретой дорожки. Процесс-даун ловит
       # ServiceDown; здесь процесс отвечает, но браузер не проходит wbaas-стену
       # (create-token 498). Горячие WB-запросы перестают чиниться (уходят в 403).
