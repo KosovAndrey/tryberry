@@ -2,7 +2,7 @@ import React from 'react';
 import {Composition} from 'remotion';
 import {ChatSceneLeadIn, SeamBackdrop} from './ChatScene';
 import {Endcard} from './Endcard';
-import {alertIphone, alertBuds, searchIphone, searchBuds} from './data';
+import {alertIphone, alertBuds, searchIphone, searchBuds, searchBudsCut, alertIphoneTail} from './data';
 
 // Лид-ин: кадры чистой подложки перед первым сообщением. Нужны под стык с
 // AI-хуком (docs/content/hooks.md): последний кадр хука = первый кадр середины.
@@ -36,6 +36,12 @@ export const RemotionRoot: React.FC = () => {
       {chat('ChatAlertBuds', alertBuds, 11.8)}
       {chat('ChatSearchIphone', searchIphone, 7.5)}
       {chat('ChatSearchBuds', searchBuds, 7.5)}
+      {/* Наборы под СБОРНЫЙ ролик batch-03 V2: без cold open, ветка «любое
+          снижение», длительности подогнаны под биты озвучки (см. data.ts).
+          10.0с — под «это бот в твоём мессенджере…», 7.5с — под «например,
+          айфон…». Отдельные ролики продолжают рендериться из наборов выше. */}
+      {chat('ChatSearchBudsCut', searchBudsCut, 8.4)}
+      {chat('ChatAlertIphoneTail', alertIphoneTail, 5.9)}
       {/* B1 — эндкард, одинаковый во всех роликах (отличительный актив) */}
       <Composition id="Endcard" component={Endcard} durationInFrames={120} fps={30} width={1080} height={1920} />
       {/* Кадр стыка: экспортируется в PNG и отдаётся Kling конечным кадром.
