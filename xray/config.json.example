@@ -1,13 +1,11 @@
 {
-  "//": "ШАБЛОН клиента Xray для egress в Telegram. Скопировать в xray/config.json",
-  "//1": "и заполнить из подписки (см. xray/README.md). Реальный config.json — СЕКРЕТ.",
-  "//2": "Вариант: 6 серверов un1.pro (VLESS+Reality, TCP, fp=edge).",
-  "//3": "address/serverName(sni)/fingerprint уже пер-сервер. Осталось вставить 3 ОБЩИХ",
-  "//4": "секрета: <UUID>, <REALITY_PUBLIC_KEY> (pbk), <SHORT_ID> (sid) — одинаковы у всех.",
-  "//5": "Теги vless-gerN: balancer/observatory матчат по префиксу 'vless' → все 6 сразу.",
-
-  "log": { "loglevel": "warning" },
-
+  "//": "ШАБЛОН. Рабочий xray/config.json собирается scripts/xray-config-from-sub.py",
+  "//1": "из подписки — руками правят только в аварии. См. xray/README.md.",
+  "//2": "Ниже 3 плеча для примера: два tcp+vision и одно grpc. Секреты — плейсхолдеры.",
+  "//3": "Теги vless-*: balancer/observatory матчат по префиксу vless → все плечи сразу.",
+  "log": {
+    "loglevel": "warning"
+  },
   "inbounds": [
     {
       "//": "Локальный HTTP-прокси. Сюда ходят api/bot-worker/notifier (HTTPS_PROXY).",
@@ -15,91 +13,149 @@
       "listen": "0.0.0.0",
       "port": 8888,
       "protocol": "http",
-      "sniffing": { "enabled": true, "destOverride": ["http", "tls"] }
+      "sniffing": {
+        "enabled": true,
+        "destOverride": [
+          "http",
+          "tls"
+        ]
+      }
     }
   ],
-
   "outbounds": [
     {
-      "tag": "vless-ger1",
+      "tag": "vless-ee10",
+      "//": "🇪🇪 Эстония #10 ⚡ 2.0",
       "protocol": "vless",
-      "settings": { "vnext": [ { "address": "ger1.un1.pro", "port": 443,
-        "users": [ { "id": "<UUID>", "encryption": "none", "flow": "xtls-rprx-vision" } ] } ] },
-      "streamSettings": { "network": "tcp", "security": "reality", "realitySettings": {
-        "show": false, "fingerprint": "edge", "serverName": "ger1.un1.pro",
-        "publicKey": "<REALITY_PUBLIC_KEY>", "shortId": "<SHORT_ID>", "spiderX": "" } }
+      "settings": {
+        "vnext": [
+          {
+            "address": "ee10.fi1-cosmostechnology.ru",
+            "port": 443,
+            "users": [
+              {
+                "id": "<UUID>",
+                "encryption": "none",
+                "flow": "xtls-rprx-vision"
+              }
+            ]
+          }
+        ]
+      },
+      "streamSettings": {
+        "network": "tcp",
+        "security": "reality",
+        "realitySettings": {
+          "show": false,
+          "fingerprint": "qq",
+          "serverName": "fi1-cosmostechnology.ru",
+          "publicKey": "<REALITY_PUBLIC_KEY>",
+          "shortId": "",
+          "spiderX": ""
+        }
+      }
     },
     {
-      "tag": "vless-ger2",
+      "tag": "vless-lt1",
+      "//": "🇱🇹 Литва #1 ⚡ 2.0",
       "protocol": "vless",
-      "settings": { "vnext": [ { "address": "ger2.un1.pro", "port": 443,
-        "users": [ { "id": "<UUID>", "encryption": "none", "flow": "xtls-rprx-vision" } ] } ] },
-      "streamSettings": { "network": "tcp", "security": "reality", "realitySettings": {
-        "show": false, "fingerprint": "edge", "serverName": "ger2.un1.pro",
-        "publicKey": "<REALITY_PUBLIC_KEY>", "shortId": "<SHORT_ID>", "spiderX": "" } }
+      "settings": {
+        "vnext": [
+          {
+            "address": "lt1.fi1-cosmostechnology.ru",
+            "port": 443,
+            "users": [
+              {
+                "id": "<UUID>",
+                "encryption": "none",
+                "flow": ""
+              }
+            ]
+          }
+        ]
+      },
+      "streamSettings": {
+        "network": "grpc",
+        "security": "reality",
+        "realitySettings": {
+          "show": false,
+          "fingerprint": "firefox",
+          "serverName": "fi1-cosmostechnology.ru",
+          "publicKey": "<REALITY_PUBLIC_KEY>",
+          "shortId": "",
+          "spiderX": ""
+        },
+        "grpcSettings": {
+          "serviceName": "fi1cosmos",
+          "multiMode": false
+        }
+      }
     },
     {
-      "tag": "vless-ger3",
+      "tag": "vless-fl1",
+      "//": "🇫🇮 Финляндия #1 ⚡ 2.0",
       "protocol": "vless",
-      "settings": { "vnext": [ { "address": "ger3.un1.pro", "port": 443,
-        "users": [ { "id": "<UUID>", "encryption": "none", "flow": "xtls-rprx-vision" } ] } ] },
-      "streamSettings": { "network": "tcp", "security": "reality", "realitySettings": {
-        "show": false, "fingerprint": "edge", "serverName": "ger3.un1.pro",
-        "publicKey": "<REALITY_PUBLIC_KEY>", "shortId": "<SHORT_ID>", "spiderX": "" } }
-    },
-    {
-      "tag": "vless-ger4",
-      "protocol": "vless",
-      "settings": { "vnext": [ { "address": "ger4.un1.pro", "port": 443,
-        "users": [ { "id": "<UUID>", "encryption": "none", "flow": "xtls-rprx-vision" } ] } ] },
-      "streamSettings": { "network": "tcp", "security": "reality", "realitySettings": {
-        "show": false, "fingerprint": "edge", "serverName": "ger4.un1.pro",
-        "publicKey": "<REALITY_PUBLIC_KEY>", "shortId": "<SHORT_ID>", "spiderX": "" } }
-    },
-    {
-      "tag": "vless-ger5",
-      "protocol": "vless",
-      "settings": { "vnext": [ { "address": "ger5.un1.pro", "port": 443,
-        "users": [ { "id": "<UUID>", "encryption": "none", "flow": "xtls-rprx-vision" } ] } ] },
-      "streamSettings": { "network": "tcp", "security": "reality", "realitySettings": {
-        "show": false, "fingerprint": "edge", "serverName": "ger5.un1.pro",
-        "publicKey": "<REALITY_PUBLIC_KEY>", "shortId": "<SHORT_ID>", "spiderX": "" } }
-    },
-    {
-      "tag": "vless-ger6",
-      "protocol": "vless",
-      "settings": { "vnext": [ { "address": "ger6.un1.pro", "port": 443,
-        "users": [ { "id": "<UUID>", "encryption": "none", "flow": "xtls-rprx-vision" } ] } ] },
-      "streamSettings": { "network": "tcp", "security": "reality", "realitySettings": {
-        "show": false, "fingerprint": "edge", "serverName": "ger6.un1.pro",
-        "publicKey": "<REALITY_PUBLIC_KEY>", "shortId": "<SHORT_ID>", "spiderX": "" } }
+      "settings": {
+        "vnext": [
+          {
+            "address": "fl1.fi1-cosmostechnology.ru",
+            "port": 443,
+            "users": [
+              {
+                "id": "<UUID>",
+                "encryption": "none",
+                "flow": "xtls-rprx-vision"
+              }
+            ]
+          }
+        ]
+      },
+      "streamSettings": {
+        "network": "tcp",
+        "security": "reality",
+        "realitySettings": {
+          "show": false,
+          "fingerprint": "qq",
+          "serverName": "fi1-cosmostechnology.ru",
+          "publicKey": "<REALITY_PUBLIC_KEY>",
+          "shortId": "",
+          "spiderX": ""
+        }
+      }
     },
     {
       "tag": "direct",
       "protocol": "freedom"
     }
   ],
-
   "observatory": {
-    "//": "Пробит все vless-* — для balancer'а (живость + пинг до Telegram).",
-    "subjectSelector": ["vless"],
+    "//": "Пробит все vless-* — живость и пинг до Telegram для балансировщика.",
+    "subjectSelector": [
+      "vless"
+    ],
     "probeUrl": "https://api.telegram.org/",
     "probeInterval": "30s"
   },
-
   "routing": {
     "domainStrategy": "AsIs",
     "balancers": [
       {
-        "//": "leastPing держит трафик на живом и самом быстром из 6 узлов.",
-        "//1": "Селектор по префиксу: vless* (матчит все vless-gerN).",
+        "//": "leastPing держит трафик на живом и самом быстром плече.",
         "tag": "egress",
-        "selector": ["vless"],
-        "strategy": { "type": "leastPing" }
+        "selector": [
+          "vless"
+        ],
+        "strategy": {
+          "type": "leastPing"
+        }
       }
     ],
     "rules": [
-      { "type": "field", "network": "tcp,udp", "balancerTag": "egress" }
+      {
+        "type": "field",
+        "network": "tcp,udp",
+        "balancerTag": "egress"
+      }
     ]
   }
 }
