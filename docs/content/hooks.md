@@ -167,6 +167,92 @@ cd promo/remotion && npm run seam     # → out/seam-frame.png, 1080×1920
 
 ---
 
+## 🆕 Veo 3.1 в Flow — что меняется против Kling (2026-07-30)
+
+Доступ к Flow открыт (разбор доступа — в памяти проекта, `~/geo-check.sh` перед
+каждым сеансом). Рабочий URL — **`labs.google/fx/tools/flow`**.
+
+**Главное: пайплайн переносится целиком.** У Flow есть режим **Frames to Video** —
+первый И последний кадр. Значит наша схема со стыком (`seam-frame.png` как конечный
+кадр) работает штатно, и правило «конечный кадр только вместе со стартовым»
+соблюдается конструкцией самого режима.
+
+| Что | Kling 1.6 | Veo 3.1 в Flow |
+|---|---|---|
+| Конечный кадр | tail frame | **Frames to Video** — Start + End, схема та же |
+| Длина клипа | 5 сек | только **4 / 6 / 8** сек — пятёрки НЕТ |
+| Вертикаль 9:16 | настройка UI | нативно, 1080p и 4K |
+| Негатив | отдельное поле | в **advanced settings** (проверить в UI) |
+| Звук | нет | **генерирует нативно — ОТКЛЮЧИТЬ** |
+| Стиль промпта | проза | проза же, промпт переносится почти дословно |
+
+### ⚠️ Звук — новая грабля, которой у Kling не было
+
+Veo синтезирует звук сам: room tone, шорохи, а на кадре с телефоном — почти
+наверняка свой звук уведомления. Это ломает два наших решения сразу:
+
+1. Канон 2026-07-25: внутри композиций озвучки НЕТ, иначе стык не смонтировать.
+2. Звук-сигнатура алерта — наш отличительный актив (`docs/content/batch-02.md`).
+   Чужой динь на хуке отбирает у него первое появление.
+
+**Поэтому: выключаем генерацию звука в настройках Flow** (тумблер звука/SFX). Если
+тумблера не окажется — звуковые запреты в поле негатива, а в крайнем случае просто
+глушим дорожку на монтаже. И **не описываем звуки в промпте**: Veo реагирует на
+слова про звук audio-aware-генерацией. Наш текст промпта их не содержит — так и
+держать.
+
+### Длина: 5 сек → 4 сек
+
+Пятёрки в Veo нет, выбор 4/6/8. Берём **4 секунды**, и это не компромисс, а
+улучшение: риск, который мы сами описали выше (с жёсткой целью модель топчется в
+начале и комкает движение в конце), растёт с длиной. На 4 секундах наезд обязан
+быть непрерывным, а вспышке некуда уехать. 6 секунд — вариант дубля, если на
+четырёх вспышка с наездом покажутся скомканными. 8 не берём вообще.
+
+Обрезка не меняется: якоря стоят с двух сторон, режем не концы, а темп.
+
+### Промпты пилота под Veo
+
+Стартовый кадр (Imagen внутри Flow либо своя картинка — отбирать ту, где телефон
+занимает 40–50% высоты):
+
+```
+An extreme close-up photograph of a smartphone lying face-up on a dark wooden
+nightstand, the blurred edge of a folded blanket behind it. The screen is dark and
+featureless, switched off. Night interior, deep black shadows, a single faint warm
+lamp glow from far off-frame, cinematic color grading, shallow depth of field.
+Vertical 9:16.
+```
+
+Оживление (Frames to Video: картинка → Start, `seam-frame.png` → End). Отличие от
+Kling-версии — одна добавленная фраза про отсутствие интерфейса: Veo охотно
+дорисовывает на экранах иконки и текст, а нам нужен чистый лист света:
+
+```
+The phone stays still and the screen remains dark for a moment, then it suddenly
+illuminates into a blank featureless sheet of even white light that spills across the
+wood and the fabric. Camera slow dolly push-in toward the phone until the glowing
+screen fills the entire frame. The screen shows no interface, no icons and no text —
+only smooth even light. The phone is the only object in the scene, nothing else enters
+the frame and nothing else moves.
+```
+
+Негатив (в advanced settings; к Kling-списку добавлены иконки, баннер и три
+звуковых запрета):
+
+```
+text, letters, numbers, watermark, logo, brand marks, user interface, icons, screen
+content, notification banner, cuts, transitions, scene change, morphing, distortion,
+blurry, low quality, music, speech, sound effects
+```
+
+Три дубля — по одной переменной, как и раньше: (1) эталон выше, (2) `warm amber
+glow` вместо белого, (3) 6 секунд вместо 4. Дубль «без конечного кадра» снят: в
+Frames to Video оба кадра обязательны по конструкции режима, а страховка от морфа
+теперь — пункт 3, потому что топтание лечится длиной, а не снятием якоря.
+
+---
+
 ## 🎬 Клип №1 — пилот конвейера (решение 2026-07-28)
 
 Первым генерим **не самый эффектный кадр, а самый диагностичный**: он должен за
