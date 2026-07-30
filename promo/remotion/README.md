@@ -30,6 +30,10 @@ npm run dev          # Remotion Studio: живое превью в браузе�
 npx remotion render ChatAlertIphone out/alert-iphone.mp4   # товарный алерт + график
 npx remotion render ChatSearchIphone out/search-iphone.mp4 # подписка на выдачу (ядро)
 # также: ChatAlertBuds / ChatSearchBuds / Endcard
+
+# под СБОРНЫЙ ролик V2 (batch-03.md) — версии без cold open, ветка «любое снижение»:
+npx remotion render ChatSearchBudsCut  out/6-search-buds-cut.mp4    # 10,0 с
+npx remotion render ChatAlertIphoneTail out/7-alert-iphone-tail.mp4 # 7,5 с
 ```
 
 `npm run dev` — самый удобный вход: открывает Studio на localhost, там обе
