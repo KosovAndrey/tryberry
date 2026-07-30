@@ -246,10 +246,44 @@ content, notification banner, cuts, transitions, scene change, morphing, distort
 blurry, low quality, music, speech, sound effects
 ```
 
-Три дубля — по одной переменной, как и раньше: (1) эталон выше, (2) `warm amber
-glow` вместо белого, (3) 6 секунд вместо 4. Дубль «без конечного кадра» снят: в
-Frames to Video оба кадра обязательны по конструкции режима, а страховка от морфа
-теперь — пункт 3, потому что топтание лечится длиной, а не снятием якоря.
+### ⛔ Провал дубля №1 на Veo 3 Fast (2026-07-30): белый разгон вместо проезда
+
+Первый прогон: телефон разгоняет свечение до белого и заливает им весь кадр, проезда
+камеры нет. **Причина — противоречие якорей, а не модель.** Мы одновременно
+потребовали: старт тёмный → экран `even white light` → конец `#120a10` (почти чёрный).
+Связно это не выполнимо, и модель пошла самым дешёвым путём — в белое.
+
+Расхождение было и внутри дока: требование к кадру выше говорит «заканчиваться
+экраном, заполняющим кадр — **тёмным, с лёгким свечением**», а в промпт оживления
+попал белый лист света. Промпт исправлен, светимость ограничена и ей задано
+затухание к тёмному финалу:
+
+```
+The dark screen suddenly turns on with a soft even grey-white glow of modest
+brightness — never pure white, never blown out — spilling faintly across the wood and
+the fabric. The camera then physically dollies forward on a straight track toward the
+phone, closing the distance until the screen occupies the whole frame and the glow has
+settled down to almost black. The brightness never increases after the screen turns
+on. The screen shows no interface, no icons and no text. The phone is the only object
+in the scene, nothing else enters the frame and nothing else moves.
+```
+
+`suddenly` сохранено намеренно — резкая смена яркости это стоппер, терять нельзя,
+ограничен только уровень. Камера сделана подлежащим и описана механически: на
+«push-in» Veo может ответить зумом яркости, на «dollies forward on a straight track» —
+нет. В негатив добавлено:
+`bloom, glare, lens flare, overexposure, blown highlights, white flash, fade to white,
+light filling the frame, zoom blur, static camera`.
+
+Три дубля: (1) промпт v2 выше, (2) 6 секунд вместо 4, (3) **без конечного кадра** —
+режим **Image to Video** с одним стартовым кадром, клип заканчивается где закончится,
+стык делаем вспышкой на монтаже. Ранняя редакция этого раздела утверждала, что дубль
+без конечного кадра недоступен, раз в Frames to Video обязательны оба кадра — неверно,
+для него просто берётся другой режим.
+
+Один дубль прогнать на **Veo 3.1, а не Fast**: Fast слабее в управлении камерой и
+охотнее подменяет проезд ростом яркости. Если проезда нет и на качественной модели —
+это предел модели, уходим в fallback со вспышкой не разбираясь дальше.
 
 ---
 
