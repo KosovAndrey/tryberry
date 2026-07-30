@@ -10,65 +10,52 @@ HTTPS (особенно **VLESS+Reality** — маскируется под TLS 
 
 ## Как это устроено
 
-Один контейнер `xray` поднимает локальный HTTP-прокси на `:8888`. Плечи выхода
-(outbound):
-
-- **`vless-ger1` … `vless-ger6`** — 6 немецких узлов подписки un1.pro.
+Один контейнер `xray` поднимает локальный HTTP-прокси на `:8888`. Плечи выхода —
+outbound'ы `vless-*` (по умолчанию 16 узлов подписки, разложенных по странам).
 
 `observatory` каждые 30с пробит все плечи до `api.telegram.org`, `balancer`
 (`leastPing`) держит трафик на **живом и самом быстром** узле. Узел отвалился —
 автоматически уходим на следующий, без рестартов. Селектор балансировщика
-матчит теги по префиксу, поэтому `["vless"]` охватывает все шесть `vless-*`
-сразу.
+матчит теги по префиксу, поэтому `["vless"]` охватывает все плечи сразу.
 
 Сервисы `api`/`bot-worker`/`notifier` ходят сюда как
 `HTTPS_PROXY=http://xray:8888`.
 
-## Почему 6 серверов вручную, а не «подписка»
+## Конфиг собирается из подписки скриптом
 
-Xray-core **не умеет подписочные ссылки** (`subs.un1.pro/...`) — их разворачивают
-клиенты (v2rayN/Nekobox), ядро ест только статический `config.json`. Поэтому 6
-узлов прописаны как 6 outbound. Это надёжнее динамики: всё под контролем и в git,
-а хостнеймы `gerN.un1.pro` стабильны. Сменятся узлы — обновить `config.json`.
-
-## Установка (на сервере)
+Xray-core **не умеет подписочные ссылки** — их разворачивают клиенты
+(v2rayN/Nekobox), ядро ест только статический `config.json`. Пока узлов было
+шесть, их вписывали руками; на подписке в ~80 узлов это неподъёмно, поэтому
+конфиг генерится:
 
 ```bash
-cp xray/config.json.example xray/config.json   # config.json — секрет, в .gitignore
+python3 scripts/xray-config-from-sub.py 'https://ПОДПИСКА/КОД' -o xray/config.json
 ```
 
-Саму `vless://`-ссылку никуда не вставляют — из неё берут параметры. Вытащить:
+Скрипт разворачивает `vless://`-ссылки в outbound'ы, вешает на них общий
+balancer и observatory — то же, что было руками, только воспроизводимо. Полезные
+ключи:
 
-```bash
-curl -s "https://subs.un1.pro/<ТВОЙ_КОД>" | base64 -d
-# 6 строк вида:
-# vless://<UUID>@ger6.un1.pro:443?...&fp=edge&pbk=<PBK>&sid=<SID>&sni=ger6.un1.pro#...
-```
+| Ключ                 | Зачем                                                    |
+|----------------------|----------------------------------------------------------|
+| `--list`             | показать узлы подписки и выйти, ничего не записывая        |
+| `-n 24`              | сколько плеч оставить (по умолчанию 16, `0` = все)         |
+| `--include 'Финлян'` | оставить только узлы, чьё имя/хост совпали с regex         |
+| `--exclude 'Турц'`   | выкинуть узлы по regex (матчит имя и хост, не транспорт)   |
+| `--network tcp`      | только этот транспорт — под long-poll лучший `tcp`+vision  |
 
-`address`, `serverName` (= `sni` = `gerN.un1.pro`), `fingerprint` (`edge`) и
-`flow` уже проставлены пер-сервер в шаблоне. Заполнить нужно только **3 ОБЩИХ**
-секрета (одинаковы во всех 6 блоках):
+Все узлы брать не надо: observatory пробит **каждое** плечо раз в 30с, и сотня
+лишних коннектов в минуту ради узлов в Канаде egress'у не помогает. Скрипт
+набирает плечи round-robin по странам ближнего круга (FI, EE, LV, LT, SE, NL,
+DE, PL), так что падение одной локации не выкашивает все плечи разом; дальние
+страны идут только на добор.
 
-| Плейсхолдер              | Откуда в ссылке `vless://`                 | Поле в конфиге                |
-|--------------------------|--------------------------------------------|-------------------------------|
-| `<UUID>`                 | часть до `@`                               | `...users[0].id`             |
-| `<REALITY_PUBLIC_KEY>`   | `pbk=...`                                  | `realitySettings.publicKey`  |
-| `<SHORT_ID>`             | `sid=...` (если в ссылке нет — оставь `""`) | `realitySettings.shortId`    |
+Поддержаны reality поверх `tcp`, `grpc` и `xhttp`. `flow=xtls-rprx-vision`
+проставляется только на `tcp` — на grpc/xhttp ядро с ним не стартует.
 
-Удобно `sed`'ом (значения общие):
-
-```bash
-sed -i \
-  -e 's/<UUID>/ВАШ_UUID/g' \
-  -e 's|<REALITY_PUBLIC_KEY>|ВАШ_PBK|g' \
-  -e 's/<SHORT_ID>/ВАШ_SID/g' \
-  xray/config.json
-```
-
-> ⚠️ `pbk` содержит `_`/`-` → в `sed` бери разделитель `|` (как выше), не `/`.
-
-Если в подписке другие хостнеймы/порт/`sni`/`fp` — поправь соответствующие поля
-в блоках вручную.
+> `xray/config.json` — **секрет** (внутри UUID и pbk), в `.gitignore`. В git
+> лежит только `config.json.example` с плейсхолдерами. Сама ссылка подписки в
+> репозиторий тоже не попадает.
 
 Поднять и перецепить потребителей прокси:
 
@@ -77,27 +64,34 @@ docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d xray
 docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d api bot-worker notifier
 ```
 
+Сменились узлы у провайдера — перегенерить тем же скриптом и `up -d xray`.
+
 ## Проверка
 
 ```bash
-# Через какое плечо реально идёт трафик: ищем [in -> vless-gerN]:
+# Через какое плечо реально идёт трафик: ищем [in -> vless-XXX]:
 docker compose logs --tail=30 xray
 
 # Какой IP видит мир через xray (в образе busybox wget — прокси через env + -Y on):
 docker compose exec xray sh -c "http_proxy=http://127.0.0.1:8888 wget -Y on -qO- http://api.ipify.org; echo"
+
+# Доходит ли до Telegram (главное, ради чего всё):
+docker compose exec xray sh -c "http_proxy=http://127.0.0.1:8888 wget -Y on -qO- -T 15 https://api.telegram.org/; echo RC=\$?"
 ```
 
 Если все `vless-*` помечаются мёртвыми (Telegram перестал отвечать):
-- `x509: certificate is valid for ... not <SNI>` → в `config.json` остался
-  незаменённый плейсхолдер `serverName`; пересобери конфиг из свежего `.example`
-  (там `serverName` уже = `gerN.un1.pro`).
-- иначе → `pbk`/`sid`/`serverName` не совпали с подпиской (Reality к ним
-  чувствителен) или `gerN.un1.pro:443` недоступны с сервера.
+- `x509: certificate is valid for ... not <SNI>` → `serverName` не тот, что ждёт
+  сервер: перегенерь конфиг из **свежей** подписки (провайдер сменил камуфляж);
+- `REALITY: processed invalid connection` → `pbk`/`sid` разошлись с подпиской;
+- плечи живы, но long-poll всё равно висит → проблема не в xray, см. алерт
+  `TelegramPollingStale` и `telegram_poll_errors_total`: если счётчик ошибок
+  **не растёт**, а `last_success` стоит — висит соединение, лечится
+  `restart api`, а не заменой узлов.
 
 ## Другой тип подписки (не Reality)
 
-Шаблон собран под **VLESS+Reality / TCP** (`security=reality&type=tcp`). Если в
-ссылке `type=ws`/`grpc` и `security=tls` — поменяй `streamSettings`, напр. для WS:
+Скрипт пропускает всё, что не `security=reality`. Если провайдер отдаёт
+`ws`+`tls`, outbound пишется руками:
 
 ```json
 "streamSettings": {
