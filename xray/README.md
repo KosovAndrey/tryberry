@@ -79,14 +79,34 @@ docker compose exec xray sh -c "http_proxy=http://127.0.0.1:8888 wget -Y on -qO-
 docker compose exec xray sh -c "http_proxy=http://127.0.0.1:8888 wget -Y on -qO- -T 15 https://api.telegram.org/; echo RC=\$?"
 ```
 
+> ⚠️ Последняя команда **в норме печатает `400 Bad Request` и `RC=1`** — это успех, а
+> не поломка. busybox wget для `https://`-URL не делает CONNECT, а шлёт прокси GET
+> в absolute-form; xray отправляет открытый HTTP на 443-й порт, и nginx Telegram
+> отвечает 400. Важно, ЧЕЙ это ответ: `400` пришёл сквозь туннель (плечо живо), а
+> `503` отдаёт сам xray, когда не смог никуда дозвониться (все плечи мертвы).
+> Проверка `http://api.ipify.org` однозначнее — там нет TLS и ответ виден глазами.
+
+Ещё одна строка, которую видно на старте и пугаться которой не надо:
+`The feature gRPC transport ... is deprecated` — ядро ворчит на grpc-плечи
+подписки. Они работают; если ворчание мешает, соберите конфиг с `--network tcp`.
+
 Если все `vless-*` помечаются мёртвыми (Telegram перестал отвечать):
 - `x509: certificate is valid for ... not <SNI>` → `serverName` не тот, что ждёт
   сервер: перегенерь конфиг из **свежей** подписки (провайдер сменил камуфляж);
 - `REALITY: processed invalid connection` → `pbk`/`sid` разошлись с подпиской;
+- `websocket: protocol "h2" was given but is not supported` + `malformed HTTP
+  response "\x00\x00\x1e\x04..."` → эти байты HTTP/2-фрейма означают, что на том
+  конце уже не VLESS-узел, а обычный веб-сервер: **подписка кончилась**, ноду
+  перепрофилировали. Так лёг egress 2026-07-30 (провайдер joybang, ws+tls) — бот
+  не принимал команды 5.5 часов. Лечится не правкой конфига, а новой подпиской;
 - плечи живы, но long-poll всё равно висит → проблема не в xray, см. алерт
   `TelegramPollingStale` и `telegram_poll_errors_total`: если счётчик ошибок
   **не растёт**, а `last_success` стоит — висит соединение, лечится
   `restart api`, а не заменой узлов.
+
+Отдельно стоит помнить, что через xray идёт **не только Telegram**: там же живёт
+`u-card.wb.ru` (живая цена WB). Умер egress — вместе с ботом молча встаёт и
+обновление цен WB, хотя алерт приходит только про getUpdates.
 
 ## Другой тип подписки (не Reality)
 
