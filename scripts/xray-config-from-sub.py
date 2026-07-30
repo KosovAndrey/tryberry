@@ -257,7 +257,10 @@ def balancer(prefer: list[str] | None) -> dict[str, Any]:
         "//": f"Приоритет стран: {' > '.join(prefer)} (cost умножает RTT, меньше = лучше).",
         "tag": "egress",
         "selector": ["vless"],
-        "strategy": {"type": "leastLoad", "settings": {"expected": 2, "costs": costs}},
+        # expected=1 — держать РОВНО одно плечо. При 2+ ядро раскидывает соединения
+        # между лучшими, а с DisableKeepAlives у бота это значит новый путь почти на
+        # каждый запрос: трафик скачет lt1→de9→ee7 и никуда не «прогревается».
+        "strategy": {"type": "leastLoad", "settings": {"expected": 1, "costs": costs}},
     }
 
 
