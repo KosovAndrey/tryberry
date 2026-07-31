@@ -33,6 +33,7 @@ import logging
 import os
 import random
 import re
+import signal
 import time
 from urllib.parse import unquote, urlparse
 
@@ -101,6 +102,21 @@ DRIVER_CALL_TIMEOUT_S = float(os.getenv("OZON_DRIVER_CALL_TIMEOUT_SECONDS", "20"
 LANE_STUCK_S = float(os.getenv("OZON_LANE_STUCK_SECONDS",
                                str(max(LANE_OP_TIMEOUT_S, MAINT_OP_TIMEOUT_S) + 60)))
 
+# ── Уборка процессов браузера ────────────────────────────────────────────────
+# Дорожка camoufox — это дерево: node-драйвер playwright, под ним firefox с
+# content-процессами. Когда штатное закрытие не отрабатывает (подвисший драйвер,
+# сбой на старте), дерево остаётся жить: после закрытия ДОБИВАЕМ его по PID'ам,
+# осиротевшие подбирает уборщик.
+#
+# ВАЖНО про диагностику: колонка PIDs в `docker stats` — это ЗАДАЧИ cgroup, то
+# есть ПОТОКИ. У шести дорожек штатно ~1200 потоков при ~52 процессах, и это не
+# признак утечки (31-07 я принял одно за другое и полдня искал протечку там, где
+# её нет). Считать надо процессы — метрика ozon_miner_processes ниже.
+# Пауза между SIGTERM и SIGKILL при добивании дерева.
+KILL_GRACE_S = float(os.getenv("OZON_KILL_GRACE_SECONDS", "3"))
+# Сирота моложе этого не трогается (страховка от гонок при старте драйвера).
+ORPHAN_MIN_AGE_S = float(os.getenv("OZON_ORPHAN_MIN_AGE_SECONDS", "60"))
+
 LOG_LEVEL = os.getenv("LOG_LEVEL", "INFO").upper()
 
 logging.basicConfig(level=getattr(logging, LOG_LEVEL, logging.INFO),
@@ -152,6 +168,197 @@ async def _quiet_call(coro, timeout: float, what: str, idx: int):
     except Exception as e:  # noqa: BLE001
         log.debug("дорожка %d: %s: %s", idx, what, _first_line(e))
     return False
+
+# ── Учёт и уборка процессов браузера ─────────────────────────────────────────
+# Запуски браузеров сериализуем: PID'ы дорожки определяем диффом собственных
+# детей до/после старта, а при параллельных запусках дифф перемешался бы.
+_launch_lock = asyncio.Lock()
+_orphans_killed = 0
+
+# Уборщик работает ТОЛЬКО внутри контейнера и ТОЛЬКО по процессам браузера: два
+# независимых предохранителя, чтобы правило «ppid==1 значит сирота» никогда не
+# приложилось к системным службам (вне контейнера у них ровно такой родитель).
+_IN_CONTAINER = os.path.exists("/.dockerenv")
+_ORPHAN_NAME_RE = re.compile(
+    r"firefox|camoufox|^node$|Web Content|WebExtensions|RDD Process|"
+    r"Utility Process|Socket Process|Isolated Web Co|chrome",
+    re.IGNORECASE)
+
+_PAGE_SIZE = os.sysconf("SC_PAGE_SIZE")
+_CLK_TCK = os.sysconf("SC_CLK_TCK")
+
+
+def _boot_time() -> float:
+    try:
+        with open("/proc/stat") as f:
+            for line in f:
+                if line.startswith("btime "):
+                    return float(line.split()[1])
+    except OSError:
+        pass
+    return 0.0
+
+
+def _snapshot_procs() -> dict:
+    """Снимок процессов контейнера: pid → {ppid, comm, rss, started}.
+    Читаем /proc напрямую: в slim-образе нет ни ps, ни psutil."""
+    boot = _boot_time()
+    procs = {}
+    try:
+        entries = os.listdir("/proc")
+    except OSError:
+        return procs
+    for e in entries:
+        if not e.isdigit():
+            continue
+        pid = int(e)
+        try:
+            with open(f"/proc/{pid}/stat") as f:
+                raw = f.read()
+            comm = raw[raw.index("(") + 1:raw.rindex(")")]
+            rest = raw[raw.rindex(")") + 2:].split()
+            ppid = int(rest[1])
+            started = boot + float(rest[19]) / _CLK_TCK if boot else 0.0
+            with open(f"/proc/{pid}/statm") as f:
+                rss = int(f.read().split()[1]) * _PAGE_SIZE
+        except (OSError, ValueError, IndexError):
+            continue  # процесс умер между listdir и чтением — норма
+        procs[pid] = {"ppid": ppid, "comm": comm, "rss": rss, "started": started}
+    return procs
+
+
+def _own_children(procs=None) -> set:
+    """Прямые дети НАШЕГО процесса: node-драйвер playwright запускается отсюда,
+    а firefox уже из него — поэтому дерева от этих корней достаточно."""
+    procs = procs if procs is not None else _snapshot_procs()
+    me = os.getpid()
+    return {pid for pid, p in procs.items() if p["ppid"] == me}
+
+
+def _tree_of(root: int, procs: dict) -> list:
+    """Корень и все его потомки (в порядке от корня — так убиваем родителя первым)."""
+    kids = {}
+    for pid, p in procs.items():
+        kids.setdefault(p["ppid"], []).append(pid)
+    out, queue = [], [root]
+    while queue:
+        pid = queue.pop(0)
+        if pid in out or pid not in procs:
+            continue
+        out.append(pid)
+        queue.extend(kids.get(pid, []))
+    return out
+
+
+async def _kill_tree(roots, what: str, idx=-1) -> int:
+    """Прибить деревья процессов: SIGTERM, пауза, SIGKILL выжившим.
+    Возвращает число фактически убитых процессов."""
+    roots = [r for r in roots if r]
+    if not roots:
+        return 0
+    procs = _snapshot_procs()
+    victims = []
+    for r in roots:
+        for pid in _tree_of(r, procs):
+            if pid not in victims and pid != os.getpid():
+                victims.append(pid)
+    if not victims:
+        return 0
+    for pid in victims:
+        try:
+            os.kill(pid, signal.SIGTERM)
+        except (ProcessLookupError, PermissionError):
+            pass
+    await asyncio.sleep(KILL_GRACE_S)
+    killed = 0
+    for pid in victims:
+        try:
+            os.kill(pid, signal.SIGKILL)
+        except ProcessLookupError:
+            killed += 1  # уже ушёл по SIGTERM
+            continue
+        except PermissionError:
+            continue
+        killed += 1
+    log.info("дорожка %s: %s — прибито процессов %d", idx if idx >= 0 else "-", what, killed)
+    return killed
+
+
+async def reap_orphans(now: float = 0.0) -> int:
+    """Осиротевшие деревья браузеров. Наши живые драйверы — всегда прямые дети
+    этого процесса; если родитель умер, дерево усыновляет PID 1 (tini, init:true
+    в compose). Значит чужой процесс с ppid==1 — гарантированный сирота, и это
+    ровно то, что копилось тысячами. Молодых не трогаем (страховка от гонок)."""
+    global _orphans_killed
+    if not _IN_CONTAINER:
+        # Вне контейнера ppid==1 — это обычные системные службы, а не сироты
+        # браузера. Убирать по такому признаку на живом хосте нельзя.
+        return 0
+    if os.getpid() == 1:
+        # Мы сами PID 1 (контейнер поднят без init) — наши живые драйверы тоже
+        # имеют ppid==1, отличить сироту нельзя. Лучше не убирать ничего, чем
+        # снести рабочий пул. В compose у сайдкара стоит init: true.
+        return 0
+    procs = _snapshot_procs()
+    now = now or time.time()
+    roots = [pid for pid, p in procs.items()
+             if p["ppid"] == 1 and pid != os.getpid()
+             and _ORPHAN_NAME_RE.search(p["comm"])
+             and (not p["started"] or now - p["started"] > ORPHAN_MIN_AGE_S)]
+    if not roots:
+        return 0
+    names = ", ".join(sorted({procs[p]["comm"] for p in roots}))
+    log.warning("уборщик: осиротевших деревьев %d (%s) — убираю", len(roots), names)
+    killed = await _kill_tree(roots, "уборка сирот")
+    _orphans_killed += killed
+    return killed
+
+
+def _cgroup_stat_value(path: str, key: str) -> int:
+    try:
+        with open(path) as f:
+            for line in f:
+                if line.startswith(key + " "):
+                    return int(line.split()[1])
+    except (OSError, ValueError):
+        pass
+    return 0
+
+
+def _container_memory() -> int:
+    """Память контейнера — ровно то, что показывает docker stats: cgroup-usage
+    минус неактивный page cache (docker вычитает его же).
+    Сумма RSS по процессам для этого НЕ годится: firefox с content-процессами
+    делит страницы, и сумма считает общую память по разу на процесс (давала 8ГБ
+    там, где docker stats показывал 3.7). Фолбэк на сумму RSS — если cgroup-файлов
+    нет (не Linux/не контейнер)."""
+    for usage, stat, key in (
+            ("/sys/fs/cgroup/memory.current",                 # cgroup v2
+             "/sys/fs/cgroup/memory.stat", "inactive_file"),
+            ("/sys/fs/cgroup/memory/memory.usage_in_bytes",   # cgroup v1
+             "/sys/fs/cgroup/memory/memory.stat", "total_inactive_file")):
+        try:
+            with open(usage) as f:
+                total = int(f.read().strip())
+        except (OSError, ValueError):
+            continue
+        return max(0, total - _cgroup_stat_value(stat, key))
+    return sum(p["rss"] for p in _snapshot_procs().values())
+
+
+def _process_stats():
+    """(процессов, потоков, память контейнера). Потоки отдаём отдельно именно
+    потому, что PIDs в docker stats — это они: без своей метрики их снова
+    примут за процессы и увидят утечку там, где её нет."""
+    procs = _snapshot_procs()
+    threads = 0
+    for pid in procs:
+        try:
+            threads += len(os.listdir(f"/proc/{pid}/task"))
+        except OSError:
+            continue
+    return len(procs), threads, _container_memory()
+
 
 # ── Гистограмма латентности скрейпа (без prometheus_client) ───────────────────
 # Меряет латентность ВНУТРИ сайдкара (in-page fetch + спейсинг + ретраи) по метке
@@ -318,10 +525,27 @@ class Lane:
         self._cam = None
         self._browser = None
         self._page = None
+        # PID'ы, поднятые запуском этой дорожки (node-драйвер playwright; firefox
+        # висит уже под ним). По ним добиваем дерево, если закрытие не отработало.
+        self._proc_pids = set()
 
     async def _launch(self):
         """Поднять camoufox + страницу + куки (без прогрева). Общий код для
-        первого старта и для пересоздания после смерти драйвера."""
+        первого старта и для пересоздания после смерти драйвера.
+
+        Под общим локом и с учётом PID'ов: запомненные дети (node-драйвер, а через
+        него firefox) — единственный способ потом гарантированно снести браузер,
+        когда штатное закрытие подвисло."""
+        async with _launch_lock:
+            before = _own_children()
+            try:
+                await self._launch_locked()
+            finally:
+                # ЛЮБОЙ исход, включая исключение и отмену по таймауту: всё, что
+                # успело подняться, должно быть записано — иначе оно осиротеет.
+                self._proc_pids |= (_own_children() - before)
+
+    async def _launch_locked(self):
         kw = {"headless": HEADLESS}
         proxy = _parse_proxy(self.proxy)
         if proxy:
@@ -334,6 +558,12 @@ class Lane:
         except Exception as e:  # noqa: BLE001
             log.warning("дорожка %d: geoip недоступен (%s) — без него",
                         self.idx, _first_line(e))
+            # Первую инстанцию ОБЯЗАТЕЛЬНО гасим: __aenter__ падает уже после
+            # старта node-драйвера, и без этого каждая пересборка дорожки
+            # оставляла жить целое дерево процессов (источник утечки 31-07).
+            failed, self._cam = self._cam, None
+            await _quiet_call(failed.__aexit__(None, None, None),
+                              DRIVER_CALL_TIMEOUT_S, "закрытие после сбоя geoip", self.idx)
             self._cam = AsyncCamoufox(**kw)
             self._browser = await self._cam.__aenter__()
         # no_viewport=True: НЕ слать setDefaultViewport (playwright кладёт туда поле
@@ -580,6 +810,13 @@ class Lane:
         if self._cam:
             await _quiet_call(self._cam.__aexit__(None, None, None),
                               DRIVER_CALL_TIMEOUT_S, "закрытие браузера", self.idx)
+        # Добиваем дерево по запомненным PID'ам. Именно здесь была утечка: при
+        # подвисшем драйвере __aexit__ отваливался по таймауту, playwright не
+        # доводил уборку до конца, и node+firefox оставались жить навсегда.
+        # Вызываем ВСЕГДА, а не только по таймауту: и штатное закрытие иногда
+        # оставляет хвост content-процессов.
+        await _kill_tree(self._proc_pids, "добивание дерева браузера", self.idx)
+        self._proc_pids = set()
 
 
 # ── Пул ──────────────────────────────────────────────────────────────────────
@@ -634,6 +871,10 @@ class Pool:
         ремонт всего пула (инцидент 29-07: 11ч без единого перепрогрева)."""
         while True:
             await asyncio.sleep(MAINT_INTERVAL_S)
+            # Уборка осиротевших браузеров (утечка процессов camoufox). Отдельной
+            # задачей: внутри есть пауза между SIGTERM и SIGKILL, и она не должна
+            # задерживать обслуживание дорожек.
+            asyncio.ensure_future(reap_orphans())
             now = time.monotonic()
             for lane in self.lanes:
                 # Вотчдог: лок держат дольше LANE_STUCK_S → дорожка залипла.
@@ -807,6 +1048,24 @@ async def handle_metrics(request: web.Request) -> web.Response:
         lines.append(
             f'ozon_miner_lane_healthy{{lane="{l.idx}",authed="{1 if l.authed else 0}"}} '
             f'{1 if l.healthy else 0}')
+    # Ресурсы сайдкара: раньше их было видно только снаружи через docker stats,
+    # где PIDs = потоки — отсюда и путаница 31-07. Здесь процессы и потоки
+    # разделены, а память совпадает с docker stats.
+    n_proc, n_thread, mem = _process_stats()
+    lines.extend([
+        "# HELP ozon_miner_processes Процессов в контейнере (браузеры + драйверы)",
+        "# TYPE ozon_miner_processes gauge",
+        f"ozon_miner_processes {n_proc}",
+        "# HELP ozon_miner_threads Потоков (это и есть колонка PIDs в docker stats)",
+        "# TYPE ozon_miner_threads gauge",
+        f"ozon_miner_threads {n_thread}",
+        "# HELP ozon_miner_rss_bytes Память контейнера (как в docker stats)",
+        "# TYPE ozon_miner_rss_bytes gauge",
+        f"ozon_miner_rss_bytes {mem}",
+        "# HELP ozon_miner_orphans_killed_total Убрано осиротевших процессов браузера",
+        "# TYPE ozon_miner_orphans_killed_total counter",
+        f"ozon_miner_orphans_killed_total {_orphans_killed}",
+    ])
     lines.extend(_latency_metric_lines())
     return web.Response(text="\n".join(lines) + "\n", content_type="text/plain")
 

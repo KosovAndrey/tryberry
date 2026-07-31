@@ -156,6 +156,21 @@ groups:
           summary: "Ozon-сайдкар: нет успешных скрейпов 15+ минут"
           description: "ozon-miner отвечает, но ни одного успешного скрейпа/прогрева 15+ минут (дорожки могут числиться healthy). Смотреть ozon_miner_stuck_lanes и логи pt_ozon_miner; лечение — docker compose up -d --force-recreate ozon-miner."
 
+      # Незакрытые деревья браузеров (см. фикс 31-07: потерянная инстанция при
+      # фолбэке geoip, недобитое дерево при подвисшем закрытии, сироты).
+      # Норма при 6 дорожках — ~50 ПРОЦЕССОВ; 250 штатно недостижимо.
+      # Не путать с колонкой PIDs в docker stats: там ПОТОКИ, их штатно ~1200
+      # (метрика ozon_miner_threads). Именно на этой путанице 31-07 полдня искали
+      # утечку, которой не было.
+      - alert: OzonMinerProcessLeak
+        expr: ozon_miner_processes > 250
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Ozon-сайдкар: утечка процессов ({{ $value }})"
+          description: "В контейнере {{ $value }} процессов — уборщик сирот не справляется (смотри ozon_miner_orphans_killed_total и ozon_miner_rss_bytes). Разгрузка: docker restart pt_ozon_miner."
+
       # Дорожка держит лок дольше порога = подвисший драйвер. Вотчдог снимает с
       # неё healthy и пересоздаёт браузер сам; алерт нужен, если это повторяется.
       - alert: OzonMinerStuckLanes
