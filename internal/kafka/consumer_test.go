@@ -4,6 +4,7 @@ import (
 	"sort"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/segmentio/kafka-go"
 )
@@ -99,6 +100,70 @@ func TestOffsetTracker_ConcurrentComplete(t *testing.T) {
 	wg.Wait()
 	if wm := committedOffsets(tr.takeWatermarks()); wm[0] != n-1 {
 		t.Fatalf("final watermark should be %d, got %d", n-1, wm[0])
+	}
+}
+
+// Ребаланс: партиция ушла и вернулась с оффсетами ВЫШЕ старого курсора (их
+// продвинула другая реплика). Курсор обязан пересинхронизироваться, иначе
+// вотермарк ждёт оффсет, которого здесь уже не будет, и партиция морозится.
+func TestOffsetTracker_ResyncAfterRebalanceForward(t *testing.T) {
+	tr := newOffsetTracker()
+	tr.register(0, 100)
+	tr.register(0, 101)
+	tr.complete(msg(0, 100))
+	tr.takeWatermarks()
+
+	// Партиция вернулась: следующий оффсет — 500, а не ожидаемые 102.
+	tr.register(0, 500)
+	tr.register(0, 501)
+	tr.complete(msg(0, 500))
+	tr.complete(msg(0, 501))
+	// Хвост прошлой генерации завершился уже после сброса — коммит не откатываем.
+	tr.complete(msg(0, 101))
+
+	if wm := committedOffsets(tr.takeWatermarks()); wm[0] != 501 {
+		t.Fatalf("watermark should resync to 501 after rebalance, got %d", wm[0])
+	}
+}
+
+// Переподключение ридера: оффсеты пошли НАЗАД (перечитывание с закоммиченной
+// позиции). Курсор садится на новый оффсет, старые done не блокируют.
+func TestOffsetTracker_ResyncAfterRewind(t *testing.T) {
+	tr := newOffsetTracker()
+	for o := int64(200); o <= 203; o++ {
+		tr.register(0, o)
+	}
+	tr.complete(msg(0, 203)) // висит в done, курсор на 200
+
+	tr.register(0, 150) // откат
+	tr.register(0, 151)
+	tr.complete(msg(0, 150))
+	tr.complete(msg(0, 151))
+	if wm := committedOffsets(tr.takeWatermarks()); wm[0] != 151 {
+		t.Fatalf("watermark should follow rewind to 151, got %d", wm[0])
+	}
+}
+
+// Метрика застревания: растёт, только пока есть завершённые оффсеты, которые не
+// может пропустить курсор; простаивающая партиция даёт ноль.
+func TestOffsetTracker_StuckSeconds(t *testing.T) {
+	tr := newOffsetTracker()
+	now := time.Now()
+
+	tr.register(0, 0)
+	tr.register(0, 1)
+	if got := tr.stuckSeconds(now.Add(time.Hour)); got != 0 {
+		t.Fatalf("nothing completed above cursor → 0, got %v", got)
+	}
+
+	tr.complete(msg(0, 1)) // 0 ещё в работе → 1 ждёт в done
+	if got := tr.stuckSeconds(now.Add(10 * time.Second)); got < 9 {
+		t.Fatalf("stuck age should grow while cursor is blocked, got %v", got)
+	}
+
+	tr.complete(msg(0, 0)) // префикс закрылся, done пуст
+	if got := tr.stuckSeconds(now.Add(time.Hour)); got != 0 {
+		t.Fatalf("drained partition must report 0, got %v", got)
 	}
 }
 

@@ -258,6 +258,22 @@ groups:
           summary: "Критический lag в {{ $labels.topic }}"
           description: "Воркер не справляется: lag {{ $value }} в топике {{ $labels.topic }}. Нужно масштабировать."
 
+      # Партиция заморожена при живом консьюмере: вотермарк коммита не двигается,
+      # хотя сообщения выше курсора обрабатываются. Так выглядели инциденты 14-07 и
+      # 31-07 (одна партиция, остальные в нулях, ошибок в логах нет) — их ловили
+      # только по lag'у, спустя 8 часов роста. Метрика видит затык за минуты и
+      # адресует его к конкретной реплике (instance), а не ко всей группе.
+      # Порог 10 мин: перекрывает SCRAPE_HANDLER_TIMEOUT (120с) с большим запасом,
+      # чтобы медленный, но живой обработчик не флапал алертом.
+      - alert: KafkaPartitionStuck
+        expr: tryberrybot_kafka_partition_stuck_seconds > 600
+        for: 5m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Партиция {{ $labels.topic }} застряла на {{ $labels.instance }}"
+          description: "Вотермарк коммита не двигается {{ $value }}с при работающем консьюмере — заморожена партиция (зависший обработчик или разъехавшийся трекер). Рестарт реплики {{ $labels.instance }} расклинивает; смотри kafka-consumer-groups --describe --group price-tracker."
+
   - name: tryberrybot_business
     interval: 1m
     rules:
