@@ -513,6 +513,20 @@ var (
 		},
 		[]string{"topic"},
 	)
+
+	// KafkaPartitionStuck — сколько секунд худшая партиция инстанса не может
+	// сдвинуть вотермарк коммита, накапливая при этом завершённые оффсеты. В норме
+	// секунды. Минуты = партиция заморожена при живом консьюмере (зависший
+	// обработчик или разъехавшийся после ребаланса трекер) — lag по ней растёт, а
+	// ошибок в логах нет. Ловит аварию за минуты, а не за часы роста lag'а.
+	KafkaPartitionStuck = promauto.NewGaugeVec(
+		prometheus.GaugeOpts{
+			Namespace: namespace,
+			Name:      "kafka_partition_stuck_seconds",
+			Help:      "Seconds the worst partition has been unable to advance its commit watermark",
+		},
+		[]string{"topic"},
+	)
 )
 
 // ── HTTP (для middleware) ────────────────────────────────────────────────────

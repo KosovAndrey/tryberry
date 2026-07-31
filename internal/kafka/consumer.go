@@ -188,6 +188,7 @@ func (c *Consumer) RunConcurrent(ctx context.Context, handler HandlerFunc, concu
 				return
 			case <-t.C:
 				c.flushCommits(ctx, tr)
+				metrics.KafkaPartitionStuck.WithLabelValues(topic).Set(tr.stuckSeconds(time.Now()))
 			}
 		}
 	}()
@@ -283,8 +284,10 @@ type offsetTracker struct {
 type partOffsets struct {
 	cursor    int64                   // низший ещё не закоммиченный оффсет
 	inited    bool                    // курсор проинициализирован первым fetch'ем
+	next      int64                   // ожидаемый следующий оффсет от FetchMessage
 	done      map[int64]kafka.Message // завершённые оффсеты >= cursor, ждущие непрерывности
 	watermark *kafka.Message          // наивысшее сообщение, готовое к коммиту (не сброшено)
+	waitSince time.Time               // когда курсор в последний раз двигался (для метрики застревания)
 }
 
 func newOffsetTracker() *offsetTracker {
@@ -300,15 +303,35 @@ func (t *offsetTracker) part(partition int) *partOffsets {
 	return p
 }
 
-// register задаёт курсор партиции первым увиденным оффсетом.
+// register задаёт курсор партиции первым увиденным оффсетом и пересинхронизирует
+// его при разрыве последовательности.
+//
+// Разрыв (оффсет не равен ожидаемому следующему) означает, что партиция пришла
+// заново: ребаланс группы, переподключение ридера после fetch-ошибки, отзыв и
+// возврат партиции. Оффсета `cursor` из прошлой генерации мы больше не увидим —
+// его сообщения либо съела другая реплика, либо ридер начал с закоммиченной
+// позиции. Без пересинхронизации `complete` навсегда упирался бы в отсутствующий
+// `done[cursor]`, вотермарк переставал двигаться, и партиция морозилась при живом
+// и работающем консьюмере (инциденты 14-07 и 31-07: lag растёт, ошибок нет,
+// лечилось только рестартом, который обнулял этот трекер).
+//
+// In-flight сообщения прошлой генерации при сбросе бросаем осознанно: партия
+// оффсетов больше не наша, коммитить её нельзя, а at-least-once сохраняется —
+// новый владелец перечитает их со своей закоммиченной позиции.
 func (t *offsetTracker) register(partition int, offset int64) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	p := t.part(partition)
-	if !p.inited {
+	if !p.inited || offset != p.next {
 		p.cursor = offset
 		p.inited = true
+		p.watermark = nil
+		p.waitSince = time.Now()
+		if len(p.done) > 0 {
+			p.done = make(map[int64]kafka.Message)
+		}
 	}
+	p.next = offset + 1
 }
 
 // complete помечает оффсет завершённым и продвигает вотермарк по непрерывному
@@ -317,7 +340,13 @@ func (t *offsetTracker) complete(msg kafka.Message) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	p := t.part(msg.Partition)
+	// Оффсет ниже курсора — хвост прошлой генерации (см. register). Он уже покрыт
+	// коммитом или больше не наш; в done ему делать нечего, иначе map растёт вечно.
+	if p.inited && msg.Offset < p.cursor {
+		return
+	}
 	p.done[msg.Offset] = msg
+	moved := false
 	for {
 		m, ok := p.done[p.cursor]
 		if !ok {
@@ -327,7 +356,31 @@ func (t *offsetTracker) complete(msg kafka.Message) {
 		p.watermark = &wm
 		delete(p.done, p.cursor)
 		p.cursor++
+		moved = true
 	}
+	if moved {
+		p.waitSince = time.Now()
+	}
+}
+
+// stuckSeconds — сколько секунд партиция копит завершённые оффсеты, не в силах
+// сдвинуть курсор. В норме близко к нулю (курсор ходит за каждым сообщением).
+// Устойчивый рост = вотермарк не двигается при живом консьюмере: либо обработчик
+// висит на оффсете-курсоре, либо трекер разошёлся с реальными оффсетами. Ждущих
+// оффсетов нет → 0: простаивающая партиция не должна светить фальшивое застревание.
+func (t *offsetTracker) stuckSeconds(now time.Time) float64 {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	var worst float64
+	for _, p := range t.parts {
+		if len(p.done) == 0 || p.waitSince.IsZero() {
+			continue
+		}
+		if age := now.Sub(p.waitSince).Seconds(); age > worst {
+			worst = age
+		}
+	}
+	return worst
 }
 
 // takeWatermarks забирает по одному сообщению-вотермарку на партицию и очищает
