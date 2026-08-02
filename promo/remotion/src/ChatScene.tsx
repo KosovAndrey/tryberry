@@ -112,15 +112,24 @@ const useEnter = (at: number) => {
   return spring({frame: frame - at * fps, fps, config: {damping: 16, mass: 0.6}});
 };
 
-const Row: React.FC<{align: 'left' | 'right' | 'center'; enter: number; children: React.ReactNode}> = ({
-  align,
-  enter,
-  children,
-}) => (
+// Отступ слева у реплик БОТА (решение владельца 2026-08-02): юзер пишет от
+// правого края как обычно, бот — не вплотную к левому. Так в кадре видно, что
+// говорят двое, даже когда сообщения идут подряд. Карточки алерта и графика
+// отступ НЕ получают: они шире пузырей по построению (92%), и сдвиг вывел бы
+// их за кадр.
+const BOT_INDENT = 44;
+
+const Row: React.FC<{
+  align: 'left' | 'right' | 'center';
+  enter: number;
+  indent?: boolean;
+  children: React.ReactNode;
+}> = ({align, enter, indent, children}) => (
   <div
     style={{
       display: 'flex',
       justifyContent: align === 'right' ? 'flex-end' : align === 'center' ? 'center' : 'flex-start',
+      paddingLeft: indent && align === 'left' ? BOT_INDENT : 0,
       opacity: enter,
       transform: `translateY(${interpolate(enter, [0, 1], [36, 0])}px)`,
       marginBottom: 24,
@@ -164,7 +173,7 @@ const TextBubble: React.FC<{m: Extract<Msg, {kind: 'text'}>}> = ({m}) => {
   // Ссылки выглядят ссылками — подчёркивание, как в настоящем мессенджере.
   const isLink = /^https?:\/\//i.test(m.text) || /\.[a-z]{2}\//i.test(m.text);
   return (
-    <Row align={isUser ? 'right' : 'left'} enter={enter}>
+    <Row align={isUser ? 'right' : 'left'} enter={enter} indent={!isUser}>
       <div
         style={{
           ...bubbleBase,
@@ -196,7 +205,7 @@ const ButtonsBubble: React.FC<{m: Extract<Msg, {kind: 'buttons'}>}> = ({m}) => {
   const frame = useCurrentFrame();
   const {fps} = useVideoConfig();
   return (
-    <Row align="left" enter={enter}>
+    <Row align="left" enter={enter} indent>
       <div style={{maxWidth: '86%'}}>
         <div
           style={{
@@ -652,7 +661,7 @@ const ChartBubble: React.FC<{m: Extract<Msg, {kind: 'chart'}>}> = ({m}) => {
 const TypingBubble: React.FC = () => {
   const frame = useCurrentFrame();
   return (
-    <Row align="left" enter={1}>
+    <Row align="left" enter={1} indent>
       <div style={{...bubbleBase, background: BRAND.botBubble, borderBottomLeftRadius: 10, gap: 10, padding: '28px 32px'}}>
         {[0, 1, 2].map((i) => (
           <div
