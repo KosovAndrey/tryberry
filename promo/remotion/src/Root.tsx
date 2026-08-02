@@ -2,7 +2,7 @@ import React from 'react';
 import {Composition} from 'remotion';
 import {ChatSceneLeadIn, SeamBackdrop} from './ChatScene';
 import {Endcard} from './Endcard';
-import {alertIphone, alertBuds, searchIphone, searchBuds, searchBudsCut, alertIphoneTail, alertIphoneLong} from './data';
+import {alertIphone, alertBuds, searchIphone, searchBuds, searchBudsCut, alertIphoneTail, searchIphoneLong} from './data';
 
 // Лид-ин: кадры чистой подложки перед первым сообщением. Нужны под стык с
 // AI-хуком (docs/content/hooks.md): последний кадр хука = первый кадр середины.
@@ -45,7 +45,7 @@ export const RemotionRoot: React.FC = () => {
       {/* Действующая продуктовая сцена V2 — ОДНА на весь ролик, ровно 20 с
           (0:26–0:46 по озвучке). Заменила пару Cut+Tail: два чата подряд
           читались как повтор. Тайминги внутри — под голос, см. data.ts. */}
-      {chat('ChatAlertIphoneLong', alertIphoneLong, 18.37)}
+      {chat('ChatSearchIphoneLong', searchIphoneLong, 18.37)}
       {/* B1 — эндкард, одинаковый во всех роликах (отличительный актив) */}
       <Composition id="Endcard" component={Endcard} durationInFrames={120} fps={30} width={1080} height={1920} />
       {/* Кадр стыка: экспортируется в PNG и отдаётся Kling конечным кадром.
