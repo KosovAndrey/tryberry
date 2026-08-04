@@ -43,7 +43,11 @@ from patchright.async_api import async_playwright
 PORT = int(os.getenv("WB_SEARCH_MINER_PORT", "8081"))
 POOL_SIZE = int(os.getenv("WB_SEARCH_POOL_SIZE", "1"))
 
-WARM_QUERY = os.getenv("WB_WARM_QUERY", "телефон")
+# Запрос прогрева. ХОЛОДНЫЙ намеренно: wbaas мягче к редким запросам (весь наш
+# диагноз — 403 на горячих, 200 на редких), а прогрев раз в 30 мин по горячему
+# «телефон» сам провоцирует эскалацию до document-стены (эпизоды 05-07 и 04-08).
+# Прогреву нужен только факт 200 на своём u-search — какой запрос, не важно.
+WARM_QUERY = os.getenv("WB_WARM_QUERY", "капибара")
 SEARCH_PAGE_URL = os.getenv(
     "WB_SEARCH_PAGE_URL",
     "https://www.wildberries.ru/catalog/0/search.aspx?search={query}",
@@ -100,7 +104,14 @@ NAV_HARD_SLACK_S = float(os.getenv("WB_NAV_HARD_SLACK_SECONDS", "10"))
 # Дедлайн на необязательные действия мыши.
 NUDGE_TIMEOUT_S = float(os.getenv("WB_NUDGE_TIMEOUT_SECONDS", "15"))
 WARM_KEEPALIVE_S = float(os.getenv("WB_WARM_KEEPALIVE_MINUTES", "30")) * 60.0
-WARM_BACKOFF_MAX_S = float(os.getenv("WB_WARM_BACKOFF_MAX_SECONDS", "600"))
+# Потолок backoff. 30 мин, а не 10: под стеной каждая попытка прогрева — это ~160
+# челлендж-запросов, и долбёжка раз в 10 мин держит IP горячим в глазах wbaas
+# (стена всё равно уходит по своему таймеру, а не от наших ретраев). Плата —
+# снятие стены замечаем с задержкой до получаса.
+WARM_BACKOFF_MAX_S = float(os.getenv("WB_WARM_BACKOFF_MAX_SECONDS", "1800"))
+# Сколько неудач подряд считаем «стоит стена»: дальше прогреваем ОДНОЙ навигацией
+# вместо WARM_RELOADS — вторая под стеной даёт тот же 498 вдвое дороже.
+WALLED_AFTER = int(os.getenv("WB_WALLED_AFTER", "2"))
 # После скольких ПОДРЯД неудачных прогревов пересоздать браузер (свежий контекст/
 # фингерпринт) вместо долбёжки того же контекста. Лечит залипание на document-498:
 # когда wbaas walled сам HTML навигации, ре-навигация той же сессии часами даёт
@@ -333,10 +344,12 @@ class Lane:
                 pass
 
         self._page.on("response", on_resp)
+        # Под стеной не платим за вторую навигацию: она даёт тот же document-498.
+        reloads = 1 if self._warm_fails >= WALLED_AFTER else WARM_RELOADS
         per_attempt = max(30.0, WARM_WAIT_S / max(1, WARM_RELOADS))
-        log.info("дорожка %d: прогрев — навигация на %s", self.idx, url)
+        log.info("дорожка %d: прогрев — навигация на %s (попыток %d)", self.idx, url, reloads)
         try:
-            for attempt in range(1, WARM_RELOADS + 1):
+            for attempt in range(1, reloads + 1):
                 try:
                     await self._page.goto(url, wait_until="domcontentloaded",
                                           timeout=int(NAV_TIMEOUT_S * 1000))
@@ -379,7 +392,12 @@ class Lane:
         self._next_warm = time.monotonic() + backoff
         log.warning("дорожка %d: прогрев не дал 200 (подряд %d, u-search: %s) — backoff %.0fс",
                     self.idx, self._warm_fails, seen["statuses"][-6:] or "—", backoff)
-        await self._dump_diag(seen)
+        # Полный дамп — только на первых неудачах: под многочасовой стеной он
+        # одинаков и топит логи (~50 строк на попытку). Дальше короткая сводка.
+        if self._warm_fails <= WALLED_AFTER:
+            await self._dump_diag(seen)
+        else:
+            await self._dump_diag_short(seen)
 
     async def _dump_diag(self, seen: dict):
         """Диагностика провала прогрева: заголовок/тело страницы + гистограмма
@@ -409,6 +427,21 @@ class Lane:
             log.warning("─── /ДИАГ ───")
         except Exception as e:  # noqa: BLE001
             log.warning("диагностика упала: %s", _first_line(e))
+
+    async def _dump_diag_short(self, seen: dict):
+        """Одна строка вместо полного дампа: статусы document + заголовок страницы.
+        Хватает, чтобы отличить «стоит стена» от «что-то изменилось»."""
+        try:
+            docs = [st for (rt, st, _u) in seen["all"] if rt == "document"]
+            title = ""
+            try:
+                title = await self._page.title()
+            except Exception:  # noqa: BLE001
+                pass
+            log.warning("дорожка %d: стена держится — ответов %d, document %s, title=%r",
+                        self.idx, len(seen["all"]), docs[-4:] or "—", title)
+        except Exception as e:  # noqa: BLE001
+            log.warning("краткая диагностика упала: %s", _first_line(e))
 
     async def fetch_search(self, query: str, sort: str, page: int, filters: str = ""):
         """Навигируем прогретый браузер на страницу запроса и ПЕРЕХВАТЫВАЕМ ответ
