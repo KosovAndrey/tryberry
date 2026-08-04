@@ -586,7 +586,13 @@ services:
       environment:
         WB_SEARCH_MINER_PORT: "8081"
         WB_SEARCH_POOL_SIZE: "${WB_SEARCH_POOL_SIZE:-1}"
-        WB_WARM_QUERY: "${WB_WARM_QUERY:-телефон}"
+        # Прогрев ХОЛОДНЫМ запросом: горячий («телефон») сам провоцирует
+        # эскалацию wbaas до document-стены. См. WB-SEARCH-STATUS.md.
+        WB_WARM_QUERY: "${WB_WARM_QUERY:-капибара}"
+        # Потолок backoff под стеной, сек (деф. 1800 — не подогревать IP ретраями)
+        # и порог «стена стоит»: дальше прогрев одной навигацией + краткий лог.
+        WB_WARM_BACKOFF_MAX_SECONDS: "${WB_WARM_BACKOFF_MAX_SECONDS:-1800}"
+        WB_WALLED_AFTER: "${WB_WALLED_AFTER:-2}"
         # Опц. прокси дорожек (обычно НЕ нужен — direct проходит).
         WB_SEARCH_PROXY_URL: "${WB_SEARCH_PROXY_URL:-}"
         WB_LANE_1_PROXY: "${WB_LANE_1_PROXY:-}"
