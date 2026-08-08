@@ -2,7 +2,18 @@ import React from 'react';
 import {Composition} from 'remotion';
 import {ChatSceneLeadIn, SeamBackdrop} from './ChatScene';
 import {Endcard} from './Endcard';
-import {alertIphone, alertBuds, searchIphone, searchBuds, searchBudsCut, alertIphoneTail, searchIphoneLong} from './data';
+import {
+  alertIphone,
+  alertBuds,
+  searchIphone,
+  searchBuds,
+  searchBudsCut,
+  alertIphoneTail,
+  searchIphoneLong,
+  r2Wb,
+  r2Ozon,
+  r2Mp,
+} from './data';
 
 // Лид-ин: кадры чистой подложки перед первым сообщением. Нужны под стык с
 // AI-хуком (docs/content/hooks.md): последний кадр хука = первый кадр середины.
@@ -46,6 +57,16 @@ export const RemotionRoot: React.FC = () => {
           (0:26–0:46 по озвучке). Заменила пару Cut+Tail: два чата подряд
           читались как повтор. Тайминги внутри — под голос, см. data.ts. */}
       {chat('ChatSearchIphoneLong', searchIphoneLong, 18.37)}
+      {/* R2 — «Как поставить уведомление на снижение цены» × версии по площадкам
+          (docs/content/batch-04-r2.md). Хук = cold open, AI-футажа нет вообще:
+          продукт стоит в нулевом кадре. lastAt = 2.6 (cold open) + время
+          последнего сообщения + запас на его отрисовку (у графика он больше,
+          чем у алерта, — график ещё рисуется).
+          Версия «Яндекс Маркет» (r2Ym в data.ts) СОЗНАТЕЛЬНО не зарегистрирована:
+          там ⟨ПОДСТАВИТЬ⟩ вместо цифр и нет фото товара. */}
+      {chat('ChatR2Wb', r2Wb, 12.9)}
+      {chat('ChatR2Ozon', r2Ozon, 12.9)}
+      {chat('ChatR2Mp', r2Mp, 8.6)}
       {/* B1 — эндкард, одинаковый во всех роликах (отличительный актив) */}
       <Composition id="Endcard" component={Endcard} durationInFrames={120} fps={30} width={1080} height={1920} />
       {/* Кадр стыка: экспортируется в PNG и отдаётся Kling конечным кадром.
