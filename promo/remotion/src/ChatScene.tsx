@@ -78,7 +78,12 @@ export type ChatData = {
   // «Новый формат» удержания (см. batch-02 / фидбек друзей):
   // Cold open: вопрос-обращение к зрителю + алерт-награда СТАТИЧНО (без зума —
   // зум-версия забракована), потом вспышка и флоу.
-  coldOpen?: {sec: number; text: string};
+  // `sub` — подпись под заголовком (маркетплейс). Заведена под R2-версии
+  // (batch-04-r2.md): по канону маркетплейс живёт в хуке, а карточка алерта
+  // в cold open рендерится без строки «Купить на …» — назвать площадку больше
+  // негде. Держим отдельным полем, а не переносом строки в text: заголовок и
+  // подпись разного кегля, и подпись не должна воровать место у заголовка.
+  coldOpen?: {sec: number; text: string; sub?: string};
   camera?: CamKey[]; // зум-панчи; НЕ используются (забракованы), механика оставлена
   typingOnlyAlert?: boolean; // typing только перед алертом (минус мёртвое время)
   // Войсовер: фразы по битам, время АБСОЛЮТНОЕ (включая cold open) — в отличие
@@ -819,6 +824,24 @@ export const ChatScene: React.FC<ChatData> = ({title, messages, coldOpen, camera
               >
                 {coldOpen.text}
               </div>
+              {coldOpen.sub && (
+                <div
+                  style={{
+                    fontFamily: display,
+                    fontWeight: 700,
+                    fontSize: 46,
+                    lineHeight: 1.1,
+                    textAlign: 'center',
+                    color: BRAND.bright,
+                    marginTop: -32,
+                    marginBottom: 56,
+                    opacity: qIn,
+                    transform: `translateY(${interpolate(qIn, [0, 1], [24, 0])}px)`,
+                  }}
+                >
+                  {coldOpen.sub}
+                </div>
+              )}
               <div style={{transform: 'scale(1.06)'}}>
                 <AlertCard m={{...alertMsg, at: 0.12, buy: undefined, secondary: undefined, items: undefined}} />
               </div>

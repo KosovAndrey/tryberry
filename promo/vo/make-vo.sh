@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
-# Черновая озвучка сборного ролика V2 по битам (docs/content/batch-03.md).
+# Черновая озвучка ролика по битам. По умолчанию — сборный V2
+# (docs/content/batch-03.md), другой набор строк передаётся вторым аргументом.
 #
 # По биту на файл, а не одной дорожкой: на монтаже каждую фразу двигают
 # отдельно, подгоняя под план. Склеенный трек кладётся рядом — им удобно
@@ -13,6 +14,10 @@ set -euo pipefail
 
 cd "$(dirname "$0")"
 OUT="${1:-out}"
+# Файл строк вторым аргументом: батч R2 — это четыре версии одного ролика,
+# у каждой свой набор фраз (docs/content/batch-04-r2.md).
+#   ./make-vo.sh out-r2-wb r2-wb-lines.txt
+LINES="${2:-v2-lines.txt}"
 VOICE="${VOICE:-ru-RU-DmitryNeural}"
 RATE="${RATE:-+10%}"
 
@@ -31,7 +36,7 @@ while IFS='|' read -r id text; do
   dur=$(/usr/bin/ffprobe -v error -show_entries format=duration -of csv=p=0 "$OUT/$id.mp3")
   printf "%s  %5.2f с  %s\n" "$id" "$dur" "${text:0:52}…"
   echo "file '$id.mp3'" >> "$OUT/concat.txt"
-done < v2-lines.txt
+done < "$LINES"
 
 ffmpeg -v error -y -f concat -safe 0 -i "$OUT/concat.txt" -c copy "$OUT/vo-full.mp3"
 echo "─────"
