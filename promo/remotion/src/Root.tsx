@@ -10,10 +10,8 @@ import {
   searchBudsCut,
   alertIphoneTail,
   searchIphoneLong,
-  r2Wb,
-  r2Ozon,
-  r2Ym,
-  r2Mp,
+  searchIphoneLongWb,
+  searchIphoneLongYm,
 } from './data';
 
 // Лид-ин: кадры чистой подложки перед первым сообщением. Нужны под стык с
@@ -58,17 +56,11 @@ export const RemotionRoot: React.FC = () => {
           (0:26–0:46 по озвучке). Заменила пару Cut+Tail: два чата подряд
           читались как повтор. Тайминги внутри — под голос, см. data.ts. */}
       {chat('ChatSearchIphoneLong', searchIphoneLong, 18.37)}
-      {/* R2 — «Как поставить уведомление на снижение цены» × версии по площадкам
-          (docs/content/batch-04-r2.md). Хук = cold open, AI-футажа нет вообще:
-          продукт стоит в нулевом кадре. lastAt = 2.6 (cold open) + время
-          последнего сообщения + запас на его отрисовку (у графика он больше,
-          чем у алерта, — график ещё рисуется).
-          Три товарные версии идут на одном товаре и одной истории цены: продавец
-          был один и выставил ту же цену на всех трёх площадках (см. data.ts). */}
-      {chat('ChatR2Wb', r2Wb, 12.9)}
-      {chat('ChatR2Ozon', r2Ozon, 12.9)}
-      {chat('ChatR2Ym', r2Ym, 12.9)}
-      {chat('ChatR2Mp', r2Mp, 8.6)}
+      {/* Те же 20 секунд, но с другой площадкой — под версии готового мастера
+          GEN-01 (docs/content/batch-04-r2.md). Длительность и тайминги обязаны
+          совпадать с Ozon-версией кадр в кадр: озвучка уже записана. */}
+      {chat('ChatSearchIphoneLongWb', searchIphoneLongWb, 18.37)}
+      {chat('ChatSearchIphoneLongYm', searchIphoneLongYm, 18.37)}
       {/* B1 — эндкард, одинаковый во всех роликах (отличительный актив) */}
       <Composition id="Endcard" component={Endcard} durationInFrames={120} fps={30} width={1080} height={1920} />
       {/* Кадр стыка: экспортируется в PNG и отдаётся Kling конечным кадром.
