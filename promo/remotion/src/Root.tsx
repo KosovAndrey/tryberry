@@ -41,19 +41,20 @@ export const RemotionRoot: React.FC = () => {
     <>
       {/* ── Что рендерить сейчас ────────────────────────────────────────────
           Продуктовая сцена мастера GEN-01 (0:26–0:46) в трёх версиях по
-          площадкам — docs/content/gen01-marketplace-versions.md. Имена нарочно начинаются с
-          «GEN01-», чтобы в Studio они стояли первыми и не путались с архивом.
-          OZON уже смонтирован в мастере, рендерить нужно WB и YM.
-          Длительность у всех трёх одна: озвучка записана, сдвиг разъедет
-          монтаж. */}
-      <Folder name="GEN01-версии-площадок">
+          площадкам — docs/content/gen01-marketplace-versions.md. Рендерятся все
+          три сразу: npm run render:gen01 → out/gen01/. Длительность у них одна,
+          озвучка мастера записана, и сдвиг разъедет монтаж. */}
+      {/* ⚠️ Имя папки — только [a-zA-Z0-9-]: кириллица валит РЕНДЕР, а не сборку
+          (Remotion validateFolderName), поэтому tsc и bundle её пропускают.
+          Цифра в начале задаёт порядок в Studio. */}
+      <Folder name="1-GEN01-render">
         {chat('GEN01-OZON', searchIphoneLong, 18.37)}
         {chat('GEN01-WB', searchIphoneLongWb, 18.37)}
         {chat('GEN01-YM', searchIphoneLongYm, 18.37)}
       </Folder>
 
       {/* ── Общее для всех роликов ──────────────────────────────────────── */}
-      <Folder name="Общее">
+      <Folder name="2-common">
         {/* B1 — эндкард, одинаковый во всех роликах (отличительный актив) */}
         <Composition id="Endcard" component={Endcard} durationInFrames={120} fps={30} width={1080} height={1920} />
         {/* Кадр стыка: экспортируется в PNG и отдаётся Kling конечным кадром.
@@ -73,7 +74,7 @@ export const RemotionRoot: React.FC = () => {
           которые заменила GEN01-OZON: два чата подряд читались как повтор.
           Держим ради истории и на случай новых батчей — не удаляем, но и не
           рендерим. */}
-      <Folder name="Архив">
+      <Folder name="3-archive">
         {chat('ChatAlertIphone', alertIphone, 11.8)}
         {chat('ChatAlertBuds', alertBuds, 11.8)}
         {chat('ChatSearchIphone', searchIphone, 7.5)}
