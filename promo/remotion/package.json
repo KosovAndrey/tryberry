@@ -6,7 +6,7 @@
   "scripts": {
     "dev": "remotion studio",
     "render": "remotion render",
-    "render:gen01": "remotion render GEN01-OZON out/gen01/GEN01-OZON.mp4 && remotion render GEN01-WB out/gen01/GEN01-WB.mp4 && remotion render GEN01-YM out/gen01/GEN01-YM.mp4 && remotion render Endcard out/gen01/Endcard.mp4",
+    "render:gen01": "remotion render HOOK-WB out/gen01/HOOK-WB.mp4 && remotion render HOOK-OZON out/gen01/HOOK-OZON.mp4 && remotion render HOOK-YM out/gen01/HOOK-YM.mp4 && remotion render HOOK-MP out/gen01/HOOK-MP.mp4 && remotion render GEN01-OZON out/gen01/GEN01-OZON.mp4 && remotion render GEN01-WB out/gen01/GEN01-WB.mp4 && remotion render GEN01-YM out/gen01/GEN01-YM.mp4 && remotion render Endcard out/gen01/Endcard.mp4",
     "bundle": "remotion bundle",
     "seam": "node scripts/seam-frame.mjs out/seam-frame.png",
     "typecheck": "tsc --noEmit && node scripts/check-folder-names.mjs"
