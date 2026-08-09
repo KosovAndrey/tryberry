@@ -48,9 +48,9 @@ export const RemotionRoot: React.FC = () => {
           (Remotion validateFolderName), поэтому tsc и bundle её пропускают.
           Цифра в начале задаёт порядок в Studio. */}
       <Folder name="1-GEN01-render">
-        {chat('GEN01-OZON', searchIphoneLong, 18.37)}
-        {chat('GEN01-WB', searchIphoneLongWb, 18.37)}
-        {chat('GEN01-YM', searchIphoneLongYm, 18.37)}
+        {chat('GEN01-OZON', searchIphoneLong, 11.9)}
+        {chat('GEN01-WB', searchIphoneLongWb, 11.9)}
+        {chat('GEN01-YM', searchIphoneLongYm, 11.9)}
       </Folder>
 
       {/* ── Общее для всех роликов ──────────────────────────────────────── */}
