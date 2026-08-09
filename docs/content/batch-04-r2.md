@@ -12,10 +12,10 @@
 
 | Версия | Заголовок (он же поисковый запрос) | Продуктовая сцена | Озвучка |
 |---|---|---|---|
-| Ozon | Как поставить уведомление на снижение цены на Ozon | `ChatSearchIphoneLong` ✅ уже в мастере | `v2-ozon-lines.txt` |
-| Wildberries | …на Wildberries | `ChatSearchIphoneLongWb` 🆕 | `v2-wb-lines.txt` |
-| Яндекс Маркет | …на Яндекс Маркете | `ChatSearchIphoneLongYm` 🆕 | `v2-ym-lines.txt` |
-| маркетплейсы | …на маркетплейсах | `ChatSearchIphoneLong` ✅ | `v2-lines.txt` ✅ |
+| Ozon | Как поставить уведомление на снижение цены на Ozon | `GEN01-OZON` ✅ уже в мастере | `v2-ozon-lines.txt` |
+| Wildberries | …на Wildberries | `GEN01-WB` 🆕 | `v2-wb-lines.txt` |
+| Яндекс Маркет | …на Яндекс Маркете | `GEN01-YM` 🆕 | `v2-ym-lines.txt` |
+| маркетплейсы | …на маркетплейсах | `GEN01-OZON` ✅ | `v2-lines.txt` ✅ |
 
 Итого **два новых рендера**, а не четыре: версия «маркетплейсы» — это мастер
 как есть, у неё меняются только заголовок и описание при заливке. Ozon-версия
@@ -78,8 +78,8 @@ cd promo/vo && ./make-vo.sh out-v2-wb v2-wb-lines.txt
 
 ```powershell
 cd C:\tryberry-render
-npx remotion render ChatSearchIphoneLongWb out\ChatSearchIphoneLongWb.mp4
-npx remotion render ChatSearchIphoneLongYm out\ChatSearchIphoneLongYm.mp4
+npx remotion render GEN01-WB out\GEN01-WB.mp4
+npx remotion render GEN01-YM out\GEN01-YM.mp4
 ```
 
 ⚠️ Рендер только с Windows: в WSL мёртв loopback (`connect ETIMEDOUT

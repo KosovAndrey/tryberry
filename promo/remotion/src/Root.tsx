@@ -1,5 +1,5 @@
 import React from 'react';
-import {Composition} from 'remotion';
+import {Composition, Folder} from 'remotion';
 import {ChatSceneLeadIn, SeamBackdrop} from './ChatScene';
 import {Endcard} from './Endcard';
 import {
@@ -39,40 +39,48 @@ const chat = (id: string, data: typeof alertIphone, lastAt: number) => (
 export const RemotionRoot: React.FC = () => {
   return (
     <>
-      {/* Один шаблон ChatScene × 4 набора данных: 2 товара × 2 сценария.
-          ВСЕ в новом формате (вопрос-cold-open + сжатый флоу, ~8.5-9с).
-          У каждого ролика свой паттерн вопроса — мини-тест формулировок. */}
-      {chat('ChatAlertIphone', alertIphone, 11.8)}
-      {chat('ChatAlertBuds', alertBuds, 11.8)}
-      {chat('ChatSearchIphone', searchIphone, 7.5)}
-      {chat('ChatSearchBuds', searchBuds, 7.5)}
-      {/* Наборы под СБОРНЫЙ ролик batch-03 V2: без cold open, ветка «любое
-          снижение», длительности подогнаны под биты озвучки (см. data.ts).
-          10.0с — под «это бот в твоём мессенджере…», 7.5с — под «например,
-          айфон…». Отдельные ролики продолжают рендериться из наборов выше. */}
-      {chat('ChatSearchBudsCut', searchBudsCut, 8.4)}
-      {chat('ChatAlertIphoneTail', alertIphoneTail, 5.9)}
-      {/* Действующая продуктовая сцена V2 — ОДНА на весь ролик, ровно 20 с
-          (0:26–0:46 по озвучке). Заменила пару Cut+Tail: два чата подряд
-          читались как повтор. Тайминги внутри — под голос, см. data.ts. */}
-      {chat('ChatSearchIphoneLong', searchIphoneLong, 18.37)}
-      {/* Те же 20 секунд, но с другой площадкой — под версии готового мастера
-          GEN-01 (docs/content/batch-04-r2.md). Длительность и тайминги обязаны
-          совпадать с Ozon-версией кадр в кадр: озвучка уже записана. */}
-      {chat('ChatSearchIphoneLongWb', searchIphoneLongWb, 18.37)}
-      {chat('ChatSearchIphoneLongYm', searchIphoneLongYm, 18.37)}
-      {/* B1 — эндкард, одинаковый во всех роликах (отличительный актив) */}
-      <Composition id="Endcard" component={Endcard} durationInFrames={120} fps={30} width={1080} height={1920} />
-      {/* Кадр стыка: экспортируется в PNG и отдаётся Kling конечным кадром.
-          npx remotion still SeamFrame out/seam-frame.png */}
-      <Composition
-        id="SeamFrame"
-        component={SeamBackdrop}
-        durationInFrames={1}
-        fps={30}
-        width={1080}
-        height={1920}
-      />
+      {/* ── Что рендерить сейчас ────────────────────────────────────────────
+          Продуктовая сцена мастера GEN-01 (0:26–0:46) в трёх версиях по
+          площадкам — docs/content/batch-04-r2.md. Имена нарочно начинаются с
+          «GEN01-», чтобы в Studio они стояли первыми и не путались с архивом.
+          OZON уже смонтирован в мастере, рендерить нужно WB и YM.
+          Длительность у всех трёх одна: озвучка записана, сдвиг разъедет
+          монтаж. */}
+      <Folder name="GEN01-версии-площадок">
+        {chat('GEN01-OZON', searchIphoneLong, 18.37)}
+        {chat('GEN01-WB', searchIphoneLongWb, 18.37)}
+        {chat('GEN01-YM', searchIphoneLongYm, 18.37)}
+      </Folder>
+
+      {/* ── Общее для всех роликов ──────────────────────────────────────── */}
+      <Folder name="Общее">
+        {/* B1 — эндкард, одинаковый во всех роликах (отличительный актив) */}
+        <Composition id="Endcard" component={Endcard} durationInFrames={120} fps={30} width={1080} height={1920} />
+        {/* Кадр стыка: экспортируется в PNG и отдаётся Kling конечным кадром.
+            npx remotion still SeamFrame out/seam-frame.png */}
+        <Composition
+          id="SeamFrame"
+          component={SeamBackdrop}
+          durationInFrames={1}
+          fps={30}
+          width={1080}
+          height={1920}
+        />
+      </Folder>
+
+      {/* ── Архив: в работе НЕ участвует ──────────────────────────────────
+          Отдельные ролики батча-02 (cold open + сжатый флоу) и две сцены,
+          которые заменила GEN01-OZON: два чата подряд читались как повтор.
+          Держим ради истории и на случай новых батчей — не удаляем, но и не
+          рендерим. */}
+      <Folder name="Архив">
+        {chat('ChatAlertIphone', alertIphone, 11.8)}
+        {chat('ChatAlertBuds', alertBuds, 11.8)}
+        {chat('ChatSearchIphone', searchIphone, 7.5)}
+        {chat('ChatSearchBuds', searchBuds, 7.5)}
+        {chat('ChatSearchBudsCut', searchBudsCut, 8.4)}
+        {chat('ChatAlertIphoneTail', alertIphoneTail, 5.9)}
+      </Folder>
     </>
   );
 };

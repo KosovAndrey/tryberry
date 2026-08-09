@@ -27,14 +27,30 @@ hero-чате сайта; палитра и шрифты совпадают с t
 cd promo\remotion
 npm install          # разово; headless-Chrome Remotion скачает сам
 npm run dev          # Remotion Studio: живое превью в браузере, тут смотрим и крутим
-npx remotion render ChatAlertIphone out/alert-iphone.mp4   # товарный алерт + график
-npx remotion render ChatSearchIphone out/search-iphone.mp4 # подписка на выдачу (ядро)
-# также: ChatAlertBuds / ChatSearchBuds / Endcard
-
-# под СБОРНЫЙ ролик V2 (batch-03.md) — версии без cold open, ветка «любое снижение»:
-npx remotion render ChatSearchBudsCut  out/6-search-buds-cut.mp4    # 10,0 с
-npx remotion render ChatAlertIphoneTail out/7-alert-iphone-tail.mp4 # 7,5 с
 ```
+
+## Что тут вообще рендерить
+
+В Studio композиции разложены по трём папкам, и смотреть надо только первую:
+
+| Папка | Что внутри | Брать? |
+|---|---|---|
+| **GEN01-версии-площадок** | `GEN01-OZON`, `GEN01-WB`, `GEN01-YM` — продуктовая сцена мастера GEN-01 (0:26–0:46) в трёх версиях по площадкам | ✅ да |
+| **Общее** | `Endcard` (эндкард B1), `SeamFrame` (кадр стыка) | по необходимости |
+| **Архив** | отдельные ролики батча-02 и две сцены, которые заменила `GEN01-OZON` | ❌ нет |
+
+Актуальная задача — `docs/content/batch-04-r2.md`. Рендерить нужно **два файла**:
+
+```powershell
+npx remotion render GEN01-WB out\GEN01-WB.mp4
+npx remotion render GEN01-YM out\GEN01-YM.mp4
+```
+
+`GEN01-OZON` рендерить не надо — эта сцена уже смонтирована в мастере, она в
+Studio лежит рядом только чтобы было с чем сверять.
+
+⚠️ У всех трёх версий длительность обязана совпадать кадр в кадр: озвучка
+мастера уже записана, сдвиг разъедет монтаж.
 
 `npm run dev` — самый удобный вход: открывает Studio на localhost, там обе
 композиции, скраббинг по таймлайну и правка props на лету. Сначала смотри там,
