@@ -15,7 +15,7 @@ set -euo pipefail
 cd "$(dirname "$0")"
 OUT="${1:-out}"
 # Файл строк вторым аргументом: батч R2 — это четыре версии одного ролика,
-# у каждой свой набор фраз (docs/content/batch-04-r2.md).
+# у каждой свой набор фраз (docs/content/gen01-marketplace-versions.md).
 #   ./make-vo.sh out-r2-wb r2-wb-lines.txt
 LINES="${2:-v2-lines.txt}"
 VOICE="${VOICE:-ru-RU-DmitryNeural}"
