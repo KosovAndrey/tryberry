@@ -2,7 +2,7 @@ import React from 'react';
 import {Composition, Folder} from 'remotion';
 import {ChatSceneLeadIn, SeamBackdrop} from './ChatScene';
 import {Endcard} from './Endcard';
-import {Hook, HOOK_TINTS, hookSub} from './Hook';
+import {Hook, HOOK_TINTS} from './Hook';
 import {
   alertIphone,
   alertBuds,
@@ -49,8 +49,9 @@ export const RemotionRoot: React.FC = () => {
           (Remotion validateFolderName), поэтому tsc и bundle её пропускают.
           Цифра в начале задаёт порядок в Studio. */}
       <Folder name="1-GEN01-render">
-        {/* Хуки — 3 секунды под первую фразу озвучки, субтитры кладутся поверх
-            на монтаже. Подробности решения — в шапке src/Hook.tsx. */}
+        {/* Хуки — 3 секунды под первую фразу озвучки. Текста в кадре нет:
+            площадку называют озвучка и субтитры, которые кладутся поверх на
+            монтаже. Подробности — в шапке src/Hook.tsx. */}
         {(['wb', 'ozon', 'ym', 'mp'] as const).map((k) => (
           <Composition
             key={k}
@@ -60,7 +61,7 @@ export const RemotionRoot: React.FC = () => {
             fps={30}
             width={1080}
             height={1920}
-            defaultProps={{tint: HOOK_TINTS[k], sub: hookSub(k)}}
+            defaultProps={{tint: HOOK_TINTS[k]}}
           />
         ))}
         {chat('GEN01-OZON', searchIphoneLong, 11.9)}
