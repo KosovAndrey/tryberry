@@ -76,3 +76,20 @@ render/iphone/assets/
 promo/remotion/node_modules/
 promo/remotion/out/
 promo/remotion/build/
+
+# Сторонние дизайн-скиллы (impeccable, emilkowalski/skills) — ставятся командой,
+# в репозиторий не тащим: 3+ МБ чужих файлов, которые устаревают сами.
+#   npx impeccable install
+#   git -c http.proxy= clone --depth 1 https://github.com/emilkowalski/skills.git
+#   (в WSL git ходит через мёртвый socks5h://127.0.0.1:1080 — прокси надо гасить)
+.claude/skills/impeccable/
+.claude/skills/animate/
+.claude/skills/animation-vocabulary/
+.claude/skills/apple-design/
+.claude/skills/ask-sonner/
+.claude/skills/emil-design-eng/
+.claude/skills/find-animation-opportunities/
+.claude/skills/improve-animations/
+.claude/skills/pick-ui-library/
+.claude/skills/prototype/
+.claude/skills/review-animations/
