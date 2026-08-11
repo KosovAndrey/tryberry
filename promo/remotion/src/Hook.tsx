@@ -7,67 +7,71 @@ import {
   useCurrentFrame,
   useVideoConfig,
 } from 'remotion';
-import {BRAND, SEAM_GLOW} from './brand';
+import {BRAND} from './brand';
 
 // Хук — первые 3 секунды ролика, под первую фразу озвучки.
 //
 // В кадре НЕТ текста: название площадки произносит озвучка и дублируют
-// субтитры, которые кладутся поверх на монтаже. Дублировать его ещё и титром
-// внутри композиции незачем — три надписи об одном и том же.
+// субтитры, которые кладутся поверх на монтаже.
 //
 // Почему это рендер, а не футаж (решение владельца 2026-08-09): на трёх
 // секундах ни сток, ни генерация не успевают ничего сказать — зритель их
 // только опознаёт, и кадр кончается. Ровно на этом осыпался хук GEN-01
 // (обрыв 77% → 40% между 1-й и 2-й секундой, разбор retro-gen-01.md).
 //
-// Нижняя треть кадра оставлена пустой: туда лягут субтитры и туда же смотрит
-// сейф-зона под интерфейс площадок.
-//
-// Кадр заканчивается тем же свечением, что и подложка чата (SEAM_GLOW), —
-// склейка хук→сцена получается незаметной, ради этого же в композициях чата
-// живёт LEAD_IN.
+// ⚠️ ПЕРВАЯ ВЕРСИЯ ЗАБРАКОВАНА (2026-08-10). Цвет площадки лежал полупрозрачным
+// пятном поверх почти чёрного фона — бренд не узнавался, а жёлтый Я.Маркета
+// вообще уходил в грязно-оливковый. Правило: кадр должен БЫТЬ цвета площадки,
+// а не намекать на него. Отсюда `base` (заливка) отдельно от `glow` (пятно
+// света), и оба взяты в полную силу.
 
-// ⚠️ Логотипы площадок в репозитории НЕ лежат — это чужие товарные знаки, и
-// класть их файлы в git не стоит. Чтобы включить логотип в фоне:
-//   1. положить PNG с прозрачным фоном в promo/remotion/public/brands/
-//      под именами wb.png, ozon.png, ym.png (mp — без логотипа, там их четыре);
-//   2. переключить флаг ниже в true.
-// Пока флаг false, хук рендерится как чистое цветовое поле — оно самодостаточно
-// и субтитры на нём читаются.
+// ⚠️ Логотипы площадок в репозитории НЕ лежат — это чужие товарные знаки.
+// Чтобы включить логотип в кадре: положить PNG с прозрачным фоном в
+// public/brands/ (wb.png, ozon.png, ym.png) и переключить флаг в true.
+// Инструкция — public/brands/README.md.
 const LOGOS_READY = false;
 
-export type HookTint = {label: string; from: string; to: string; logo?: string};
+export type HookTint = {
+  label: string;
+  base: string; // заливка кадра — основной цвет площадки
+  glow: string; // пятно света сверху, светлее базы
+  dark: boolean; // тёмный ли кадр: от этого зависит цвет логотипа
+  logo?: string;
+};
 
 export const HOOK_TINTS: Record<string, HookTint> = {
-  wb: {label: 'Wildberries', from: '#cb11ab', to: '#5b1a8c', logo: 'brands/wb.png'},
-  ozon: {label: 'Ozon', from: '#005bff', to: '#0a2472', logo: 'brands/ozon.png'},
-  ym: {label: 'Яндекс Маркет', from: '#ffcc00', to: '#b37400', logo: 'brands/ym.png'},
-  mp: {label: 'Маркетплейсы', from: BRAND.bright, to: BRAND.deep},
+  wb: {label: 'Wildberries', base: '#4a0d6b', glow: '#cb11ab', dark: true, logo: 'brands/wb.png'},
+  ozon: {label: 'Ozon', base: '#00248c', glow: '#2b7bff', dark: true, logo: 'brands/ozon.png'},
+  ym: {label: 'Яндекс Маркет', base: '#c99700', glow: '#ffd633', dark: false, logo: 'brands/ym.png'},
+  mp: {label: 'Маркетплейсы', base: BRAND.deep, glow: BRAND.bright, dark: true},
 };
+
+// Зерно поверх заливки: на больших плавных градиентах Chrome кладёт кольца
+// бандинга (та же грабля, что в scripts/seam-frame.mjs), и на видео их
+// запекает кодек. Шум их разбивает.
+const NOISE =
+  "url(\"data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='240' height='240'>" +
+  "<filter id='n'><feTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='3'/></filter>" +
+  "<rect width='240' height='240' filter='url(%23n)'/></svg>\")";
 
 export const Hook: React.FC<{tint: HookTint}> = ({tint}) => {
   const frame = useCurrentFrame();
   const {durationInFrames} = useVideoConfig();
   const p = frame / durationInFrames;
 
-  // Медленный наезд на весь кадр — движение есть с нулевого кадра, но глаз за
-  // ним не гонится и не мешает читать субтитры.
-  const push = interpolate(p, [0, 1], [1, 1.08]);
+  // Медленный наезд — движение есть с нулевого кадра, но глаз за ним не
+  // гонится и не мешает читать субтитры.
+  const push = interpolate(p, [0, 1], [1, 1.07]);
+  const glowX = interpolate(p, [0, 1], [50, 60]);
+  const glowY = interpolate(p, [0, 1], [30, 22]);
 
-  // Два пятна света расходятся: верхнее в цвете площадки, нижнее уводит в наш
-  // берри, чтобы к концу хука подложка совпала с первым кадром чат-сцены.
-  const glowY = interpolate(p, [0, 1], [26, 16]);
-  const glowX = interpolate(p, [0, 1], [50, 62]);
-  const handoff = interpolate(p, [0.55, 1], [0, 1], {
+  // К концу хука слегка притемняем — чтобы склейка с тёмной чат-сценой не
+  // била по глазам. Не в ноль: резкая смена яркости на стыке работает как
+  // смена кадра и удерживает внимание.
+  const handoff = interpolate(p, [0.7, 1], [0, 0.35], {
     extrapolateLeft: 'clamp',
     extrapolateRight: 'clamp',
   });
-
-  const seam = `radial-gradient(${SEAM_GLOW.rx * 100}% ${SEAM_GLOW.ry * 100}% at ${
-    SEAM_GLOW.cx * 100
-  }% ${SEAM_GLOW.cy * 100}%, ${BRAND.deep}${Math.round(SEAM_GLOW.alpha * 255 * handoff)
-    .toString(16)
-    .padStart(2, '0')}, transparent ${SEAM_GLOW.stop * 100}%)`;
 
   const logoIn = interpolate(frame, [0, 14], [0, 1], {
     extrapolateLeft: 'clamp',
@@ -75,38 +79,42 @@ export const Hook: React.FC<{tint: HookTint}> = ({tint}) => {
   });
 
   return (
-    <AbsoluteFill style={{background: BRAND.bg}}>
+    <AbsoluteFill style={{background: tint.base}}>
       <AbsoluteFill style={{transform: `scale(${push})`}}>
+        {/* пятно света — объём, чтобы заливка не читалась плоской */}
         <AbsoluteFill
           style={{
-            background: `radial-gradient(70% 45% at ${glowX}% ${glowY}%, ${tint.from}66, transparent 72%)`,
+            background: `radial-gradient(75% 50% at ${glowX}% ${glowY}%, ${tint.glow}, transparent 70%)`,
           }}
         />
+        {/* виньетка по краям — взгляд собирается к центру */}
         <AbsoluteFill
-          style={{
-            background: `radial-gradient(60% 40% at 30% 78%, ${tint.to}55, transparent 70%)`,
-          }}
+          style={{background: 'radial-gradient(90% 60% at 50% 45%, transparent 40%, #00000073)'}}
         />
-
-        {/* Логотип живёт в фоне: приглушённый и крупный, он не спорит с
-            субтитрами, но площадка узнаётся с первого кадра. */}
         {LOGOS_READY && tint.logo && (
-          <AbsoluteFill style={{alignItems: 'center', justifyContent: 'flex-start', paddingTop: 560}}>
+          <AbsoluteFill style={{alignItems: 'center', justifyContent: 'center', paddingBottom: 380}}>
             <Img
               src={staticFile(tint.logo)}
               style={{
-                width: 620,
-                opacity: 0.22 * logoIn,
-                filter: 'saturate(0.2) brightness(1.6)',
-                transform: `scale(${interpolate(p, [0, 1], [1, 1.05])})`,
+                width: 660,
+                opacity: (tint.dark ? 0.9 : 0.85) * logoIn,
+                transform: `scale(${interpolate(p, [0, 1], [1, 1.04])})`,
               }}
             />
           </AbsoluteFill>
         )}
-
-        {/* передача подложки чат-сцене */}
-        <AbsoluteFill style={{background: seam}} />
       </AbsoluteFill>
+
+      <AbsoluteFill style={{background: NOISE, opacity: 0.06, mixBlendMode: 'overlay'}} />
+
+      {/* Тёмная подложка под нижней третью: субтитры кладутся на монтаже, и
+          белый текст обязан читаться на любом фирменном цвете — на жёлтом
+          Я.Маркета без неё он пропадает. */}
+      <AbsoluteFill
+        style={{background: 'linear-gradient(to bottom, transparent 52%, #000000d9 100%)'}}
+      />
+
+      <AbsoluteFill style={{background: BRAND.bg, opacity: handoff}} />
     </AbsoluteFill>
   );
 };
