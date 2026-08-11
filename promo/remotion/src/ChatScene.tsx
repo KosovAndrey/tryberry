@@ -391,7 +391,12 @@ const AlertCard: React.FC<{m: Extract<Msg, {kind: 'alert'}>}> = ({m}) => {
             color: BRAND.botText,
           }}
         >
-          <div style={{fontSize: 34, fontWeight: 600, marginBottom: 22}}>{m.title}</div>
+          {/* Иерархия правлена 2026-08-11 под холодного зрителя (разбор
+              retro-reel2-wb.md): цена и сумма экономии должны читаться с
+              расстояния вытянутой руки за долю секунды, всё остальное —
+              подпись к ним. До правки заголовок 34, название 36 и цена 60 были
+              почти одного кегля, и глазу не за что было зацепиться. */}
+          <div style={{fontSize: 30, fontWeight: 600, marginBottom: 20, opacity: 0.8}}>{m.title}</div>
           <div style={{display: 'flex', gap: 26, alignItems: 'center'}}>
             <ProductImage
               img={m.img}
@@ -399,27 +404,29 @@ const AlertCard: React.FC<{m: Extract<Msg, {kind: 'alert'}>}> = ({m}) => {
               glyph={/iphone|телефон|смартфон/i.test(m.name) ? 'phone' : 'buds'}
             />
             <div style={{minWidth: 0}}>
-              <div style={{fontSize: 36, fontWeight: 600, marginBottom: 12, lineHeight: 1.25}}>{m.name}</div>
+              <div style={{fontSize: 32, fontWeight: 500, marginBottom: 10, lineHeight: 1.2, opacity: 0.75}}>
+                {m.name}
+              </div>
               <div style={{display: 'flex', alignItems: 'baseline', gap: 18, flexWrap: 'wrap'}}>
-                <span style={{fontSize: 32, opacity: 0.55, textDecoration: 'line-through'}}>{rub(m.was)}</span>
-                <span style={{fontFamily: display, fontSize: 60, fontWeight: 700, color: BRAND.cream}}>
+                <span style={{fontSize: 30, opacity: 0.5, textDecoration: 'line-through'}}>{rub(m.was)}</span>
+                <span style={{fontFamily: display, fontSize: 78, fontWeight: 700, color: BRAND.cream, letterSpacing: -1}}>
                   {rub(m.now)}
                 </span>
               </div>
               <div
                 style={{
-                  marginTop: 14,
+                  marginTop: 16,
                   display: 'inline-block',
-                  padding: '8px 22px',
+                  padding: '10px 26px',
                   borderRadius: 100,
                   background: `linear-gradient(120deg, ${BRAND.bright}, ${BRAND.deep})`,
                   color: '#fff',
                   fontFamily: display,
-                  fontSize: 32,
+                  fontSize: 36,
                   fontWeight: 700,
                 }}
               >
-                Скидка: {rub(drop)} (−{pct}%)
+                −{rub(drop)} · {pct}%
               </div>
             </div>
           </div>

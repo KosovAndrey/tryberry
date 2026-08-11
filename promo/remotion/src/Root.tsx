@@ -10,9 +10,9 @@ import {
   searchBuds,
   searchBudsCut,
   alertIphoneTail,
-  searchIphoneLong,
-  searchIphoneLongWb,
-  searchIphoneLongYm,
+  alertFirst,
+  alertFirstWb,
+  alertFirstYm,
 } from './data';
 
 // Лид-ин: кадры чистой подложки перед первым сообщением. Нужны под стык с
@@ -41,10 +41,11 @@ export const RemotionRoot: React.FC = () => {
   return (
     <>
       {/* ── Что рендерить сейчас ────────────────────────────────────────────
-          Продуктовая сцена мастера GEN-01 (0:26–0:46) в трёх версиях по
-          площадкам — docs/content/gen01-marketplace-versions.md. Рендерятся все
-          три сразу: npm run render:gen01 → out/gen01/. Длительность у них одна,
-          озвучка мастера записана, и сдвиг разъедет монтаж. */}
+          Продуктовая сцена в трёх версиях по площадкам — сначала награда
+          (алерт «было → стало» и график), потом одной фразой, как это завести.
+          Перестроена после разбора docs/content/retro-reel2-wb.md, подробности
+          в шапке блока в data.ts. Рендерятся все три сразу:
+          npm run render:gen01 → out/gen01/. */}
       {/* ⚠️ Имя папки — только [a-zA-Z0-9-]: кириллица валит РЕНДЕР, а не сборку
           (Remotion validateFolderName), поэтому tsc и bundle её пропускают.
           Цифра в начале задаёт порядок в Studio. */}
@@ -64,9 +65,9 @@ export const RemotionRoot: React.FC = () => {
             defaultProps={{tint: HOOK_TINTS[k]}}
           />
         ))}
-        {chat('GEN01-OZON', searchIphoneLong, 11.9)}
-        {chat('GEN01-WB', searchIphoneLongWb, 11.9)}
-        {chat('GEN01-YM', searchIphoneLongYm, 11.9)}
+        {chat('GEN01-OZON', alertFirst, 8.1)}
+        {chat('GEN01-WB', alertFirstWb, 8.1)}
+        {chat('GEN01-YM', alertFirstYm, 8.1)}
       </Folder>
 
       {/* ── Общее для всех роликов ──────────────────────────────────────── */}
@@ -86,8 +87,8 @@ export const RemotionRoot: React.FC = () => {
       </Folder>
 
       {/* ── Архив: в работе НЕ участвует ──────────────────────────────────
-          Отдельные ролики батча-02 (cold open + сжатый флоу) и две сцены,
-          которые заменила GEN01-OZON: два чата подряд читались как повтор.
+          Отдельные ролики батча-02 (cold open + сжатый флоу) и сцены прежних
+          сборок, включая учебный флоу «ссылка → кнопка → целевая цена».
           Держим ради истории и на случай новых батчей — не удаляем, но и не
           рендерим. */}
       <Folder name="3-archive">
