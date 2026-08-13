@@ -146,6 +146,8 @@ def main():
     ap.add_argument("--top", type=int, default=3, help="кандидатов на товар")
     ap.add_argument("--min-sim", type=float, default=0.25, help="порог отсечки")
     ap.add_argument("--limit", type=int, default=300, help="сколько пар отдать на разметку")
+    ap.add_argument("--hard-share", type=float, default=0.35,
+                    help="минимальная доля трудных негативов (разный объём памяти)")
     args = ap.parse_args()
 
     rows = []
@@ -190,15 +192,27 @@ def main():
             scored.append((s, ua, ub))
 
     by_url = {r["url"]: r for r in rows}
-    seen, pairs = set(), []
-    for s, ua, ub in sorted(scored, key=lambda x: -x[0]):
+
+    # Отбор с КВОТОЙ на трудные негативы. Без неё верхушку по схожести занимают
+    # лёгкие совпадения, и главный тип ошибки (тот же телефон, другой объём —
+    # §9, тип C) оказывается представлен одной шестой набора. Мерить точность
+    # там, где опасных случаев мало, значит мерить не то: разметка дорогая и
+    # делается один раз.
+    ranked = sorted(scored, key=lambda x: -x[0])
+    hard, rest, seen = [], [], set()
+    for s, ua, ub in ranked:
         key = tuple(sorted((ua, ub)))
         if key in seen:
             continue
         seen.add(key)
-        pairs.append((s, by_url[ua], by_url[ub]))
-        if len(pairs) >= args.limit:
-            break
+        a, b = by_url[ua], by_url[ub]
+        (hard if mem_verdict(a["_mem"], b["_mem"]) == "РАЗНЫЙ" else rest).append((s, a, b))
+
+    want_hard = min(len(hard), int(args.limit * args.hard_share))
+    pairs = hard[:want_hard] + rest[: args.limit - want_hard]
+    pairs.sort(key=lambda x: -x[0])
+    print(f"трудных негативов доступно: {len(hard)}, взято: {want_hard}",
+          file=sys.stderr)
 
     tsv_path, txt_path = args.out + ".tsv", args.out + ".txt"
     with open(tsv_path, "w", encoding="utf-8") as tsv, \
