@@ -34,6 +34,11 @@ RE_QUALIFIER = re.compile(
 )
 
 
+# Хвост неразобранной escape-последовательности (&nbsp и подобное). Ловился
+# как «код модели», пока названия тянулись регэкспом по сырому JSON.
+RE_ESCAPE_JUNK = re.compile(r"^u[0-9a-fA-F]{4}")
+
+
 def strong_code(title: str):
     """Сильный код: артикул в скобках либо латинский токен с >=2 цифрами."""
     m = RE_PARENS.search(title)
@@ -41,6 +46,8 @@ def strong_code(title: str):
         return m.group(1)
     for m in RE_TOKEN.finditer(title):
         tok = m.group(0)
+        if RE_ESCAPE_JUNK.match(tok):
+            continue
         if sum(c.isdigit() for c in tok) >= 2 and any(c.isalpha() for c in tok):
             return tok
     return None
