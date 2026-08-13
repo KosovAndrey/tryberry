@@ -349,3 +349,97 @@ Go на всех проверенных входах, — а из-за данн�
 Выкатить на прод в режиме наблюдения — сервис аддитивен, никто из Go-сервисов
 от него не зависит, откат — `docker compose stop price-insight`. Единственное,
 что мешает выкатить прямо сейчас без обсуждения — рестарт Kafka из D1.
+
+---
+
+## Приложение. Рунбук выкатки (этап 4)
+
+Ветка `feat/price-insight`. Всё — с ОБОИМИ `-f` (иначе наружу торчат порты,
+инцидент 2026-07-03). `C=` — просто сокращение, чтобы команды влезали в строку.
+
+```bash
+cd ~/projects/tryberrybot
+git fetch origin && git checkout feat/price-insight && git pull
+C="docker compose -f docker-compose.yml -f docker-compose.prod.yml"
+```
+
+**Шаг 1. Рестарт Kafka с настройками транзакций.** Кратковременный обрыв для
+Go-сервисов, они переподключаются сами. Без этого шага price-insight не
+обработает ни одного события (D1).
+
+```bash
+$C up -d kafka
+$C exec kafka kafka-topics --bootstrap-server localhost:9092 --describe --topic __transaction_state | head -2
+```
+
+Ожидание: топик существует, `ReplicationFactor: 1`. Если «does not exist» —
+он создаётся при первом транзакционном продюсере, проверить снова после шага 3.
+Заодно убедиться, что продукт жив:
+
+```bash
+$C logs --tail 30 notifier scraper
+```
+
+**Шаг 2. Миграция 032 — ТОЛЬКО секция Up.** Целиком скормленный файл создаёт
+таблицу и тут же её удаляет, молча (см. §6.6).
+
+```bash
+awk '/-- \+goose Up/{f=1} /-- \+goose Down/{f=0} f' migrations/032_price_insight.sql \
+  | grep -v 'goose Statement' \
+  | $C exec -T postgres psql -U user -d tryberrybot -v ON_ERROR_STOP=1
+
+$C exec postgres psql -U user -d tryberrybot -c '\dp price_insight'
+```
+
+Ожидание: `CREATE TABLE`, `CREATE INDEX`, и в правах строка
+`tryberry_app=arwd/user`. Если прав нет — сервис не сможет писать, выдать
+руками: `GRANT SELECT, INSERT, UPDATE, DELETE ON price_insight TO tryberry_app;`
+
+**Шаг 3. Сборка и запуск.**
+
+```bash
+$C build price-insight
+$C up -d price-insight
+$C ps price-insight
+```
+
+**Шаг 4. Проверки (первые минуты).**
+
+```bash
+# поток жив, а не просто контекст поднялся
+$C exec price-insight wget -qO- http://localhost:8092/actuator/health
+
+# главное: транзакции инициализировались
+$C logs price-insight | grep -c InitProducerId
+$C logs price-insight | grep -i "Timeout.*InitProducerId" | tail -3   # должно быть пусто
+
+# память против лимита 1g
+docker stats --no-stream pt_price_insight
+
+# лаг. ВНИМАНИЕ: LAG=1 на партицию — это control record транзакции, норма (R4)
+$C exec kafka kafka-consumer-groups --bootstrap-server localhost:9092 \
+  --describe --group price-insight
+```
+
+**Шаг 5. Прометей подхватывает новый job без рестарта.**
+
+```bash
+$C exec prometheus wget -qO- --post-data='' http://localhost:9090/-/reload
+$C exec prometheus wget -qO- 'http://localhost:9090/api/v1/query?query=up{job="price-insight"}'
+```
+
+**Шаг 6. Через час-другой — объём и сверка (этап 5).**
+
+```bash
+$C exec postgres psql -U user -d tryberrybot -c 'SELECT count(*), min(computed_at), max(computed_at) FROM price_insight'
+$C exec -T postgres psql -U user -d tryberrybot -f - < scripts/sql/price-insight-parity.sql
+```
+
+**Откат в любой момент.** Продукт не страдает: ни один Go-сервис от
+price-insight не зависит.
+
+```bash
+$C stop price-insight
+```
+
+Настройки Kafka откатывать не нужно — они безвредны и без сервиса.
