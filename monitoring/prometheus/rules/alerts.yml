@@ -205,6 +205,26 @@ groups:
           summary: "WB-search-сайдкар: залипшие дорожки"
           description: "У wb-search-miner дорожка держит лок дольше порога 15+ минут. Вотчдог должен был снять healthy и пересоздать браузер — если алерт держится, вотчдог не справляется, смотреть логи pt_wb_search_miner."
 
+      # Ali-сайдкар: тот же вотчдог, что у ozon/wb. healthy_lanes при залипании
+      # драйвера врёт — возраст последнего успеха не врёт.
+      - alert: AliMinerStale
+        expr: ali_miner_last_success_age_seconds > 3600
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Ali-сайдкар: нет успешных запросов час"
+          description: "ali-miner отвечает, но ни одного успешного запроса/прогрева больше часа (дорожки могут числиться healthy). Смотреть ali_miner_stuck_lanes и логи pt_ali_miner; лечение — docker compose up -d --force-recreate ali-miner."
+
+      - alert: AliMinerStuckLanes
+        expr: ali_miner_stuck_lanes > 0
+        for: 15m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Ali-сайдкар: залипшие дорожки"
+          description: "У ali-miner дорожка держит лок дольше порога 15+ минут. Вотчдог должен был снять healthy и пересоздать браузер — если алерт держится, смотреть логи pt_ali_miner."
+
       # Высокая латентность скрейпинга
       - alert: HighScrapeLatency
         expr: tryberrybot:scrape_duration_p95:5m > 10
