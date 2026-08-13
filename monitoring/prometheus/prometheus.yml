@@ -65,6 +65,16 @@ scrape_configs:
         labels:
           service: wb-search-miner
 
+  # Сайдкар Ali-поиска (X5SEC-фолбэк). Метрик у него не собирали вовсе — вскрылось
+  # 2026-08-13, когда к нему добавили вотчдог залипших дорожек: алерты
+  # AliMinerStale/AliMinerStuckLanes без этого джоба были бы мёртвыми правилами.
+  - job_name: tryberrybot-ali-miner
+    metrics_path: /metrics
+    static_configs:
+      - targets: [ 'ali-miner:8082' ]
+        labels:
+          service: ali-miner
+
   - job_name: tryberrybot-notifier
     metrics_path: /metrics
     static_configs:
