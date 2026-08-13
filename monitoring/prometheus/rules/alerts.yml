@@ -180,6 +180,31 @@ groups:
           summary: "WB-search-сайдкар: нет живых дорожек"
           description: "wb-search-miner отвечает, но 0 прогретых дорожек 15+ минут — браузер не проходит wbaas-стену (create-token 498). Проверить версию patchright (пин 1.60.1) и логи дорожки; при тайтенинге wbaas — обновить движок. Горячие WB-запросы пока падают в 403."
 
+      # ГЛАВНЫЙ алерт по WB-сайдкару: healthy_lanes ВРЁТ при залипании драйвера.
+      # Инцидент 13-08: /search висел бесконечно (чтение тела ответа было без
+      # дедлайна и держало лок дорожки), при этом healthy_lanes=1 и метрики
+      # зелёные — ровно тот же отказ, что у ozon-miner 29-07. Возраст последнего
+      # успеха не врёт: он растёт, даже когда дорожка «здорова».
+      - alert: WbSearchMinerStale
+        expr: wb_search_miner_last_success_age_seconds > 3600
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "WB-search-сайдкар: нет успешных запросов час"
+          description: "wb-search-miner отвечает, но ни одного успешного запроса/прогрева больше часа (дорожки могут числиться healthy). Порог высокий намеренно: сайдкар зовётся только как фолбэк на 403 у горячих запросов и в тишине может простаивать законно. Смотреть wb_search_miner_stuck_lanes и логи pt_wb_search_miner; лечение — docker compose up -d --force-recreate wb-search-miner."
+
+      # Дорожка держит лок дольше порога = подвисший драйвер. Вотчдог снимает с
+      # неё healthy и пересоздаёт браузер сам; алерт нужен, если это повторяется.
+      - alert: WbSearchMinerStuckLanes
+        expr: wb_search_miner_stuck_lanes > 0
+        for: 15m
+        labels:
+          severity: warning
+        annotations:
+          summary: "WB-search-сайдкар: залипшие дорожки"
+          description: "У wb-search-miner дорожка держит лок дольше порога 15+ минут. Вотчдог должен был снять healthy и пересоздать браузер — если алерт держится, вотчдог не справляется, смотреть логи pt_wb_search_miner."
+
       # Высокая латентность скрейпинга
       - alert: HighScrapeLatency
         expr: tryberrybot:scrape_duration_p95:5m > 10
