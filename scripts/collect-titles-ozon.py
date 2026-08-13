@@ -39,11 +39,42 @@ QUERIES = [
 
 RE_PRODUCT_LINK = re.compile(r"/product/(?:[^\"/?#]*-)?(\d+)/?")
 
+# Один запрос отдаёт ~8 тайлов — остальное Ozon подгружает бесконечным скроллом.
+# Боевой скрейпер листает по nextPage до девяти страниц (scrapePaginated), проба
+# обязана делать то же, иначе выборка — это верхушка выдачи с рекламой.
+MAX_PAGES = 6
 
-def fetch(query: str) -> bytes:
+
+def fetch_path(path: str) -> bytes:
+    url = f"{MINER}/page?path={urllib.parse.quote(path)}"
+    with urllib.request.urlopen(url, timeout=180) as r:
+        return r.read()
+
+
+def fetch_search(query: str) -> bytes:
     url = f"{MINER}/search?text={urllib.parse.quote(query)}"
     with urllib.request.urlopen(url, timeout=180) as r:
         return r.read()
+
+
+def next_page(raw: bytes) -> str:
+    """Курсор скролла лежит не в корне, а в стейте infiniteVirtualPaginator."""
+    try:
+        env = json.loads(raw)
+    except Exception:  # noqa: BLE001
+        return ""
+    if isinstance(env.get("nextPage"), str) and env["nextPage"].strip():
+        return env["nextPage"].strip()
+    for k, v in (env.get("widgetStates") or {}).items():
+        if not k.startswith("infiniteVirtualPaginator"):
+            continue
+        try:
+            np = json.loads(v).get("nextPage")
+        except Exception:  # noqa: BLE001
+            continue
+        if isinstance(np, str) and np.strip():
+            return np.strip()
+    return ""
 
 
 def walk(node):
@@ -126,19 +157,39 @@ def titles(raw: bytes):
     return out
 
 
+def collect(query: str):
+    """Выдача с пагинацией: дедуп по названию, чтобы страницы не задваивались."""
+    seen, out = set(), []
+    raw = fetch_search(query)
+    for page in range(MAX_PAGES):
+        for t in titles(raw):
+            if t not in seen:
+                seen.add(t)
+                out.append(t)
+        path = next_page(raw)
+        if not path:
+            break
+        time.sleep(3)  # дорожка сайдкара не любит частых запросов
+        try:
+            raw = fetch_path(path)
+        except Exception as e:  # noqa: BLE001 — партиал лучше, чем ничего
+            print(f"  страница {page + 2} не пришла: {e}", file=sys.stderr)
+            break
+    return out
+
+
 def main():
     for q in QUERIES:
         try:
-            raw = fetch(q)
+            found = collect(q)
         except Exception as e:  # noqa: BLE001 — диагностика, не обработка
             print(f"ОШИБКА {q}: {e}", file=sys.stderr)
             continue
-        found = titles(raw)
-        print(f"{q:<24} тайлов с названием: {len(found)}", file=sys.stderr)
+        print(f"{q:<24} названий: {len(found)}", file=sys.stderr)
         for t in found:
             print(f"{q}\t\t{t.replace(chr(9), ' ')}")
         sys.stdout.flush()
-        time.sleep(5)  # дорожка сайдкара не любит частых запросов
+        time.sleep(5)
 
 
 if __name__ == "__main__":
