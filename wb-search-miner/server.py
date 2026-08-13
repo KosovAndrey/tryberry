@@ -84,6 +84,10 @@ MAINT_OP_TIMEOUT_S = float(os.getenv("WB_MAINT_OP_TIMEOUT_SECONDS", "240"))
 # Дедлайн на чтение тела ответа: единственный await в fetch_search, у которого
 # своего тайм-аута нет, — именно на нём дорожка и вставала.
 BODY_TIMEOUT_S = float(os.getenv("WB_BODY_TIMEOUT_SECONDS", "30"))
+# Запас поверх собственного таймера Playwright у навигации: своя граница нужна
+# на случай мёртвого CDP-соединения, когда таймер драйвера не срабатывает.
+# Вынесен в параметр, иначе нижнюю границу ожидания не проверить тестом.
+NAV_HARD_SLACK_S = float(os.getenv("WB_NAV_HARD_SLACK_SECONDS", "10"))
 # Дедлайн на необязательные действия мыши.
 NUDGE_TIMEOUT_S = float(os.getenv("WB_NUDGE_TIMEOUT_SECONDS", "15"))
 WARM_KEEPALIVE_S = float(os.getenv("WB_WARM_KEEPALIVE_MINUTES", "30")) * 60.0
@@ -395,8 +399,19 @@ class Lane:
             self._page.on("response", on_resp)
             try:
                 try:
-                    await self._page.goto(nav_url, wait_until="commit",
-                                          timeout=int(NAV_TIMEOUT_S * 1000))
+                    # Дедлайн СВЕРХУ, поверх собственного таймера Playwright:
+                    # в инциденте ozon-miner висли именно драйверные вызовы, у
+                    # которых свой таймер не срабатывал (мёртвое CDP-соединение).
+                    await asyncio.wait_for(
+                        self._page.goto(nav_url, wait_until="commit",
+                                        timeout=int(NAV_TIMEOUT_S * 1000)),
+                        timeout=NAV_TIMEOUT_S + NAV_HARD_SLACK_S)
+                except asyncio.TimeoutError:
+                    self.healthy = False
+                    self._needs_relaunch = True
+                    log.warning("дорожка %d: навигация не вернулась за %.0fс — драйвер завис",
+                                self.idx, NAV_TIMEOUT_S + NAV_HARD_SLACK_S)
+                    return 504, b""
                 except Exception as e:  # noqa: BLE001
                     # u-search часто прилетает ещё до полной загрузки — навигационную
                     # ошибку не считаем фаталом, ждём ответ ниже.
@@ -420,6 +435,7 @@ class Lane:
                     body = await asyncio.wait_for(resp.body(), timeout=BODY_TIMEOUT_S)
                 except asyncio.TimeoutError:
                     self.healthy = False
+                    self._needs_relaunch = True
                     log.warning("дорожка %d: тело u-search не дошло за %.0fс — нездорова",
                                 self.idx, BODY_TIMEOUT_S)
                     return 504, b""
