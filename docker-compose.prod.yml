@@ -109,6 +109,10 @@ services:
   scheduler:
     restart: unless-stopped
 
+  price-insight:
+    restart: unless-stopped
+    ports: !reset []
+
   # У инфраструктуры ниже restart обязателен: после ребута хоста 2026-07-10
   # без него не поднялась Grafana (502 на grafana.tryberry.ru).
   grafana:

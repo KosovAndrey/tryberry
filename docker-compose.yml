@@ -799,6 +799,14 @@ services:
       KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: INTERNAL:PLAINTEXT,EXTERNAL:PLAINTEXT
       KAFKA_INTER_BROKER_LISTENER_NAME: INTERNAL
       KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+      # Транзакции (exactly_once_v2 в price-insight). Дефолты рассчитаны на
+      # кластер: RF=3 и min.isr=2, а брокер у нас ОДИН — служебный топик
+      # __transaction_state с такими требованиями не создаётся, и клиент вечно
+      # висит на InitProducerId («Timeout initializing transactions»), молча не
+      # обрабатывая ничего. На Go-сервисы не влияет: транзакции использует только
+      # price-insight, а сам топик до него не существовал.
+      KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: 1
       KAFKA_AUTO_CREATE_TOPICS_ENABLE: "true"
       KAFKA_NUM_PARTITIONS: 10
       # События транзитные (апдейты, цены, поисковые хиты) — 3 суток с запасом
@@ -963,7 +971,49 @@ services:
 #      - /:/host:ro,rslave
 #    pid: host
 
+  # ── price-insight (JVM) ────────────────────────────────────────────────────
+  # Единственный сервис на JVM. Держит по товару сегментное состояние цены и
+  # материализует вердикт «честной цены», снимая time-weighted агрегацию с
+  # горячего пути notifier. Обоснование выбора стека, границы и отвергнутые
+  # альтернативы — docs/PRICE-INSIGHT-JAVA.md.
+  #
+  # Лимит памяти выставлен явно (у остальных сервисов его нет): Kafka Streams
+  # держит block cache RocksDB вне heap, и без потолка процесс может незаметно
+  # разрастись и утянуть за собой соседей по хосту.
+  price-insight:
+    build:
+      context: ./price-insight
+      dockerfile: Dockerfile
+    container_name: pt_price_insight
+    mem_limit: 1g
+    ports:
+      - "127.0.0.1:8092:8092"
+    environment:
+      KAFKA_BROKERS: "kafka:29092"
+      POSTGRES_DSN: "jdbc:postgresql://postgres:5432/tryberrybot"
+      POSTGRES_USER: "tryberry_app"
+      POSTGRES_PASSWORD: "${APP_DB_PASSWORD:?APP_DB_PASSWORD must be set in .env}"
+      STATE_DIR: "/var/lib/price-insight"
+      SERVER_PORT: "8092"
+    volumes:
+      - price_insight_state:/var/lib/price-insight
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://localhost:8092/actuator/health/readiness | grep -q UP"]
+      interval: 30s
+      timeout: 5s
+      # start_period большой намеренно: при первом запуске сервис прожёвывает
+      # всю историю price-events и до этого readiness честно красный.
+      start_period: 300s
+      retries: 3
+    depends_on:
+      postgres:
+        condition: service_healthy
+      kafka:
+        condition: service_healthy
+
+
 volumes:
+  price_insight_state:
   pgdata:
   redis_data:
   prometheus_data:

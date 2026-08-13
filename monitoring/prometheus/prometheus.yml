@@ -107,6 +107,19 @@ scrape_configs:
       - target_label: service
         replacement: reseller-worker
 
+  # price-insight (JVM, Kafka Streams). Путь не /metrics: метрики отдаёт
+  # actuator, у него свой префикс. Имя job СПЕЦИАЛЬНО без префикса tryberrybot-:
+  # под него подписан ServiceDown (critical), а этот сервис штатно гасится руками
+  # при откате (docker compose stop price-insight) — продукт от этого не страдает,
+  # и будить дежурного незачем. Вернуть префикс, когда notifier начнёт реально
+  # зависеть от вердикта.
+  - job_name: price-insight
+    metrics_path: /actuator/prometheus
+    static_configs:
+      - targets: [ 'price-insight:8092' ]
+        labels:
+          service: price-insight
+
   # Сам Prometheus — стандартная практика мониторить и его
   - job_name: prometheus
     static_configs:

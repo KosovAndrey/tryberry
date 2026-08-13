@@ -1,0 +1,53 @@
+# price-insight — материализация «честной цены».
+# Все адреса берутся из окружения, как у остальных сервисов проекта.
+
+# Порт задан явно: Dockerfile объявляет 8092 и compose пробрасывает 8092,
+# полагаться на подхват SERVER_PORT через relaxed binding не стоит.
+server:
+  port: ${SERVER_PORT:8092}
+
+spring:
+  application:
+    name: price-insight
+  kafka:
+    bootstrap-servers: ${KAFKA_BROKERS:localhost:9092}
+  datasource:
+    url: ${POSTGRES_DSN:jdbc:postgresql://localhost:5432/tryberry}
+    username: ${POSTGRES_USER:tryberry}
+    password: ${POSTGRES_PASSWORD:}
+    hikari:
+      # Сервис пишет пачками и редко — большой пул не нужен и только
+      # отъедает соединения у Go-сервисов на том же Postgres.
+      maximum-pool-size: 4
+
+price-insight:
+  application-id: price-insight
+  input-topic: price-events
+  output-topic: price-verdict
+  projector-group: price-insight-projector
+  # Тик пунктуатора по stream-time. Шесть часов — компромисс: окно едет
+  # достаточно плавно, а полный обход store происходит редко.
+  punctuate-interval: 6h
+  # Минимальный срок наблюдения перед выводами. Совпадает с honestMinAge в Go.
+  min-age: 7d
+  state-dir: ${STATE_DIR:/var/lib/price-insight}
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,prometheus
+  endpoint:
+    health:
+      probes:
+        enabled: true
+      group:
+        # Готовность = поток жив. Без явного include readiness смотрит только на
+        # состояние Spring-контекста и отвечает UP, даже когда топология умерла.
+        readiness:
+          include: readinessState,kafkaStreams
+
+logging:
+  level:
+    ru.tryberry.priceinsight: INFO
+    org.apache.kafka.streams: WARN
