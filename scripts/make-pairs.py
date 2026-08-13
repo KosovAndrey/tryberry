@@ -55,9 +55,29 @@ STOP = {
 # Квалификатор варианта: «8/128 ГБ», «128 ГБ». Несовпадение — это ОТКАЗ, а не
 # минус к скору: у вариантов одного товара названия совпадают почти дословно,
 # и именно на них ломается любой порог по похожести (§9 дока).
-RE_MEM_PAIR = re.compile(r"\b(\d{1,2})\s*/\s*(\d{2,4})\s*(?:гб|gb)\b", re.I)
+#
+# Написаний три, и все три встречены живьём в одной выборке:
+#   «8/256 ГБ» (Ozon), «8 ГБ/256 ГБ» (Я.Маркет), «8/256» без единицы (Я.Маркет).
+# Первая версия ловила только первое и пометила совпадающие объёмы как разные.
+RE_MEM_PAIR = re.compile(
+    r"\b(\d{1,2})\s*(?:гб|gb)?\s*/\s*(\d{2,4})\s*(?:гб|gb)?\b", re.I)
 RE_MEM_ONE = re.compile(r"\b(\d{2,4})\s*(?:гб|gb)\b", re.I)
 RE_TOKEN = re.compile(r"[a-zA-Zа-яА-ЯёЁ0-9]+")
+
+# Признаки, по которым товар с тем же названием — ДРУГОЙ товар. Найдены в первой
+# же выборке: «Восстановленный iPhone 14 Pro Max» против нового, «Global» против
+# «Ростест (EAC)». Для покупателя это разные вещи (гарантия, состояние), и
+# матчер обязан их различать.
+#
+# Границы слов обязательны: короткое «cn» подстрокой находится внутри «Tecno»,
+# и первая версия честно рапортовала китайскую версию у каждого Tecno Camon.
+MARKERS = {
+    "состояние": [r"восстановлен", r"уценённ", r"уцененн", r"\bб/?у\b", r"refurb"],
+    "версия": [r"ростест", r"\beac\b", r"\bglobal\b", r"глобальн",
+               r"китайск", r"\bcn\b"],
+    "комплект": [r"комплект", r"\bнабор", r"\b[23]\s*шт\b"],
+}
+MARKERS = {k: [re.compile(p, re.I) for p in v] for k, v in MARKERS.items()}
 
 
 def norm_tokens(name: str):
@@ -85,6 +105,28 @@ def storage_of(name: str):
     if m:
         return (None, int(m.group(1)))
     return None
+
+
+def mem_verdict(a, b) -> str:
+    """Сравниваем по ПЗУ: оперативку одна площадка часто не пишет, и требовать
+    её совпадения значит объявить разными объёмы, которые совпадают."""
+    if not a or not b:
+        return "нет"
+    if a[1] != b[1]:
+        return "РАЗНЫЙ"
+    if a[0] is not None and b[0] is not None and a[0] != b[0]:
+        return "РАЗНЫЙ"
+    return "совпал"
+
+
+def markers_of(name: str):
+    found = []
+    for kind, patterns in MARKERS.items():
+        hits = sorted({m.group(0).lower() for p in patterns
+                       for m in [p.search(name)] if m})
+        if hits:
+            found.append(f"{kind}:{'/'.join(hits)}")
+    return found
 
 
 def jaccard(a: set, b: set) -> float:
@@ -157,25 +199,26 @@ def main():
     tsv_path, txt_path = args.out + ".tsv", args.out + ".txt"
     with open(tsv_path, "w", encoding="utf-8") as tsv, \
             open(txt_path, "w", encoding="utf-8") as txt:
-        tsv.write("label\tid\tsim\tmem\tbrand\tmp_a\tname_a\tprice_a\tmp_b\tname_b"
-                  "\tprice_b\turl_a\turl_b\n")
+        tsv.write("label\tid\tsim\tmem\tflags\tbrand\tmp_a\tname_a\tprice_a\tmp_b"
+                  "\tname_b\tprice_b\turl_a\turl_b\n")
         for i, (s, a, b) in enumerate(pairs, 1):
-            if a["_mem"] and b["_mem"]:
-                mem = "совпал" if a["_mem"] == b["_mem"] else "РАЗНЫЙ"
-            else:
-                mem = "нет"
-            tsv.write(f"\t{i}\t{s:.3f}\t{mem}\t{a['_brand']}\t{a['marketplace']}\t"
-                      f"{a['name']}\t{a['price']}\t{b['marketplace']}\t{b['name']}\t"
-                      f"{b['price']}\t{a['url']}\t{b['url']}\n")
-            txt.write(f"[{i:3d}] sim={s:.3f} бренд={a['_brand']} память={mem}\n"
+            mem = mem_verdict(a["_mem"], b["_mem"])
+            ma, mb = markers_of(a["name"]), markers_of(b["name"])
+            flags = "; ".join(f"A[{x}]" for x in ma) + \
+                    (" " if ma and mb else "") + \
+                    "; ".join(f"B[{x}]" for x in mb)
+            tsv.write(f"\t{i}\t{s:.3f}\t{mem}\t{flags}\t{a['_brand']}\t"
+                      f"{a['marketplace']}\t{a['name']}\t{a['price']}\t"
+                      f"{b['marketplace']}\t{b['name']}\t{b['price']}\t"
+                      f"{a['url']}\t{b['url']}\n")
+            txt.write(f"[{i:3d}] sim={s:.3f} бренд={a['_brand']} память={mem}"
+                      f"{'  ⚑ ' + flags if flags else ''}\n"
                       f"   A ({a['marketplace']}, {a['price']} ₽) {a['name']}\n"
                       f"   B ({b['marketplace']}, {b['price']} ₽) {b['name']}\n"
                       f"   {a['url']}\n   {b['url']}\n\n")
 
-    same = sum(1 for s, a, b in pairs
-               if a["_mem"] and b["_mem"] and a["_mem"] == b["_mem"])
-    diff = sum(1 for s, a, b in pairs
-               if a["_mem"] and b["_mem"] and a["_mem"] != b["_mem"])
+    same = sum(1 for s, a, b in pairs if mem_verdict(a["_mem"], b["_mem"]) == "совпал")
+    diff = sum(1 for s, a, b in pairs if mem_verdict(a["_mem"], b["_mem"]) == "РАЗНЫЙ")
     print(f"пар на разметку: {len(pairs)} → {tsv_path}, {txt_path}", file=sys.stderr)
     print(f"  из них с разным объёмом памяти (трудные негативы): {diff}", file=sys.stderr)
     print(f"  с совпавшим объёмом: {same}", file=sys.stderr)
