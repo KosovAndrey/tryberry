@@ -201,3 +201,65 @@ CROSS JOIN LATERAL (
     SELECT min(recorded_at) AS go_since FROM price_history WHERE product_id = p.product_id
 ) g
 WHERE go_since IS NOT NULL;
+
+-- ─────────────────────────────────────────────────────────────────────────────
+-- Диагностика остаточных расхождений среза А. После починки якоря их осталось
+-- около процента, и в них видны два разных почерка. Разделяем их числами.
+--
+-- Гипотеза 1 — OOS-семантика (R2 в docs/PRICE-INSIGHT-JAVA.md). Go засчитывает
+-- время отсутствия в наличии по последней известной цене: при OOS строка не
+-- пишется, а при возврате по той же цене — тоже. Java сегмент рвёт. Признак:
+-- большой РАЗРЫВ между соседними строками истории. Предсказание: у товаров с
+-- расхождением МЕДИАНЫ разрывы заметно больше, чем у совпавших.
+--
+-- Гипотеза 2 — события, потерянные при рестарте Kafka. В логах scraper во время
+-- рестарта 13.08: «send price event: kafka write ... server misbehaving» рядом с
+-- «offset advanced, task will be rescheduled» — строка истории записалась, а
+-- событие не доехало. Признак: строка price_history внутри окна рестарта,
+-- которой Java не видела. Предсказание: у товаров с расхождением МИНИМУМА такие
+-- строки есть, у совпавших нет.
+-- ─────────────────────────────────────────────────────────────────────────────
+
+-- Окно рестарта Kafka. Правь под свой инцидент, если проверяешь другой.
+\set kafka_restart_from '2026-08-13 15:40:00+00'
+\set kafka_restart_to   '2026-08-13 15:46:00+00'
+
+DROP TABLE IF EXISTS pg_temp.diag;
+CREATE TEMP TABLE diag AS
+SELECT p.product_id,
+       (abs(p.java_min_all - COALESCE(p.a_min_all, 0)) > 0.01
+        OR abs(p.java_min30 - COALESCE(p.a_min30, 0)) > 0.01)      AS min_разошёлся,
+       abs(p.java_median30 - COALESCE(p.a_median30, 0)) > 0.01     AS median_разошёлся,
+       g.max_gap_hours,
+       g.rows_in_restart
+FROM parity p
+CROSS JOIN LATERAL (
+    SELECT
+        -- Максимальный разрыв между соседними точками в 30-дневном окне.
+        COALESCE(max(EXTRACT(EPOCH FROM (next_at - recorded_at)) / 3600), 0) AS max_gap_hours,
+        count(*) FILTER (WHERE recorded_at >= :'kafka_restart_from'::timestamptz
+                           AND recorded_at <= :'kafka_restart_to'::timestamptz) AS rows_in_restart
+    FROM (
+        SELECT recorded_at,
+               lead(recorded_at, 1, p.at) OVER (ORDER BY recorded_at) AS next_at
+        FROM price_history
+        WHERE product_id = p.product_id
+          AND recorded_at >= p.at - interval '30 days'
+    ) s
+) g;
+
+\echo ''
+\echo '=== Гипотеза 1: OOS — разрывы в истории против расхождения МЕДИАНЫ ==='
+SELECT median_разошёлся,
+       count(*)                                        AS товаров,
+       round(avg(max_gap_hours)::numeric, 1)           AS средний_макс_разрыв_ч,
+       round((percentile_cont(0.5) WITHIN GROUP (ORDER BY max_gap_hours))::numeric, 1) AS медианный_разрыв_ч
+FROM diag GROUP BY 1 ORDER BY 1;
+
+\echo ''
+\echo '=== Гипотеза 2: потерянные события — строки в окне рестарта Kafka ==='
+SELECT min_разошёлся,
+       count(*)                                          AS товаров,
+       count(*) FILTER (WHERE rows_in_restart > 0)        AS с_строкой_в_окне_рестарта,
+       round(100.0 * count(*) FILTER (WHERE rows_in_restart > 0) / NULLIF(count(*), 0), 1) AS процент
+FROM diag GROUP BY 1 ORDER BY 1;
