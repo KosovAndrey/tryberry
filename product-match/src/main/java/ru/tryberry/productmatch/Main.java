@@ -9,6 +9,8 @@ import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.HashSet;
+import java.util.Set;
 
 /**
  * Прототип матчера: строит индекс по корпусу и считает ДВА числа, ради которых
@@ -51,6 +53,17 @@ public final class Main {
 
         List<String[]> pairs = loadPairs(pairsPath);
         System.out.printf("пар в наборе: %d%n", pairs.size());
+
+        // Режим предложения кандидатов. Нужен, потому что золотой набор отобрало
+        // ТРИГРАММНОЕ сито, и потому он структурно не способен показать случаи,
+        // где индекс находит то, что триграммы пропустили, — а это главное
+        // преимущество Lucene («iPhone15» против «iPhone 15»). Размечать такой
+        // набор значит измерить только точность на чужих кандидатах.
+        if (opt.containsKey("propose")) {
+            propose(items, pairs, Path.of(opt.get("propose")),
+                    Integer.parseInt(opt.getOrDefault("propose-top", "3")));
+            return;
+        }
 
         try (MatchIndex index = new MatchIndex(items);
              PrintWriter out = new PrintWriter(Files.newBufferedWriter(outPath, StandardCharsets.UTF_8))) {
@@ -106,6 +119,42 @@ public final class Main {
                 System.out.println("если низок — разбирать промахи по типам A/B, там их место.");
             }
         }
+    }
+
+    /**
+     * Выписывает кандидатов, которых предложил бы ИНДЕКС, исключая уже
+     * присутствующих в наборе. Формат — url_a/url_b плюс оценка, дальше их
+     * дополняет и приводит к формату разметки scripts/add-lucene-candidates.py.
+     */
+    private static void propose(List<Item> items, List<String[]> existing,
+                                Path out, int top) throws IOException {
+        Set<String> seen = new HashSet<>();
+        for (String[] p : existing) {
+            seen.add(key(p[P_URL_A], p[P_URL_B]));
+        }
+        int written = 0;
+        try (MatchIndex index = new MatchIndex(items);
+             PrintWriter w = new PrintWriter(Files.newBufferedWriter(out, StandardCharsets.UTF_8))) {
+            w.println("url_a\turl_b\tlucene_score\tlucene_rank");
+            for (Item a : items) {
+                for (MatchIndex.Hit h : index.search(a, top)) {
+                    String k = key(a.url(), h.item().url());
+                    if (seen.add(k)) {
+                        w.printf("%s\t%s\t%.4f\t%d%n",
+                                a.url(), h.item().url(), h.score(), h.rank());
+                        written++;
+                    }
+                }
+            }
+        }
+        System.out.printf("предложено новых кандидатов: %d → %s%n", written, out);
+        System.out.println("Дальше: scripts/add-lucene-candidates.py отфильтрует те,");
+        System.out.println("что триграммы оценили НИЗКО — там и живёт преимущество индекса.");
+    }
+
+    /** Ключ пары без учёта направления. */
+    private static String key(String a, String b) {
+        return a.compareTo(b) <= 0 ? a + "\u0000" + b : b + "\u0000" + a;
     }
 
     // ── Разбор набора пар (формат scripts/make-pairs.py) ─────────────────────
