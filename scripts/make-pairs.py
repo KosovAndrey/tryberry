@@ -70,6 +70,12 @@ RE_MEM_PAIR = re.compile(
 # чисел), поэтому требуем ПРАВДОПОДОБНЫЕ значения: столько-то ОЗУ и ПЗУ реально
 # бывает, а «15 8» из «Note 15 8» — нет.
 RE_MEM_SPACE = re.compile(r"\b(\d{1,2})\s+(\d{2,4})\s*(?:гб|gb)?\b", re.I)
+# Терабайты. «iPhone 1 ТБ» и «iPhone 1024 ГБ» — ОДИН товар, поэтому приводим к
+# гигабайтам. Без этого один и тот же телефон разъезжается на два.
+RE_MEM_TB = re.compile(r"\b(\d{1,2})\s*(?:тб|tb)\b", re.I)
+# Пара, где ПЗУ указано в терабайтах: «12/1 ТБ», «16 ГБ/1 ТБ».
+RE_MEM_PAIR_TB = re.compile(
+    r"\b(\d{1,3})\s*(?:гб|gb)?\s*[/+]\s*(\d{1,2})\s*(?:тб|tb)\b", re.I)
 RAM_VALUES = {2, 3, 4, 6, 8, 12, 16, 18, 24}
 ROM_VALUES = {16, 32, 64, 128, 256, 512, 1024}
 RE_MEM_ONE = re.compile(r"\b(\d{2,4})\s*(?:гб|gb)\b", re.I)
@@ -108,7 +114,10 @@ def brand_of(row) -> str:
 
 
 def storage_of(name: str):
-    """Объём памяти: (ram, rom) либо (None, rom) либо None."""
+    """Объём памяти в ГИГАБАЙТАХ: (ram, rom) либо (None, rom) либо None."""
+    m = RE_MEM_PAIR_TB.search(name)
+    if m:
+        return (int(m.group(1)), int(m.group(2)) * 1024)
     m = RE_MEM_PAIR.search(name)
     if m:
         a, b = int(m.group(1)), int(m.group(2))
@@ -117,6 +126,9 @@ def storage_of(name: str):
         a, b = int(m.group(1)), int(m.group(2))
         if a in RAM_VALUES and b in ROM_VALUES:
             return (a, b)
+    m = RE_MEM_TB.search(name)
+    if m:
+        return (None, int(m.group(1)) * 1024)
     m = RE_MEM_ONE.search(name)
     if m:
         return (None, int(m.group(1)))
@@ -141,10 +153,20 @@ VARIANT_WORDS = {
 # размечена как один товар, и это единственное противоречие метки подсказке.
 
 
+# Плюс ПОСЛЕ БУКВЫ — часть имени модели: «Note 15 Pro+» и «Note 15 Pro» разные
+# телефоны. Плюс между цифрами («8+256») — объём памяти, его сюда пускать нельзя.
+RE_PLUS_SUFFIX = re.compile(r"([a-zA-Zа-яА-ЯёЁ]{2,})\s*\+", re.I)
+
+
 def variant_of(name: str):
     """Множество квалификаторов модели в названии."""
-    return {t for t in (x.lower() for x in RE_TOKEN.findall(name))
-            if t in VARIANT_WORDS}
+    out = {t for t in (x.lower() for x in RE_TOKEN.findall(name))
+           if t in VARIANT_WORDS}
+    for m in RE_PLUS_SUFFIX.finditer(name):
+        w = m.group(1).lower()
+        if w in VARIANT_WORDS:
+            out.add(w + "+")
+    return out
 
 
 def variant_verdict(a: str, b: str) -> str:

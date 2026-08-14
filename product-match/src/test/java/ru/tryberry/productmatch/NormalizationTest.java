@@ -36,6 +36,23 @@ class NormalizationTest {
     }
 
     @Test
+    @DisplayName("терабайты приводятся к гигабайтам: 1 ТБ и 1024 ГБ — одно и то же")
+    void storageTerabytes() {
+        assertEquals("?/1024", item("", "iPhone 15 Pro Max 1 ТБ").storage());
+        assertEquals("?/1024", item("", "iPhone 15 Pro Max 1024 ГБ").storage());
+        assertEquals("?/2048", item("", "iPhone 2TB").storage());
+        assertEquals("16/1024", item("", "Смартфон 16/1 ТБ").storage());
+    }
+
+    @Test
+    @DisplayName("Pro+ отличается от Pro, но 8+256 суффиксом не считается")
+    void plusSuffix() {
+        assertTrue(item("", "Redmi Note 15 Pro+ 5G 12/512").variantTokens().contains("pro+"));
+        assertTrue(!item("", "Смартфон A17 8+256 ГБ").variantTokens().contains("+"));
+        assertEquals(item("", "Смартфон A17 8+256 ГБ").variantTokens(), java.util.Set.of());
+    }
+
+    @Test
     @DisplayName("объём: одиночное число — это ПЗУ, оперативка неизвестна")
     void storageSingleNumber() {
         assertEquals("?/256", item("", "iPhone 14 Pro Max 256 ГБ").storage());

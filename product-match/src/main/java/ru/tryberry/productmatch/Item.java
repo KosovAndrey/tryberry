@@ -59,6 +59,17 @@ public record Item(String marketplace, String article, String brand,
     private static final Set<Integer> ROM_VALUES = Set.of(16, 32, 64, 128, 256, 512, 1024);
 
     /**
+     * Терабайты. «iPhone 1 ТБ» и «iPhone 1024 ГБ» — ОДИН товар, поэтому приводим
+     * к гигабайтам: без этого он разъезжается на два.
+     */
+    private static final Pattern MEM_TB = Pattern.compile(
+            "\\b(\\d{1,2})\\s*(?:тб|tb)\\b",
+            Pattern.CASE_INSENSITIVE | Pattern.UNICODE_CHARACTER_CLASS);
+    private static final Pattern MEM_PAIR_TB = Pattern.compile(
+            "\\b(\\d{1,3})\\s*(?:гб|gb)?\\s*[/+]\\s*(\\d{1,2})\\s*(?:тб|tb)\\b",
+            Pattern.CASE_INSENSITIVE | Pattern.UNICODE_CHARACTER_CLASS);
+
+    /**
      * Модельные коды из названия. Индексируются ОТДЕЛЬНЫМ полем с точным
      * совпадением: совпадение `SM-A546E` должно весить кратно больше слова
      * «чёрный», а внутри общего текстового поля этого не выразить.
@@ -97,12 +108,27 @@ public record Item(String marketplace, String article, String brand,
     // означает отличия — ведёт себя как «Ростест», а не как «Pro». Выяснилось
     // на живой разметке (см. scripts/make-pairs.py).
 
+    /**
+     * Плюс ПОСЛЕ БУКВЫ — часть имени модели: «Note 15 Pro+» и «Note 15 Pro» —
+     * разные телефоны. Плюс между цифрами («8+256») — объём памяти, его сюда
+     * пускать нельзя.
+     */
+    private static final Pattern PLUS_SUFFIX = Pattern.compile(
+            "([\\p{L}]{2,})\\s*\\+", Pattern.UNICODE_CHARACTER_CLASS);
+
     /** Квалификаторы модели, найденные в названии. */
     public Set<String> variantTokens() {
         Set<String> out = new LinkedHashSet<>();
         for (String t : name.toLowerCase(java.util.Locale.ROOT).split("[^\\p{L}\\p{N}]+")) {
             if (VARIANT_WORDS.contains(t)) {
                 out.add(t);
+            }
+        }
+        Matcher pm = PLUS_SUFFIX.matcher(name);
+        while (pm.find()) {
+            String w = pm.group(1).toLowerCase(java.util.Locale.ROOT);
+            if (VARIANT_WORDS.contains(w)) {
+                out.add(w + "+");
             }
         }
         return out;
@@ -114,6 +140,10 @@ public record Item(String marketplace, String article, String brand,
      * скору (§9, тип ошибки C). Пусто — квалификатор не распознан.
      */
     public String storage() {
+        Matcher tb = MEM_PAIR_TB.matcher(name);
+        if (tb.find()) {
+            return tb.group(1) + "/" + (Integer.parseInt(tb.group(2)) * 1024);
+        }
         Matcher m = MEM_PAIR.matcher(name);
         if (m.find()) {
             int a = Integer.parseInt(m.group(1));
@@ -127,6 +157,10 @@ public record Item(String marketplace, String article, String brand,
             if (RAM_VALUES.contains(a) && ROM_VALUES.contains(b)) {
                 return a + "/" + b;
             }
+        }
+        Matcher tbOne = MEM_TB.matcher(name);
+        if (tbOne.find()) {
+            return "?/" + (Integer.parseInt(tbOne.group(1)) * 1024);
         }
         Matcher one = MEM_ONE.matcher(name);
         if (one.find()) {
