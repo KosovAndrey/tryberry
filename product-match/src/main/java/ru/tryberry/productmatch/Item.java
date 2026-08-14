@@ -92,7 +92,10 @@ public record Item(String marketplace, String article, String brand,
     private static final Set<String> VARIANT_WORDS = Set.of(
             "pro", "про", "max", "макс", "plus", "плюс", "ultra", "ультра",
             "lite", "лайт", "mini", "мини", "note", "нот", "neo", "se", "fe",
-            "prime", "power", "turbo", "active", "young", "5g");
+            "prime", "power", "turbo", "active", "young");
+    // «5G» СПЕЦИАЛЬНО не входит: площадки его часто опускают, отсутствие не
+    // означает отличия — ведёт себя как «Ростест», а не как «Pro». Выяснилось
+    // на живой разметке (см. scripts/make-pairs.py).
 
     /** Квалификаторы модели, найденные в названии. */
     public Set<String> variantTokens() {
