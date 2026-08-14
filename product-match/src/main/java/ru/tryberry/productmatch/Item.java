@@ -52,9 +52,17 @@ public record Item(String marketplace, String article, String brand,
      * названиях полно чисел), поэтому требуем ПРАВДОПОДОБНЫЕ значения: столько
      * ОЗУ и ПЗУ реально бывает, а «15 8» из «Note 15 8» — нет.
      */
-    private static final Pattern MEM_SPACE = Pattern.compile(
-            "\\b(\\d{1,2})\\s+(\\d{2,4})\\s*(?:гб|gb)?\\b",
-            Pattern.CASE_INSENSITIVE | Pattern.UNICODE_CHARACTER_CLASS);
+    // Пробельный формат разбираем ПЕРЕБОРОМ соседних чисел, а не одним шаблоном:
+    // совпадения регекспа не перекрываются, и в «Note 15 8 256» пара «15 8»
+    // съела бы «8 256».
+    private static final Pattern NUMBERS = Pattern.compile("\\d{1,4}");
+
+    // Явные RAM/ROM: «12G RAM 512G ROM» (в корпусе 6 раз). Порядок альтернатив
+    // важен: жадное «(\\d+)\\s*rom» в «RAM 16 ROM 256» поймало бы «16 ROM».
+    private static final Pattern RAM_PAT = Pattern.compile(
+            "ram\\s*(\\d{1,3})|(\\d{1,3})\\s*g?b?\\s*ram", Pattern.CASE_INSENSITIVE);
+    private static final Pattern ROM_PAT = Pattern.compile(
+            "rom\\s*(\\d{2,4})|(\\d{2,4})\\s*g?b?\\s*rom", Pattern.CASE_INSENSITIVE);
     private static final Set<Integer> RAM_VALUES = Set.of(2, 3, 4, 6, 8, 12, 16, 18, 24);
     private static final Set<Integer> ROM_VALUES = Set.of(16, 32, 64, 128, 256, 512, 1024);
 
@@ -150,12 +158,30 @@ public record Item(String marketplace, String article, String brand,
             int b = Integer.parseInt(m.group(2));
             return Math.min(a, b) + "/" + Math.max(a, b);
         }
-        Matcher sp = MEM_SPACE.matcher(name);
-        while (sp.find()) {
-            int a = Integer.parseInt(sp.group(1));
-            int b = Integer.parseInt(sp.group(2));
+        java.util.List<Integer> nums = new java.util.ArrayList<>();
+        Matcher nm = NUMBERS.matcher(name);
+        while (nm.find()) {
+            nums.add(Integer.parseInt(nm.group()));
+        }
+        for (int i = 0; i + 1 < nums.size(); i++) {
+            int a = nums.get(i);
+            int b = nums.get(i + 1);
+            // Порядок бывает любой («256 8 ГБ» у части карточек WB), поэтому
+            // решает ПРАВДОПОДОБИЕ значений, а не позиция.
             if (RAM_VALUES.contains(a) && ROM_VALUES.contains(b)) {
                 return a + "/" + b;
+            }
+            if (RAM_VALUES.contains(b) && ROM_VALUES.contains(a)) {
+                return b + "/" + a;
+            }
+        }
+        Matcher ram = RAM_PAT.matcher(name);
+        Matcher rom = ROM_PAT.matcher(name);
+        if (ram.find() && rom.find()) {
+            int rv = Integer.parseInt(ram.group(1) != null ? ram.group(1) : ram.group(2));
+            int mv = Integer.parseInt(rom.group(1) != null ? rom.group(1) : rom.group(2));
+            if (RAM_VALUES.contains(rv) && ROM_VALUES.contains(mv)) {
+                return rv + "/" + mv;
             }
         }
         Matcher tbOne = MEM_TB.matcher(name);

@@ -36,6 +36,19 @@ class NormalizationTest {
     }
 
     @Test
+    @DisplayName("написания из живого корпуса: RAM/ROM, обратный порядок, лишние числа")
+    void storageFromRealCorpus() {
+        assertEquals("12/512", item("", "Смартфон POCO M8 Pro, 12G RAM 512G ROM").storage());
+        assertEquals("16/256", item("", "Смартфон RAM 16 ROM 256").storage());
+        // ПЗУ первым — встречается на карточках WB.
+        assertEquals("8/256", item("", "Xiaomi Redmi 13C 256 8 ГБ белый").storage());
+        // Лишнее число перед объёмом не должно съедать пару.
+        assertEquals("8/256", item("", "Смартфон Note 15 8 256").storage());
+        // Диагональ экрана и ёмкость батареи объёмом памяти не являются.
+        assertEquals("", item("", "Смартфон 6.83 дюйма 5000mAh").storage());
+    }
+
+    @Test
     @DisplayName("терабайты приводятся к гигабайтам: 1 ТБ и 1024 ГБ — одно и то же")
     void storageTerabytes() {
         assertEquals("?/1024", item("", "iPhone 15 Pro Max 1 ТБ").storage());

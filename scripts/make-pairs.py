@@ -69,10 +69,18 @@ RE_MEM_PAIR = re.compile(
 # против 8/256. Голый пробел даёт много ложных срабатываний (в названиях полно
 # чисел), поэтому требуем ПРАВДОПОДОБНЫЕ значения: столько-то ОЗУ и ПЗУ реально
 # бывает, а «15 8» из «Note 15 8» — нет.
-RE_MEM_SPACE = re.compile(r"\b(\d{1,2})\s+(\d{2,4})\s*(?:гб|gb)?\b", re.I)
+# Пробельный формат разбираем ПЕРЕБОРОМ соседних чисел, а не одним шаблоном:
+# совпадения регекспа не перекрываются, и в «Note 15 8 256» пара «15 8» съела бы
+# «8 256». Числа берём все подряд и проверяем каждую соседнюю пару.
+RE_NUMBERS = re.compile(r"\d{1,4}")
 # Терабайты. «iPhone 1 ТБ» и «iPhone 1024 ГБ» — ОДИН товар, поэтому приводим к
 # гигабайтам. Без этого один и тот же телефон разъезжается на два.
 RE_MEM_TB = re.compile(r"\b(\d{1,2})\s*(?:тб|tb)\b", re.I)
+# Явные RAM/ROM: «12G RAM 512G ROM». В корпусе 6 раз — редко, но однозначно.
+# Порядок альтернатив важен: в «RAM 16 ROM 256» жадный «(\d+)\s*rom» поймал бы
+# «16 ROM» и объявил ПЗУ равным 16. Сначала пробуем форму «ключ число».
+RE_RAM = re.compile(r"ram\s*(\d{1,3})|(\d{1,3})\s*g?b?\s*ram", re.I)
+RE_ROM = re.compile(r"rom\s*(\d{2,4})|(\d{2,4})\s*g?b?\s*rom", re.I)
 # Пара, где ПЗУ указано в терабайтах: «12/1 ТБ», «16 ГБ/1 ТБ».
 RE_MEM_PAIR_TB = re.compile(
     r"\b(\d{1,3})\s*(?:гб|gb)?\s*[/+]\s*(\d{1,2})\s*(?:тб|tb)\b", re.I)
@@ -122,10 +130,20 @@ def storage_of(name: str):
     if m:
         a, b = int(m.group(1)), int(m.group(2))
         return (min(a, b), max(a, b))
-    for m in RE_MEM_SPACE.finditer(name):
-        a, b = int(m.group(1)), int(m.group(2))
+    nums = [int(x) for x in RE_NUMBERS.findall(name)]
+    for a, b in zip(nums, nums[1:]):
+        # Порядок бывает любой («256 8 ГБ» у части карточек WB), поэтому решает
+        # ПРАВДОПОДОБИЕ значений, а не позиция.
         if a in RAM_VALUES and b in ROM_VALUES:
             return (a, b)
+        if b in RAM_VALUES and a in ROM_VALUES:
+            return (b, a)
+    ram, rom = RE_RAM.search(name), RE_ROM.search(name)
+    if ram and rom:
+        rv = int(ram.group(1) or ram.group(2))
+        mv = int(rom.group(1) or rom.group(2))
+        if rv in RAM_VALUES and mv in ROM_VALUES:
+            return (rv, mv)
     m = RE_MEM_TB.search(name)
     if m:
         return (None, int(m.group(1)) * 1024)
