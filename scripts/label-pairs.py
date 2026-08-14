@@ -31,7 +31,14 @@ def read_key() -> str:
     """
     if not sys.stdin.isatty():
         line = sys.stdin.readline()
-        return line.strip()[:1] if line else "q"
+        # Пустая строка = EOF. Раньше здесь возвращалось "q", и размётчик молча
+        # выходил, будто пользователь так решил, — вместо того чтобы сказать, что
+        # ввода нет. Тихий выход вместо ошибки хуже ошибки.
+        if not line:
+            print("\n[ввод закончился] Нечего читать: запусти в интерактивном "
+                  "терминале.", file=sys.stderr)
+            sys.exit(2)
+        return line.strip()[:1]
     fd = sys.stdin.fileno()
     old = termios.tcgetattr(fd)
     try:
@@ -46,6 +53,19 @@ def main():
         print(__doc__)
         sys.exit(2)
     path = sys.argv[1]
+
+    # Проверяем ДО чтения файла: если терминала нет, разметка невозможна, и
+    # сказать об этом надо прямо, а не выйти как ни в чём не бывало.
+    if not sys.stdin.isatty() and "--stdin" not in sys.argv:
+        print("Разметка требует интерактивного терминала: клавиши читаются без "
+              "Enter.", file=sys.stderr)
+        print("Запусти команду ОТДЕЛЬНО, не вставляя её вместе с другими "
+              "строками —", file=sys.stderr)
+        print("остаток вставки уходит на stdin и терминал перестаёт быть "
+              "интерактивным.", file=sys.stderr)
+        print("Для автоматизации есть флаг --stdin (ответы построчно).",
+              file=sys.stderr)
+        sys.exit(2)
 
     with open(path, encoding="utf-8") as f:
         header = f.readline().rstrip("\n")
