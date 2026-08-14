@@ -3,7 +3,7 @@
 Статус: **замер проведён 14.08.2026, условие отказа сработало — сервис не пишем.** См. §13.
 Связано: `internal/domain/honest_price.go`, `internal/telegram/notifier.go`,
 `cmd/scheduler/main.go`, `migrations/003_search.sql`,
-`migrations/030_product_marketplace_and_dupes.sql`, `migrations/031_yandex_market_dupes.sql`.
+`scripts/sql/030_product_marketplace_and_dupes.sql`, `scripts/sql/031_yandex_market_dupes.sql`.
 
 ---
 
