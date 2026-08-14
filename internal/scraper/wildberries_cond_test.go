@@ -6,6 +6,7 @@ import (
 	"io"
 	"net/http"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 )
@@ -15,13 +16,49 @@ import (
 // (CondEntry), card.json не запрашивается. HTTP подменяется RoundTripper-ом —
 // скрейпер ходит на реальные URL basket-NN.wbbasket.ru, транспорт матчит по пути.
 
-type fakeCondCache struct{ m map[int64]CondEntry }
+// ВАЖНО про потокобезопасность дублей ниже: tryBasket тянет price-history.json
+// и card.json ДВУМЯ ГОРУТИНАМИ параллельно (wildberries.go), поэтому и фейковый
+// транспорт, и фейковый кэш вызываются конкурентно. Без мьютексов `go test -race`
+// падал на этих тестах (карта counts писалась из обеих горутин) — то есть
+// `make test` был красным, хотя прод-код в порядке. Мьютекс только в дублях.
+type fakeCondCache struct {
+	mu sync.Mutex
+	m  map[int64]CondEntry
+}
 
 func (f *fakeCondCache) GetCond(_ context.Context, id int64) (CondEntry, bool) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
 	e, ok := f.m[id]
 	return e, ok
 }
-func (f *fakeCondCache) PutCond(_ context.Context, id int64, e CondEntry) { f.m[id] = e }
+
+func (f *fakeCondCache) PutCond(_ context.Context, id int64, e CondEntry) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.m[id] = e
+}
+
+// condCounts — счётчик запросов по файлам, безопасный для конкурентного
+// транспорта.
+type condCounts struct {
+	mu sync.Mutex
+	m  map[string]int
+}
+
+func newCondCounts() *condCounts { return &condCounts{m: map[string]int{}} }
+
+func (c *condCounts) inc(k string) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.m[k]++
+}
+
+func (c *condCounts) get(k string) int {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.m[k]
+}
 
 // roundTripFunc уже объявлен в aliexpress_search_browser_test.go — переиспользуем.
 
@@ -38,25 +75,25 @@ func resp(status int, body string, hdr http.Header) *http.Response {
 
 // condTestScraper — скрейпер с фейковым транспортом и in-memory cond-кэшем.
 // Счётчики запросов по файлам возвращаются для ассертов.
-func condTestScraper(t *testing.T, priceHandler func(*http.Request) *http.Response) (*WildberriesScraper, *fakeCondCache, *map[string]int) {
+func condTestScraper(t *testing.T, priceHandler func(*http.Request) *http.Response) (*WildberriesScraper, *fakeCondCache, *condCounts) {
 	t.Helper()
-	counts := map[string]int{}
+	counts := newCondCounts()
 	cache := &fakeCondCache{m: map[int64]CondEntry{}}
 	s := NewWildberriesScraper(1000)
 	s.http = &http.Client{Transport: roundTripFunc(func(r *http.Request) (*http.Response, error) {
 		switch {
 		case strings.HasSuffix(r.URL.Path, "/price-history.json"):
-			counts["price"]++
+			counts.inc("price")
 			return priceHandler(r), nil
 		case strings.HasSuffix(r.URL.Path, "/card.json"):
-			counts["card"]++
+			counts.inc("card")
 			return resp(200, `{"imt_name":"Тестовый товар"}`, nil), nil
 		default:
 			return resp(404, "", nil), nil
 		}
 	})}
 	s.SetCondCache(cache)
-	return s, cache, &counts
+	return s, cache, counts
 }
 
 const condTestURL = "https://www.wildberries.ru/catalog/221501024/detail.aspx"
@@ -108,11 +145,11 @@ func TestWBCondGetNotModified(t *testing.T) {
 	if full != 1 {
 		t.Fatalf("полных ответов price-history: %d, want 1", full)
 	}
-	if (*counts)["card"] != 1 {
-		t.Fatalf("card.json запрошен %d раз, want 1 (на 304 не запрашивается)", (*counts)["card"])
+	if counts.get("card") != 1 {
+		t.Fatalf("card.json запрошен %d раз, want 1 (на 304 не запрашивается)", counts.get("card"))
 	}
-	if (*counts)["price"] != 2 {
-		t.Fatalf("price-history запрошен %d раз, want 2", (*counts)["price"])
+	if counts.get("price") != 2 {
+		t.Fatalf("price-history запрошен %d раз, want 2", counts.get("price"))
 	}
 }
 
@@ -146,8 +183,8 @@ func TestWBCondGetModified(t *testing.T) {
 	if e := cache.m[221501024]; e.ETag != `"v2"` || e.Price != 990 {
 		t.Fatalf("снимок не обновился: %+v", e)
 	}
-	if (*counts)["card"] != 2 {
-		t.Fatalf("card.json запрошен %d раз, want 2 (на 200 дочитывается)", (*counts)["card"])
+	if counts.get("card") != 2 {
+		t.Fatalf("card.json запрошен %d раз, want 2 (на 200 дочитывается)", counts.get("card"))
 	}
 
 	// Третий скрейп: новый валидатор совпал → снова 304.
@@ -155,8 +192,8 @@ func TestWBCondGetModified(t *testing.T) {
 	if err != nil {
 		t.Fatalf("третий скрейп: %v", err)
 	}
-	if r3.Price != 990 || (*counts)["card"] != 2 {
-		t.Fatalf("после обновления снимка: price=%v card=%d", r3.Price, (*counts)["card"])
+	if r3.Price != 990 || counts.get("card") != 2 {
+		t.Fatalf("после обновления снимка: price=%v card=%d", r3.Price, counts.get("card"))
 	}
 }
 
@@ -174,7 +211,7 @@ func TestWBCondGetNoValidators(t *testing.T) {
 	if len(cache.m) != 0 {
 		t.Fatalf("снимок без валидаторов не должен писаться: %+v", cache.m)
 	}
-	if (*counts)["card"] != 2 {
-		t.Fatalf("без снимка каждый скрейп полный: card=%d, want 2", (*counts)["card"])
+	if counts.get("card") != 2 {
+		t.Fatalf("без снимка каждый скрейп полный: card=%d, want 2", counts.get("card"))
 	}
 }
