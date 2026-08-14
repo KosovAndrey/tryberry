@@ -170,9 +170,15 @@ func EffectivePlanFor(name string, expiresAt *time.Time, now time.Time) Plan {
 }
 
 // IsResellerPlan — план «для перекупов» (минутная быстрая дорожка).
-// По таким подпискам Ozon НЕ скрейпится: антибот FAB не любит частоту, а Ozon и
-// так идёт замедленным тарифным кадансом (×OZON_INTERVAL_MULTIPLIER от WB).
 // Распознаём по префиксу имени (reseller_start/reseller_pro/legacy reseller).
+//
+// NB: здесь стояло «по таким подпискам Ozon НЕ скрейпится, он идёт замедленным
+// кадансом ×OZON_INTERVAL_MULTIPLIER». Это описание эпохи mobile-API за одним
+// аккаунтом/IP. После перехода на браузерный сайдкар ozon-miner троттл в проде
+// ВЫКЛЮЧЕН (.env: 0/1), и Ozon-ТОВАРЫ идут полным тарифным кадансом наравне с
+// WB/YM, включая reseller = 1 мин. Собственный пол остался только у Ozon-ПОИСКА
+// (OZON_SEARCH_MIN_INTERVAL_MINUTES, деф. 30 мин) — это отдельная ручка.
+// Канон: docs/SCRAPE-CADENCE.md.
 func IsResellerPlan(name string) bool {
 	return strings.HasPrefix(name, "reseller")
 }

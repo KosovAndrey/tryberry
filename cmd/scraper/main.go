@@ -51,9 +51,15 @@ func run(log *slog.Logger) error {
 	kafkaGroupID := config.MustEnv("KAFKA_GROUP_ID")
 	otlpEndpoint := getEnv("OTLP_ENDPOINT", "jaeger:4317")
 	rpsStrWB := getEnv("SCRAPER_RATE_LIMIT_RPS_WB", "5")
-	// Я.Маркет теперь direct (без прокси, см. docs/YANDEX-WARMED-COOKIES.md) —
+	// Я.Маркет ходит direct (без прокси, см. docs/YANDEX-WARMED-COOKIES.md) —
 	// probe держал сотни запросов без капчи, прежний потолок 2 был из-за одного
-	// proxy-IP. Поднимаем до 8; сторож — метрика yandex_price_source_total{proxy}.
+	// proxy-IP.
+	//
+	// ВНИМАНИЕ: этот дефолт (8) в проде НЕ ДЕЙСТВУЕТ — compose всегда передаёт
+	// переменную со своим дефолтом 2 (docker-compose.yml, сервисы scraper и
+	// bot-worker). Фактический потолок = 2 rps НА РЕПЛИКУ, при 3 репликах 6 rps.
+	// Поднимать надо в compose/.env, а не здесь; сторож при подъёме — метрики
+	// yandex_price_source_total и scrape_requests_total{status="blocked"}.
 	rpsStrYandex := getEnv("SCRAPER_RATE_LIMIT_RPS_YANDEX", "8")
 	rpsStrOzon := getEnv("SCRAPER_RATE_LIMIT_RPS_OZON", "1")
 	rpsStrAli := getEnv("SCRAPER_RATE_LIMIT_RPS_ALI", "1")
