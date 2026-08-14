@@ -319,6 +319,24 @@ groups:
           summary: "Партиция {{ $labels.topic }} застряла на {{ $labels.instance }}"
           description: "Вотермарк коммита не двигается {{ $value }}с при работающем консьюмере — заморожена партиция (зависший обработчик или разъехавшийся трекер). Рестарт реплики {{ $labels.instance }} расклинивает; смотри kafka-consumer-groups --describe --group price-tracker."
 
+      # Сообщение выброшено после исчерпания ретраев обработки (Consumer.Run,
+      # handlerRetries=3). Это ПОТЕРЯ: для price-events — непосчитанное решение
+      # по подписке, для payments — неприменённая оплата до следующего вебхука.
+      # В покое метрика обязана быть нулевой, поэтому порог «больше нуля», а не
+      # доля: любое срабатывание — повод посмотреть, что именно падает.
+      # Три попытки с паузой 500мс переживают обычный сбой БД, значит устойчивые
+      # drop'ы означают что-то системное (пул соединений исчерпан, миграция под
+      # нагрузкой, битый payload).
+      # for: 5m — чтобы одиночный drop на рестарте Postgres не будил зря.
+      - alert: KafkaMessagesDropped
+        expr: increase(tryberrybot_kafka_messages_consumed_total{status="dropped"}[15m]) > 0
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Потеряны сообщения из {{ $labels.topic }}"
+          description: "За 15 мин выброшено {{ $value }} сообщений после трёх неудачных попыток обработки. Причина в логах: docker compose logs --since 30m | grep DROPPING. Восстановление обычно само (следующий плановый скрейп даст новое событие), но для topic=payments это не так — там проверить payments со status='pending'."
+
   - name: tryberrybot_business
     interval: 1m
     rules:

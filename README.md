@@ -72,10 +72,16 @@ make migrate              # накатить схему (goose); см. migration
 Проверки:
 
 ```bash
-make test                 # go test -race ./...
-make lint                 # golangci-lint (11 линтеров)
-cd price-insight && mvn test
+make hooks-install        # один раз: pre-push будет гонять make check
+make check                # gofmt + build + vet + go test -race (~10 с)
+make lint                 # golangci-lint (11 линтеров), в гейт не входит
 ```
+
+CI нет и не будет: GitLab запускает раннеры только для верифицированных
+аккаунтов, из РФ верификация не проходит. Поэтому гейт локальный — `make check`
+через `pre-push` хук (`scripts/git-hooks/pre-push`, обход `git push
+--no-verify`). Тесты `price-insight` гоняются при сборке его образа: JVM есть
+только там.
 
 ## Прод
 

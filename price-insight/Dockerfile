@@ -8,9 +8,21 @@ COPY pom.xml .
 RUN mvn -B -q dependency:go-offline
 
 COPY src ./src
-# Тесты гоняет CI, не образ: сборка образа не должна зависеть от Docker-in-Docker
-# ради Testcontainers.
-RUN mvn -B -q -DskipTests package
+# Тесты гоняются ЗДЕСЬ, при сборке образа. Раньше стояло -DskipTests с
+# комментарием «тесты гоняет CI» — CI в проекте не было и быть не может
+# (GitLab требует верифицированный аккаунт), то есть Java-тесты не запускались
+# нигде и никогда. Машина разработчика их тоже не прогонит: JVM там нет,
+# единственное место с Docker и Maven — сборка этого образа.
+#
+# Testcontainers сборку не ломают: IntegrationTest помечен
+# @Testcontainers(disabledWithoutDocker = true) и без демона внутри билд-слоя
+# просто пропускается. Юнит-тесты домена и прогон топологии на
+# TopologyTestDriver брокера не требуют и идут полностью.
+#
+# Цена: красный тест теперь ломает `docker compose build price-insight`. Это и
+# есть смысл — деплою Go-сервисов (make deploy) он не мешает, price-insight там
+# не собирается.
+RUN mvn -B package
 
 # ── Runtime ──────────────────────────────────────────────────────────────────
 FROM eclipse-temurin:21-jre-alpine

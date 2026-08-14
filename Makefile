@@ -42,6 +42,31 @@ lint:
 tidy:
 	go mod tidy
 
+# ── Гейт перед пушем ────────────────────────────────────────────────────────
+# То, что в нормальном проекте делал бы CI. GitLab CI здесь недоступен (нужен
+# верифицированный аккаунт с картой), поэтому гейт локальный: одна команда и
+# git-хук, который её дёргает. Ставится один раз через `make hooks-install`.
+#
+# gofmt отдельным шагом, а не через линтер: линтер ставится из сети и на проде/
+# в дороге может быть недоступен, а gofmt идёт в комплекте с Go.
+check:
+	@echo "→ gofmt"
+	@bad=$$(gofmt -l ./cmd ./internal); \
+	 if [ -n "$$bad" ]; then echo "не отформатировано:"; echo "$$bad"; echo "почини: gofmt -w <файлы>"; exit 1; fi
+	@echo "→ go build"
+	@go build ./...
+	@echo "→ go vet"
+	@go vet ./...
+	@echo "→ go test -race"
+	@go test -race -count=1 ./...
+	@echo "✅ check пройден"
+
+# Установить pre-push хук (симлинк на скрипт в репозитории — правки видны в git).
+hooks-install:
+	@ln -sf ../../scripts/git-hooks/pre-push .git/hooks/pre-push
+	@echo "✅ pre-push установлен: перед каждым push пойдёт make check"
+	@echo "   разовый обход, если очень надо: git push --no-verify"
+
 # Tests
 test:
 	go test -race -count=1 ./...
