@@ -9,8 +9,8 @@ import (
 
 	"gitlab.com/KosovAndrey/tryberrybot/internal/domain"
 	"gitlab.com/KosovAndrey/tryberrybot/internal/kafka"
-	"gitlab.com/KosovAndrey/tryberrybot/internal/payment"
 	"gitlab.com/KosovAndrey/tryberrybot/internal/max"
+	"gitlab.com/KosovAndrey/tryberrybot/internal/payment"
 	"gitlab.com/KosovAndrey/tryberrybot/internal/payment/robokassa"
 	"gitlab.com/KosovAndrey/tryberrybot/internal/payment/yookassa"
 	"gitlab.com/KosovAndrey/tryberrybot/internal/repository/postgres"

@@ -23,7 +23,7 @@ func TestHasTextFilter(t *testing.T) {
 func TestSearchHasSiteFilter(t *testing.T) {
 	cases := map[string]bool{
 		// Голый поиск (только запрос + трекинг/регион/авто-категория) — фильтров нет.
-		"https://market.yandex.ru/search?text=наушники":                false,
+		"https://market.yandex.ru/search?text=наушники":               false,
 		"https://market.yandex.ru/search?text=наушники&lr=213&clid=1": false,
 		// hid/nid у YM — авто-категория поисковой выдачи, не пользовательский фильтр.
 		"https://market.yandex.ru/search?text=хлебцы&hid=91430&hid=91405&rs=abc&rt=9": false,
@@ -35,18 +35,18 @@ func TestSearchHasSiteFilter(t *testing.T) {
 		// Ali: голый поиск с трекингом (searchInfo/g/pvid/spellChecked) — фильтра нет.
 		"https://aliexpress.ru/wholesale?SearchText=шорты&g=y&page=1&searchInfo=ABC&spellChecked=true": false,
 		// Заданы фильтры маркетплейса — true.
-		"https://market.yandex.ru/search?text=наушники&hid=90555&glfilter=7893318%3A153043": true,
-		"https://market.yandex.ru/search?text=хлебцы&hid=91430&glfilter=7893318%3A14441115": true,
-		"https://www.wildberries.ru/catalog/0/search.aspx?search=наушники&priceU=1000;5000":  true,
+		"https://market.yandex.ru/search?text=наушники&hid=90555&glfilter=7893318%3A153043":                     true,
+		"https://market.yandex.ru/search?text=хлебцы&hid=91430&glfilter=7893318%3A14441115":                     true,
+		"https://www.wildberries.ru/catalog/0/search.aspx?search=наушники&priceU=1000;5000":                     true,
 		"https://www.wildberries.ru/catalog/0/search.aspx?search=футболка&f204557=15000704&page=1&sort=popular": true,
-		"https://www.wildberries.ru/catalog/0/search.aspx?search=наушники&fbrand=123":         true,
-		"https://www.ozon.ru/search/?text=наушники&brand=apple":                               true,
+		"https://www.wildberries.ru/catalog/0/search.aspx?search=наушники&fbrand=123":                           true,
+		"https://www.ozon.ru/search/?text=наушники&brand=apple":                                                 true,
 		// Ozon: выбран бренд (второй slug-сегмент под /category/) — фильтр есть.
 		"https://www.ozon.ru/category/aksessuary-7697/calvin-klein-72378013/?text=кепка": true,
 		// AliExpress: фасеты в pvid (размер/цвет) и бренд в brandValueIds — фильтр есть.
-		"https://aliexpress.ru/wholesale?SearchText=шорты&pvid=13428-1937&g=y&searchInfo=ABC":                  true,
-		"https://aliexpress.ru/wholesale?SearchText=шорты&pvid=13428-1937%3B13428-8324&g=y&spellChecked=true":  true,
-		"https://aliexpress.ru/wholesale?SearchText=шорты&brandValueIds=1609-142707&pvid=13428-1938&g=y":       true,
+		"https://aliexpress.ru/wholesale?SearchText=шорты&pvid=13428-1937&g=y&searchInfo=ABC":                 true,
+		"https://aliexpress.ru/wholesale?SearchText=шорты&pvid=13428-1937%3B13428-8324&g=y&spellChecked=true": true,
+		"https://aliexpress.ru/wholesale?SearchText=шорты&brandValueIds=1609-142707&pvid=13428-1938&g=y":      true,
 	}
 	for in, want := range cases {
 		if got := SearchHasSiteFilter(in); got != want {

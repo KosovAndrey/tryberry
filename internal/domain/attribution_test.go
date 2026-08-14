@@ -15,15 +15,15 @@ func TestParseStartAttribution(t *testing.T) {
 		{"v_promo-jan_ig", true, "promo-jan", "ig"},
 		{"", false, "", ""},
 		{"v_", false, "", ""},
-		{"v_f1", false, "", ""},          // нет площадки
-		{"v_f1_", false, "", ""},         // пустая площадка
-		{"v__yt", false, "", ""},         // пустой формат
-		{"ref_123", false, "", ""},       // чужой префикс
-		{"promo_XXX", false, "", ""},     // чужой префикс
-		{"link_abc", false, "", ""},      // чужой префикс
-		{"v_F1_yt", false, "", ""},       // верхний регистр
-		{"v_f1_у-тюб", false, "", ""},    // кириллица
-		{"v_f1_yt!", false, "", ""},      // спецсимвол
+		{"v_f1", false, "", ""},       // нет площадки
+		{"v_f1_", false, "", ""},      // пустая площадка
+		{"v__yt", false, "", ""},      // пустой формат
+		{"ref_123", false, "", ""},    // чужой префикс
+		{"promo_XXX", false, "", ""},  // чужой префикс
+		{"link_abc", false, "", ""},   // чужой префикс
+		{"v_F1_yt", false, "", ""},    // верхний регистр
+		{"v_f1_у-тюб", false, "", ""}, // кириллица
+		{"v_f1_yt!", false, "", ""},   // спецсимвол
 	}
 	for _, tt := range tests {
 		att, ok := ParseStartAttribution(tt.payload)

@@ -8,7 +8,7 @@ import (
 func TestAliexpressMatches(t *testing.T) {
 	s := &AliexpressScraper{}
 	cases := map[string]bool{
-		"https://aliexpress.ru/item/1005005863682926.html":      true,
+		"https://aliexpress.ru/item/1005005863682926.html":       true,
 		"https://aliexpress.ru/item/1005005863682926.html?spm=a": true,
 		"https://www.aliexpress.com/item/1005006086965599.html":  true,
 		"https://www.wildberries.ru/catalog/123/detail.aspx":     false,

@@ -33,6 +33,7 @@ import (
 //   - proxy (через RU-прокси) — только когда сессия cold/протухла: один запрос
 //     через прокси проходит X5SEC, обновляет aer-cookie в общем jar и попутно
 //     отдаёт данные. Дальше снова direct, пока cookie живы.
+//
 // Первый запрос к productData отвечает 302 на cookie-sync (set-directly),
 // tls-client следует редиректам и кладёт cookie в jar — handshake прозрачен.
 type AliexpressScraper struct {

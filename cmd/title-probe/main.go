@@ -11,12 +11,15 @@
 // чинить его дважды.
 //
 // Транспорт у каждой площадки свой, поэтому запускать НА ПРОДЕ, в сети compose:
+//
 //   - Ozon требует сайдкар ozon-miner (антибот FAB);
+//
 //   - WB-поиск требует wbaas-токен из Redis либо браузерный сайдкар;
+//
 //   - Я.Маркет идёт direct без прокси (docs/YANDEX-WARMED-COOKIES.md).
 //
-//	docker run --rm --network tryberrybot_default -v ~/out:/out title-probe:latest \
-//	  -mp ym,ozon -ozon http://ozon-miner:8080 -out /out/items.tsv
+//     docker run --rm --network tryberrybot_default -v ~/out:/out title-probe:latest \
+//     -mp ym,ozon -ozon http://ozon-miner:8080 -out /out/items.tsv
 package main
 
 import (

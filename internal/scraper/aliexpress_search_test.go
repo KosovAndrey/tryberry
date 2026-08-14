@@ -10,10 +10,10 @@ func TestAliexpressMatchesSearch(t *testing.T) {
 	cases := map[string]bool{
 		"https://aliexpress.ru/wholesale?SearchText=футболка&page=1":     true,
 		"https://aliexpress.ru/wholesale?SearchText=футболка&pvid=x&g=y": true,
-		"https://aliexpress.ru/w/wholesale-naushniki.html":              true,
-		"https://aliexpress.ru/wholesale?page=1":                        false, // нет SearchText
-		"https://aliexpress.ru/item/1005005863682926.html":             false, // карточка
-		"https://www.wildberries.ru/catalog/0/search.aspx?search=x":    false,
+		"https://aliexpress.ru/w/wholesale-naushniki.html":               true,
+		"https://aliexpress.ru/wholesale?page=1":                         false, // нет SearchText
+		"https://aliexpress.ru/item/1005005863682926.html":               false, // карточка
+		"https://www.wildberries.ru/catalog/0/search.aspx?search=x":      false,
 	}
 	for u, want := range cases {
 		if got := s.MatchesSearch(u); got != want {

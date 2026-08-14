@@ -26,8 +26,8 @@ func TestIsShortLink(t *testing.T) {
 		{"https://aliexpress.ru/item/123.html", false}, // полный URL
 		{"https://www.wildberries.ru/catalog/123/detail.aspx", false},
 		{"https://market.yandex.ru/product--x/123", false},
-		{"https://market.yandex.ru/cc/7i6LVS", true}, // шэр карточки/витрины YM
-		{"https://ya.cc/m/7i6LVS", true},             // промежуточный хоп /cc/
+		{"https://market.yandex.ru/cc/7i6LVS", true},              // шэр карточки/витрины YM
+		{"https://ya.cc/m/7i6LVS", true},                          // промежуточный хоп /cc/
 		{"https://market.yandex.ru/business--shop/924412", false}, // полный URL витрины
 		{"not a url", false},
 		{"", false},
