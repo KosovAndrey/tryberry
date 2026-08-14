@@ -561,12 +561,12 @@ func (b *Bot) doTrack(ctx context.Context, chatID int64, rawURL string, user *do
 			msg = "🔞 Это товар <b>18+</b>. Ozon прячет его цену за подтверждением возраста — пока не могу отслеживать такие товары."
 		case s.Marketplace() == scraper.MarketplaceOzon &&
 			(errors.Is(err, scraper.ErrNotImplemented) || errors.Is(err, scraper.ErrMarketplaceBlocked)):
-			// Заглушка: Ozon ещё в разработке (антибот/прокси). Не пугаем «ошибкой» —
-			// показываем понятное «скоро будет». Когда Ozon заработает стабильно,
-			// сюда дойдёт обычный успешный путь, и заглушка не сработает.
-			msg = ozonComingSoonMsg
+			// Ozon в проде; сюда попадаем на отказе площадки (FAB) или когда
+			// сайдкар не сконфигурён. Не пугаем «ошибкой» — говорим, что это
+			// временно и что стоит повторить.
+			msg = ozonUnavailableMsg
 		case errors.Is(err, scraper.ErrNotImplemented):
-			msg = fmt.Sprintf("⚠️ Маркетплейс <b>%s</b> пока не поддерживается. Сейчас доступен только Wildberries.", s.Marketplace())
+			msg = fmt.Sprintf("⚠️ Маркетплейс <b>%s</b> пока не поддерживается.\n\n%s", s.Marketplace(), supportedMarketplacesMsg)
 		}
 
 		edit := tgbotapi.NewEditMessageText(chatID, sent.MessageID, msg)

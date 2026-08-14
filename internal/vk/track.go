@@ -81,9 +81,10 @@ func (b *Bot) handleTrack(ctx context.Context, vkID int64, user *domain.User, ra
 			msg = "🔞 Это товар 18+. Ozon прячет его цену за подтверждением возраста — пока не могу отслеживать такие товары."
 		case s.Marketplace() == scraper.MarketplaceOzon &&
 			(errors.Is(err, scraper.ErrNotImplemented) || errors.Is(err, scraper.ErrMarketplaceBlocked)):
-			// Заглушка: Ozon не сконфигурён/заблокирован — понятное «скоро будет».
-			msg = "🔵 Ozon скоро будет — отслеживание этого маркетплейса ещё в разработке.\n\n" +
-				"Пока отслеживаю Wildberries 🟣 — пришли ссылку на товар оттуда."
+			// Ozon в проде; сюда попадаем на отказе площадки (FAB) или когда
+			// сайдкар не сконфигурён. Текст «скоро будет» здесь врал.
+			msg = "🔵 Сейчас не получается забрать цену с Ozon — маркетплейс временно не отдаёт данные.\n\n" +
+				"Попробуй ещё раз через несколько минут: обычно проходит само."
 		}
 		b.send(ctx, vkID, msg, nil)
 		return
