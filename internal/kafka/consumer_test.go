@@ -1,6 +1,8 @@
 package kafka
 
 import (
+	"context"
+	"errors"
 	"sort"
 	"sync"
 	"testing"
@@ -198,5 +200,82 @@ func TestOffsetTracker_IncrementalFlush(t *testing.T) {
 		if seen[i] < seen[i-1] {
 			t.Fatalf("watermarks must be monotonic, got %v", seen)
 		}
+	}
+}
+
+// ── runWithRetry ────────────────────────────────────────────────────────────
+//
+// Регрессия на ложное обещание в старом комментарии («сообщение будет
+// перечитано»). Kafka ничего не перечитывала: курсор ридера уже сдвинут.
+// Единственный шанс пережить секундный сбой БД — переобработать на месте.
+
+func TestRunWithRetry_SucceedsOnSecondAttempt(t *testing.T) {
+	c := &Consumer{}
+	calls := 0
+	err := c.runWithRetry(context.Background(), "t", func(context.Context, Message) error {
+		calls++
+		if calls < 2 {
+			return errors.New("transient db blip")
+		}
+		return nil
+	}, msg(0, 7))
+
+	if err != nil {
+		t.Fatalf("expected success after retry, got %v", err)
+	}
+	if calls != 2 {
+		t.Fatalf("expected 2 attempts, got %d", calls)
+	}
+}
+
+func TestRunWithRetry_GivesUpAfterAllAttempts(t *testing.T) {
+	c := &Consumer{}
+	calls := 0
+	want := errors.New("permanent")
+	err := c.runWithRetry(context.Background(), "t", func(context.Context, Message) error {
+		calls++
+		return want
+	}, msg(0, 7))
+
+	if !errors.Is(err, want) {
+		t.Fatalf("expected last error returned, got %v", err)
+	}
+	if calls != handlerRetries {
+		t.Fatalf("expected %d attempts, got %d", handlerRetries, calls)
+	}
+}
+
+// На остановке сервиса ретраить незачем: оффсет не закоммичен, сообщение
+// достанется следующему запуску. Без этой проверки shutdown растягивался бы
+// на handlerRetries × backoff на каждое падающее сообщение.
+func TestRunWithRetry_StopsOnCanceledContext(t *testing.T) {
+	c := &Consumer{}
+	ctx, cancel := context.WithCancel(context.Background())
+	calls := 0
+	err := c.runWithRetry(ctx, "t", func(context.Context, Message) error {
+		calls++
+		cancel()
+		return errors.New("boom")
+	}, msg(0, 7))
+
+	if err == nil {
+		t.Fatal("expected error")
+	}
+	if calls != 1 {
+		t.Fatalf("expected to stop after first attempt on canceled ctx, got %d", calls)
+	}
+}
+
+// Первая же успешная попытка не должна платить за backoff.
+func TestRunWithRetry_NoSleepOnFirstSuccess(t *testing.T) {
+	c := &Consumer{}
+	start := time.Now()
+	if err := c.runWithRetry(context.Background(), "t", func(context.Context, Message) error {
+		return nil
+	}, msg(0, 7)); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if elapsed := time.Since(start); elapsed > handlerRetryBackoff {
+		t.Fatalf("happy path should not sleep, took %s", elapsed)
 	}
 }

@@ -21,7 +21,22 @@ type Message struct {
 }
 
 // HandlerFunc — функция обработки одного сообщения.
-// Если вернула ошибку — offset не коммитится, сообщение будет перечитано.
+//
+// Ошибка означает «обработать не удалось». Что происходит дальше — зависит от
+// режима консьюмера, и это НЕ «сообщение просто вернётся в очередь»:
+//
+//   - Run: сообщение переобрабатывается на месте (handlerRetries попыток с
+//     паузой), и только если все провалились — оффсет коммитится и сообщение
+//     ПРОПУСКАЕТСЯ. Kafka его не вернёт: FetchMessage уже сдвинул курсор
+//     ридера, и коммит следующего успешного сообщения всё равно перепрыгнул бы
+//     провалившийся оффсет. Раньше здесь стоял голый `continue` с обещанием
+//     «сообщение будет перечитано» — обещание было ложным: перечитывание
+//     случалось только при падении процесса до следующего успешного коммита.
+//   - RunConcurrent: оффсет продвигается сразу (по замыслу, см. там же).
+//
+// Отсюда требование к вызывающим: handler обязан быть идемпотентным, а потеря
+// одного сообщения — восстановимой (в нашем случае — следующим плановым
+// скрейпом того же товара/выдачи).
 type HandlerFunc func(ctx context.Context, msg Message) error
 
 type Consumer struct {
@@ -51,6 +66,16 @@ const (
 	maxBackoff = 30 * time.Second
 )
 
+// Повторы обработки ОДНОГО сообщения в последовательном Run. Нужны потому, что
+// типичная ошибка здесь — секундный сбой БД (пул исчерпан, рестарт postgres), а
+// пропуск сообщения в этот момент стоит пользователю невыполненного алерта.
+// Держим малыми: Run последователен, и пока мы ретраим, партиция стоит.
+// Суммарный худший случай на сообщение ≈ 0.5с + 1с = 1.5с.
+const (
+	handlerRetries      = 3
+	handlerRetryBackoff = 500 * time.Millisecond
+)
+
 // nextBackoff удваивает текущую паузу с capper на maxBackoff.
 func nextBackoff(current time.Duration) time.Duration {
 	next := current * 2
@@ -71,8 +96,19 @@ func sleepWithCtx(ctx context.Context, d time.Duration) bool {
 	}
 }
 
-// Run — читает сообщения и вызывает handler. Коммитит offset только после
-// успешной обработки (at-least-once семантика).
+// Run — читает сообщения по одному и вызывает handler.
+//
+// Ошибка handler'а → до handlerRetries попыток с паузой handlerRetryBackoff
+// (лечит транзиентные сбои БД/сети), после чего сообщение ПРОПУСКАЕТСЯ и его
+// оффсет коммитится. Пропуск делается явно, а не «само получится»: FetchMessage
+// уже сдвинул курсор ридера, поэтому не-коммит всё равно не возвращал сообщение
+// в обработку — он лишь оставлял позицию группы позади и превращал любой
+// рестарт в переигрывание уже пройденного участка.
+//
+// Гарантия остаётся at-least-once: закоммиченный оффсет всегда ≤ реально
+// обработанного, повторная доставка возможна (падение до коммита), потеря —
+// только после исчерпания ретраев и с громким логом.
+//
 // При transient ошибках Kafka (leader election, coordinator down, network
 // flaps) делает exponential backoff и продолжает работать — НЕ убивает процесс.
 // Возвращается только при отмене контекста.
@@ -114,15 +150,30 @@ func (c *Consumer) Run(ctx context.Context, handler HandlerFunc) error {
 		)
 
 		start := time.Now()
-		handlerErr := handler(msgCtx, Message{Key: msg.Key, Value: msg.Value})
+		handlerErr := c.runWithRetry(msgCtx, topic, handler, msg)
 		metrics.KafkaProcessingDuration.WithLabelValues(topic).Observe(time.Since(start).Seconds())
 
 		if handlerErr != nil {
-			metrics.KafkaMessagesConsumed.WithLabelValues(topic, "error").Inc()
+			// Отмена ctx во время обработки — это ОСТАНОВКА СЕРВИСА, а не отказ
+			// обработки. Оффсет не коммитим (сообщение достанется следующему
+			// запуску) и не метим как dropped, иначе каждый штатный рестарт
+			// накручивал бы счётчик потерь и обесценивал его как сигнал.
+			if ctx.Err() != nil {
+				span.End()
+				return nil
+			}
+			// Ретраи исчерпаны. Коммитим и идём дальше — сообщение потеряно
+			// осознанно, а не «повиснет до рестарта». Восстановление —
+			// следующим плановым событием по той же сущности.
+			metrics.KafkaMessagesConsumed.WithLabelValues(topic, "dropped").Inc()
 			span.RecordError(handlerErr)
-			span.SetStatus(codes.Error, "handler failed")
+			span.SetStatus(codes.Error, "handler failed, message dropped")
 			span.End()
-			fmt.Printf("handler error (will retry): %v\n", handlerErr)
+			fmt.Printf("handler failed after %d attempts, DROPPING message (topic=%s partition=%d offset=%d): %v\n",
+				handlerRetries, topic, msg.Partition, msg.Offset, handlerErr)
+			if err := c.reader.CommitMessages(ctx, msg); err != nil {
+				fmt.Printf("kafka commit error after drop: %v\n", err)
+			}
 			continue
 		}
 
@@ -143,6 +194,35 @@ func (c *Consumer) Run(ctx context.Context, handler HandlerFunc) error {
 	}
 }
 
+// runWithRetry вызывает handler до handlerRetries раз, пока он не вернёт nil.
+// Возвращает ошибку ПОСЛЕДНЕЙ попытки (nil — обработано). Прерывается сразу при
+// отмене ctx: на остановке сервиса ретраить смысла нет, сообщение перечитает
+// следующий запуск (оффсет ещё не закоммичен).
+//
+// Промежуточные провалы считаем в status="error", финальный — в "dropped"
+// у вызывающего: так по метрике видно и «дёргается, но выправляется», и
+// «реально потеряли».
+func (c *Consumer) runWithRetry(ctx context.Context, topic string, handler HandlerFunc, msg kafka.Message) error {
+	var err error
+	for attempt := 1; attempt <= handlerRetries; attempt++ {
+		if err = handler(ctx, Message{Key: msg.Key, Value: msg.Value}); err == nil {
+			return nil
+		}
+		metrics.KafkaMessagesConsumed.WithLabelValues(topic, "error").Inc()
+		if ctx.Err() != nil {
+			return err
+		}
+		if attempt < handlerRetries {
+			fmt.Printf("handler error (attempt %d/%d, topic=%s partition=%d offset=%d): %v\n",
+				attempt, handlerRetries, topic, msg.Partition, msg.Offset, err)
+			if sleepWithCtx(ctx, handlerRetryBackoff) {
+				return err
+			}
+		}
+	}
+	return err
+}
+
 // commitFlushInterval — как часто конкурентный консьюмер сбрасывает накопленные
 // вотермарки оффсетов в Kafka. Батчим, чтобы не делать по commit-RPC на каждое
 // сообщение под высокой пропускной. Потеря окна ≤ этого интервала при падении
@@ -159,9 +239,12 @@ const commitFlushInterval = 500 * time.Millisecond
 // обработанное. At-least-once сохраняется: при падении незакоммиченные
 // сообщения перечитаются и обработаются повторно (апсерты идемпотентны).
 //
-// Ошибка handler'а НЕ стопорит партицию: оффсет всё равно продвигается (как и в
-// последовательном Run, где после ошибки читается следующее сообщение и провал
-// эффективно пропускается) — товар/задача перепланируются штатным кадансом.
+// Ошибка handler'а НЕ стопорит партицию: оффсет всё равно продвигается — товар/
+// задача перепланируются штатным кадансом. В отличие от последовательного Run
+// ретраев на месте здесь НЕТ намеренно: сообщения обрабатываются параллельно, и
+// удержание слота пула под ретрай одного товара отнимает пропускную у остальных,
+// а вотермарк непрерывного префикса при этом стоит на месте (ровно тот сценарий
+// заморозки партиции, из-за которого появился SCRAPE_HANDLER_TIMEOUT).
 // Порядок обработки в партиции не гарантируется — для идемпотентного скрейпа не важно.
 //
 // concurrency<=1 эквивалентно последовательному Run.
