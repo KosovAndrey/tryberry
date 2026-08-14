@@ -68,6 +68,16 @@ class NormalizationTest {
     }
 
     @Test
+    @DisplayName("квалификатор модели: Lite/Pro/Max/Note различают товары")
+    void variantTokens() {
+        assertTrue(item("", "HONOR 600 Lite Ростест 8/256").variantTokens().contains("lite"));
+        assertTrue(item("", "Смартфон Magic 8 Pro Max").variantTokens().contains("max"));
+        assertTrue(item("", "Xiaomi Redmi Note 13").variantTokens().contains("note"));
+        // Цвет и слово «смартфон» квалификаторами не являются — это шум.
+        assertTrue(item("", "Смартфон Galaxy A17 черный").variantTokens().isEmpty());
+    }
+
+    @Test
     @DisplayName("модельным кодом не считается слово без цифр и число без букв")
     void modelTokensNoise() {
         var tokens = item("", "Смартфон Apple iPhone 15 128 ГБ синий").modelTokens();

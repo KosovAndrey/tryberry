@@ -81,6 +81,31 @@ public record Item(String marketplace, String article, String brand,
     }
 
     /**
+     * Квалификаторы имени модели. Тот же тип ошибки, что объём памяти, только по
+     * названию: «Pro» против «Pro Max», «Note 13» против «13», «Lite» против
+     * базовой — РАЗНЫЕ товары с почти одинаковыми названиями. Решаться должно
+     * жёстко, а не похожестью.
+     *
+     * <p>Список ОДИН И ТОТ ЖЕ с {@code scripts/make-pairs.py}: разъедутся —
+     * baseline и индекс начнут сравниваться на разных признаках.
+     */
+    private static final Set<String> VARIANT_WORDS = Set.of(
+            "pro", "про", "max", "макс", "plus", "плюс", "ultra", "ультра",
+            "lite", "лайт", "mini", "мини", "note", "нот", "neo", "se", "fe",
+            "prime", "power", "turbo", "active", "young", "5g");
+
+    /** Квалификаторы модели, найденные в названии. */
+    public Set<String> variantTokens() {
+        Set<String> out = new LinkedHashSet<>();
+        for (String t : name.toLowerCase(java.util.Locale.ROOT).split("[^\\p{L}\\p{N}]+")) {
+            if (VARIANT_WORDS.contains(t)) {
+                out.add(t);
+            }
+        }
+        return out;
+    }
+
+    /**
      * Квалификатор варианта — «8/256». Это НЕ идентичность, а то, чем варианты
      * РАЗЛИЧАЮТСЯ: несовпадение здесь обязано быть отказом, а не минусом к
      * скору (§9, тип ошибки C). Пусто — квалификатор не распознан.

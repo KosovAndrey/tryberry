@@ -123,6 +123,35 @@ def storage_of(name: str):
     return None
 
 
+# Квалификаторы имени модели. Тот же тип ошибки, что объём памяти, только по
+# названию: «Pro» против «Pro Max», «Note 13» против «13», «Lite» против базовой
+# — это РАЗНЫЕ товары с почти одинаковыми названиями, и решаться должно жёстко,
+# а не похожестью. Идея пользователя по итогам живой разметки.
+#
+# Сюда идут только те слова, которые реально образуют отдельную модель. «Смартфон»
+# и цвета — не квалификаторы, они шум.
+VARIANT_WORDS = {
+    "pro", "про", "max", "макс", "plus", "плюс", "ultra", "ультра",
+    "lite", "лайт", "mini", "мини", "note", "нот", "neo", "se", "fe",
+    "prime", "power", "turbo", "active", "young", "5g",
+}
+
+
+def variant_of(name: str):
+    """Множество квалификаторов модели в названии."""
+    return {t for t in (x.lower() for x in RE_TOKEN.findall(name))
+            if t in VARIANT_WORDS}
+
+
+def variant_verdict(a: str, b: str) -> str:
+    """Есть ли у одного квалификатор, которого нет у другого."""
+    va, vb = variant_of(a), variant_of(b)
+    if va == vb:
+        return "совпал" if va else "нет"
+    diff = sorted(va ^ vb)
+    return "РАЗНЫЙ:" + "/".join(diff)
+
+
 def mem_verdict(a, b) -> str:
     """Сравниваем по ПЗУ: оперативку одна площадка часто не пишет, и требовать
     её совпадения значит объявить разными объёмы, которые совпадают."""
@@ -230,17 +259,18 @@ def main():
     with open(tsv_path, "w", encoding="utf-8") as tsv, \
             open(txt_path, "w", encoding="utf-8") as txt:
         tsv.write("label\tid\tsim\tmem\tflags\tbrand\tmp_a\tname_a\tprice_a\tmp_b"
-                  "\tname_b\tprice_b\turl_a\turl_b\n")
+                  "\tname_b\tprice_b\turl_a\turl_b\tvariant\n")
         for i, (s, a, b) in enumerate(pairs, 1):
             mem = mem_verdict(a["_mem"], b["_mem"])
             ma, mb = markers_of(a["name"]), markers_of(b["name"])
             flags = "; ".join(f"A[{x}]" for x in ma) + \
                     (" " if ma and mb else "") + \
                     "; ".join(f"B[{x}]" for x in mb)
+            var = variant_verdict(a["name"], b["name"])
             tsv.write(f"\t{i}\t{s:.3f}\t{mem}\t{flags}\t{a['_brand']}\t"
                       f"{a['marketplace']}\t{a['name']}\t{a['price']}\t"
                       f"{b['marketplace']}\t{b['name']}\t{b['price']}\t"
-                      f"{a['url']}\t{b['url']}\n")
+                      f"{a['url']}\t{b['url']}\t{var}\n")
             txt.write(f"[{i:3d}] sim={s:.3f} бренд={a['_brand']} память={mem}"
                       f"{'  ⚑ ' + flags if flags else ''}\n"
                       f"   A ({a['marketplace']}, {a['price']} ₽) {a['name']}\n"
