@@ -27,6 +27,12 @@ class NormalizationTest {
         assertEquals("8/256", item("", "Смартфон Camon 50 8/256").storage());
         assertEquals("8/256", item("", "Смартфон Note 15 Pro 256+8 ГБ").storage());
         assertEquals("12/512", item("", "Смартфон X8 Pro 12+512 Гб Черный").storage());
+        // Пятый формат — через пробел, без разделителя. Найден на живой разметке:
+        // подсказка врала «совпал» там, где 4/256 против 8/256.
+        assertEquals("8/256", item("", "Смартфон Redmi 15C 8 256 Черный").storage());
+        assertEquals("8/256", item("", "Смартфон Galaxy A17 8 256 ГБ (Черный)").storage());
+        // Правдоподобие обязательно: «Note 15 8» не должно стать 15/8.
+        assertEquals("?/256", item("", "Смартфон Note 15 256 ГБ").storage());
     }
 
     @Test

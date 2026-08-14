@@ -64,6 +64,14 @@ STOP = {
 # (4/64, 8/256, 12/512, 16/1024). Порядок в названии значения не имеет.
 RE_MEM_PAIR = re.compile(
     r"\b(\d{1,4})\s*(?:гб|gb)?\s*[/+]\s*(\d{1,4})\s*(?:гб|gb)?\b", re.I)
+# ПЯТЫЙ формат: через ПРОБЕЛ, без разделителя — «Redmi 15C 8 256 Черный».
+# Найден на живой разметке: подсказка врала «память совпал» там, где 4/256
+# против 8/256. Голый пробел даёт много ложных срабатываний (в названиях полно
+# чисел), поэтому требуем ПРАВДОПОДОБНЫЕ значения: столько-то ОЗУ и ПЗУ реально
+# бывает, а «15 8» из «Note 15 8» — нет.
+RE_MEM_SPACE = re.compile(r"\b(\d{1,2})\s+(\d{2,4})\s*(?:гб|gb)?\b", re.I)
+RAM_VALUES = {2, 3, 4, 6, 8, 12, 16, 18, 24}
+ROM_VALUES = {16, 32, 64, 128, 256, 512, 1024}
 RE_MEM_ONE = re.compile(r"\b(\d{2,4})\s*(?:гб|gb)\b", re.I)
 RE_TOKEN = re.compile(r"[a-zA-Zа-яА-ЯёЁ0-9]+")
 
@@ -105,6 +113,10 @@ def storage_of(name: str):
     if m:
         a, b = int(m.group(1)), int(m.group(2))
         return (min(a, b), max(a, b))
+    for m in RE_MEM_SPACE.finditer(name):
+        a, b = int(m.group(1)), int(m.group(2))
+        if a in RAM_VALUES and b in ROM_VALUES:
+            return (a, b)
     m = RE_MEM_ONE.search(name)
     if m:
         return (None, int(m.group(1)))

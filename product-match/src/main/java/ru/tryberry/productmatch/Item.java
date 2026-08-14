@@ -46,6 +46,19 @@ public record Item(String marketplace, String article, String brand,
             Pattern.CASE_INSENSITIVE | Pattern.UNICODE_CHARACTER_CLASS);
 
     /**
+     * ПЯТЫЙ формат: через ПРОБЕЛ, без разделителя — «Redmi 15C 8 256 Черный».
+     * Найден на живой разметке: подсказка врала «память совпал» там, где было
+     * 4/256 против 8/256. Голый пробел даёт много ложных срабатываний (в
+     * названиях полно чисел), поэтому требуем ПРАВДОПОДОБНЫЕ значения: столько
+     * ОЗУ и ПЗУ реально бывает, а «15 8» из «Note 15 8» — нет.
+     */
+    private static final Pattern MEM_SPACE = Pattern.compile(
+            "\\b(\\d{1,2})\\s+(\\d{2,4})\\s*(?:гб|gb)?\\b",
+            Pattern.CASE_INSENSITIVE | Pattern.UNICODE_CHARACTER_CLASS);
+    private static final Set<Integer> RAM_VALUES = Set.of(2, 3, 4, 6, 8, 12, 16, 18, 24);
+    private static final Set<Integer> ROM_VALUES = Set.of(16, 32, 64, 128, 256, 512, 1024);
+
+    /**
      * Модельные коды из названия. Индексируются ОТДЕЛЬНЫМ полем с точным
      * совпадением: совпадение `SM-A546E` должно весить кратно больше слова
      * «чёрный», а внутри общего текстового поля этого не выразить.
@@ -78,6 +91,14 @@ public record Item(String marketplace, String article, String brand,
             int a = Integer.parseInt(m.group(1));
             int b = Integer.parseInt(m.group(2));
             return Math.min(a, b) + "/" + Math.max(a, b);
+        }
+        Matcher sp = MEM_SPACE.matcher(name);
+        while (sp.find()) {
+            int a = Integer.parseInt(sp.group(1));
+            int b = Integer.parseInt(sp.group(2));
+            if (RAM_VALUES.contains(a) && ROM_VALUES.contains(b)) {
+                return a + "/" + b;
+            }
         }
         Matcher one = MEM_ONE.matcher(name);
         if (one.find()) {
