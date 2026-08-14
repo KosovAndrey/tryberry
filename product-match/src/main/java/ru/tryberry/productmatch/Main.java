@@ -59,6 +59,28 @@ public final class Main {
         // где индекс находит то, что триграммы пропустили, — а это главное
         // преимущество Lucene («iPhone15» против «iPhone 15»). Размечать такой
         // набор значит измерить только точность на чужих кандидатах.
+        // Диагностика ранжирования: что именно обгоняет верную пару. Без этого
+        // проигрыш индекса невозможно отличить от собственной недонастройки.
+        if (opt.containsKey("explain")) {
+            Item probe = byUrl.get(opt.get("explain"));
+            if (probe == null) {
+                System.out.println("нет такой позиции: " + opt.get("explain"));
+                return;
+            }
+            try (MatchIndex index = new MatchIndex(items)) {
+                System.out.println("ЗАПРОС: " + probe.name());
+                System.out.println("  модельные токены: " + probe.modelTokens()
+                        + ", объём: " + probe.storage());
+                System.out.println();
+                for (MatchIndex.Hit h : index.search(probe, 12)) {
+                    System.out.printf("  %2d. %7.3f  %s%n", h.rank(), h.score(),
+                            h.item().name().substring(0, Math.min(92, h.item().name().length())));
+                    System.out.println("              токены: " + h.item().modelTokens());
+                }
+            }
+            return;
+        }
+
         if (opt.containsKey("propose")) {
             propose(items, pairs, Path.of(opt.get("propose")),
                     Integer.parseInt(opt.getOrDefault("propose-top", "3")));

@@ -92,8 +92,43 @@ public record Item(String marketplace, String article, String brand,
         while (t.find()) {
             String tok = t.group();
             long digits = tok.chars().filter(Character::isDigit).count();
-            if (digits >= 2) {
-                out.add(tok.toLowerCase());
+            // Латинский токен с цифрами: SM-A546E, VCR04W, но также короткие
+            // «V3», «X8» — они и различают поколения.
+            if (digits >= 1 && tok.length() >= 2) {
+                out.add(tok.toLowerCase(java.util.Locale.ROOT));
+            }
+        }
+        // ГОЛЫЙ НОМЕР ПОКОЛЕНИЯ: «Magic 8 Pro» против «Magic 7 Pro» различаются
+        // только им, а прежний извлекатель требовал двух цифр в токене и не
+        // давал НИЧЕГО — восьмикратный вес модельного поля не срабатывал вовсе,
+        // и ранжирование вырождалось в мешок слов, где «nano»/«sim»/«гб» весят
+        // столько же, сколько номер модели. Поймано замером: верная пара стояла
+        // девятой, а чужой Magic V3 — третьим.
+        //
+        // Числа из объёма памяти сюда попасть не должны, поэтому пропускаем
+        // участок названия, который распознан как объём.
+        int memFrom = -1, memTo = -1;
+        Matcher span = MEM_PAIR_TB.matcher(name);
+        if (!span.find()) {
+            span = MEM_PAIR.matcher(name);
+            if (!span.find()) {
+                span = null;
+            }
+        }
+        if (span != null) {
+            memFrom = span.start();
+            memTo = span.end();
+        }
+        Matcher n = NUMBERS.matcher(name);
+        while (n.find()) {
+            if (memFrom >= 0 && n.start() >= memFrom && n.end() <= memTo) {
+                continue;
+            }
+            String num = n.group();
+            // Поколение — короткое число. Ёмкость батареи (5000), диагональ и
+            // объёмы отсекаются длиной и списком правдоподобных значений памяти.
+            if (num.length() <= 2 && !ROM_VALUES.contains(Integer.parseInt(num))) {
+                out.add(num);
             }
         }
         return out;

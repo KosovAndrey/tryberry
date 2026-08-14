@@ -6,7 +6,11 @@ import org.apache.lucene.analysis.TokenStream;
 import org.apache.lucene.analysis.core.FlattenGraphFilter;
 import org.apache.lucene.analysis.miscellaneous.WordDelimiterGraphFilter;
 import org.apache.lucene.analysis.ru.RussianLightStemFilter;
+import org.apache.lucene.analysis.CharArraySet;
+import org.apache.lucene.analysis.StopFilter;
 import org.apache.lucene.analysis.standard.StandardTokenizer;
+
+import java.util.List;
 
 /**
  * Цепочка анализа названий. Это и есть ответ на вопрос «почему JVM»: в Go нет
@@ -42,12 +46,34 @@ public final class ProductAnalyzer extends Analyzer {
                     | WordDelimiterGraphFilter.SPLIT_ON_NUMERICS
                     | WordDelimiterGraphFilter.PRESERVE_ORIGINAL;
 
+    /**
+     * Канцелярия карточек: слова, которые есть почти в каждом названии и потому
+     * ничего не различают. Замер показал, чем это кончается без них: BM25
+     * награждает за ЧИСЛО совпавших терминов, и чужой телефон с длинным
+     * названием обгонял верную пару с коротким — просто потому, что делил с
+     * запросом «nano», «sim», «global» и «гб».
+     *
+     * Цвета сюда же намеренно: по правилам разметки другой цвет — ТОТ ЖЕ товар,
+     * значит цвет не должен ни повышать, ни понижать оценку.
+     */
+    private static final CharArraySet STOP = new CharArraySet(List.of(
+            "смартфон", "смартфоны", "телефон", "мобильный", "сотовый",
+            "nano", "sim", "esim", "dual", "гб", "gb", "тб", "tb", "ram", "rom",
+            "ростест", "eac", "global", "глобальная", "глобальный", "версия",
+            "для", "рф", "новый", "гарантия", "рст",
+            "черный", "чёрный", "черное", "белый", "синий", "голубой", "серый",
+            "золотой", "зеленый", "зелёный", "красный", "розовый", "фиолетовый",
+            "оранжевый", "серебристый", "бежевый", "титановый", "графитовый",
+            "black", "white", "blue", "gray", "grey", "green", "gold", "orange"),
+            true);
+
     @Override
     protected TokenStreamComponents createComponents(String fieldName) {
         StandardTokenizer src = new StandardTokenizer();
         TokenStream ts = new LowerCaseFilter(src);
         ts = new WordDelimiterGraphFilter(ts, WDF_FLAGS, null);
         ts = new FlattenGraphFilter(ts);
+        ts = new StopFilter(ts, STOP);
         ts = new RussianLightStemFilter(ts);
         return new TokenStreamComponents(src, ts);
     }
