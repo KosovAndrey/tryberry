@@ -74,6 +74,17 @@ def main():
         rows = [ln.rstrip("\n").split("\t") for ln in f]
     cols = {name: i for i, name in enumerate(header.split("\t"))}
 
+    # Короткие строки (битая склейка файла, ручная правка) не должны ронять
+    # разметку: дополняем пустыми и работаем дальше. Разметчик не должен терять
+    # уже сделанную работу из-за одной кривой строки.
+    broken = sum(1 for r in rows if len(r) != len(cols))
+    for r in rows:
+        while len(r) < len(cols):
+            r.append("")
+        del r[len(cols):]
+    if broken:
+        print(f"⚠ строк с неверным числом колонок: {broken} — дополнены пустыми")
+
     def save():
         with open(path, "w", encoding="utf-8") as f:
             f.write(header + "\n")
