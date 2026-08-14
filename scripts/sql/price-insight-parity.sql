@@ -62,6 +62,26 @@ LANGUAGE sql STABLE AS $$
         FROM price_history
         WHERE product_id = p_id
           AND (p_from IS NULL OR recorded_at >= p_from)
+        UNION ALL
+        -- ЯКОРЬ: сегмент, активный на левой границе окна. Его запись СТАРШЕ
+        -- окна, но цена действует внутри — время записи сдвигаем к границе.
+        --
+        -- Без якоря срез А мерил не сервис, а этот скрипт. price_history хранит
+        -- ТОЛЬКО смены цены, поэтому у стабильного товара внутри окна строк может
+        -- не быть вовсе (последняя лежит месяцем раньше) — и Go выглядел так,
+        -- будто истории нет совсем, а `since` уезжал в будущее и включал гейт
+        -- «данных мало». Боевая Stats якорь учитывает всегда, см. её коммент
+        -- «включая якорь — сегмент, активный на границе окна».
+        SELECT price, p_from
+        FROM (
+            SELECT price, recorded_at
+            FROM price_history
+            WHERE p_from IS NOT NULL
+              AND product_id = p_id
+              AND recorded_at < p_from
+            ORDER BY recorded_at DESC
+            LIMIT 1
+        ) anchor
     ),
     seg AS (
         SELECT price, recorded_at AS t0,
