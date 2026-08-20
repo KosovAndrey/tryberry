@@ -425,3 +425,47 @@ groups:
         annotations:
           summary: "Доставка в {{ $labels.channel }} полностью падает"
           description: "За 15 мин все отправки в {{ $labels.channel }} с ошибкой, ни одной успешной. 401 = битый токен канала (.env/ЛК); иначе egress. Логи: docker logs pt_notifier --since 30m | grep -iE 'error|unauthorized'."
+  # ── Ресурсы хоста ──────────────────────────────────────────────────────────
+  # Заведено 20-08-2026 после первой глобальной OOM-аварии: ali-miner дорос по
+  # аптайму до 6.7 ГиБ, хост (15 ГиБ, своп забит на 92%) исчерпал память,
+  # ядро прибило chrome. Пока оно свопило, dockerd не успевал с health-check,
+  # а systemd-resolved молчал → embedded DNS Docker (127.0.0.11) отвалился →
+  # каскад ServiceDown по всем, кому нужен был свежий резолв.
+  #
+  # Метрик хоста в Prometheus тогда НЕ БЫЛО (node-exporter крутился, но джоба
+  # для него не завели), поэтому предупредить было нечем. Эти правила ловят
+  # ситуацию ЗАРАНЕЕ, а HostOOMKill — постфактум, но точно и с именем жертвы.
+  - name: tryberrybot_host
+    interval: 30s
+    rules:
+      # Ядро кого-то убило. Считаем по счётчику vmstat: даже если жертва
+      # успела перезапуститься и внешне всё зелено, факт OOM виден.
+      - alert: HostOOMKill
+        expr: increase(node_vmstat_oom_kill[10m]) > 0
+        labels:
+          severity: critical
+        annotations:
+          summary: "OOM-killer сработал на хосте"
+          description: "Ядро убило процесс из-за нехватки памяти за последние 10 мин. Найти жертву: sudo dmesg -T | grep -i 'killed process' | tail. Посмотреть, кто разросся: docker stats --no-stream."
+
+      # Свободной памяти мало. 15% от 15 ГиБ ≈ 2.3 ГиБ — на таком остатке
+      # браузерный сайдкар доедает запас за минуты.
+      - alert: HostMemoryLow
+        expr: node_memory_MemAvailable_bytes / node_memory_MemTotal_bytes < 0.15
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "На хосте мало памяти"
+          description: "Доступно меньше 15% RAM больше 5 минут. Обычно это растущий по аптайму браузерный сайдкар (ozon/wb/ali-miner) — проверить docker stats и при необходимости пересоздать самый жирный."
+
+      # Своп на исходе. Когда он кончится, следующий же запрос памяти
+      # уйдёт в OOM — это последнее предупреждение перед аварией.
+      - alert: HostSwapAlmostFull
+        expr: (1 - node_memory_SwapFree_bytes / node_memory_SwapTotal_bytes) > 0.85
+        for: 15m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Своп забит"
+          description: "Занято больше 85% свопа 15+ минут. Дальше расти некуда: следующая нехватка памяти закончится OOM-killer'ом."

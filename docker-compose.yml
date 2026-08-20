@@ -458,6 +458,9 @@ services:
         context: ./token-miner
         dockerfile: Dockerfile
       container_name: pt_token_miner
+      # Потолок памяти: простаивает ~106 МиБ, пик — браузер раз в MINE_INTERVAL_HOURS. Без него OOM был ГЛОБАЛЬНЫМ
+      # (kill chrome 20-08-2026) и валил DNS/dockerd всему хосту.
+      mem_limit: 1g
       init: true
       environment:
         REDIS_URL: "redis://:${REDIS_PASSWORD}@redis:6379"
@@ -494,6 +497,9 @@ services:
         context: ./token-miner
         dockerfile: Dockerfile
       container_name: pt_token_miner_reseller
+      # Потолок памяти: то же, что token-miner. Без него OOM был ГЛОБАЛЬНЫМ
+      # (kill chrome 20-08-2026) и валил DNS/dockerd всему хосту.
+      mem_limit: 1g
       init: true
       environment:
         REDIS_URL: "redis://:${REDIS_PASSWORD}@redis:6379"
@@ -536,6 +542,9 @@ services:
         context: ./ozon-miner
         dockerfile: Dockerfile
       container_name: pt_ozon_miner
+      # Потолок памяти: ~5 ГиБ на плато (см. выше), потолок с запасом на пик. Без него OOM был ГЛОБАЛЬНЫМ
+      # (kill chrome 20-08-2026) и валил DNS/dockerd всему хосту.
+      mem_limit: 6g
       init: true
       environment:
         OZON_MINER_PORT: "8080"
@@ -587,6 +596,9 @@ services:
         context: ./wb-search-miner
         dockerfile: Dockerfile
       container_name: pt_wb_search_miner
+      # Потолок памяти: штатно ~1 ГиБ. Без него OOM был ГЛОБАЛЬНЫМ
+      # (kill chrome 20-08-2026) и валил DNS/dockerd всему хосту.
+      mem_limit: 2g
       init: true
       environment:
         WB_SEARCH_MINER_PORT: "8081"
@@ -622,6 +634,9 @@ services:
         context: ./ali-miner
         dockerfile: Dockerfile
       container_name: pt_ali_miner
+      # Потолок памяти: штатно ~0.8 ГиБ; течёт по аптайму — 20-08-2026 дорос до 6.7 ГиБ и уронил хост. Без него OOM был ГЛОБАЛЬНЫМ
+      # (kill chrome 20-08-2026) и валил DNS/dockerd всему хосту.
+      mem_limit: 2g
       init: true
       environment:
         ALI_MINER_PORT: "8082"

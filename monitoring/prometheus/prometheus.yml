@@ -160,3 +160,17 @@ scrape_configs:
         labels:
           service: kafka
 
+
+  # Метрики ХОСТА (RAM, swap, CPU, disk). Контейнер поднимается только
+  # prod-оверлеем (docker-compose.prod.yml), поэтому в чистом dev этот target
+  # будет down — своего Prometheus у dev нет, расхождение осознанное.
+  #
+  # Джоб добавлен 20-08-2026 постфактум: node-exporter крутился на проде с
+  # самого начала, но его НИКТО не скрейпил. Из-за этого глобальный OOM
+  # (ali-miner дорос до 6.7 ГиБ) и своп, забитый на 92%, были не видны —
+  # авария проявилась только каскадом ServiceDown, когда чинить было поздно.
+  - job_name: node
+    static_configs:
+      - targets: [ 'node-exporter:9100' ]
+        labels:
+          service: host
