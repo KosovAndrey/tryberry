@@ -11,6 +11,8 @@
   B. вотчдог снимает healthy с дорожки, чей лок держат дольше порога;
   C. зависшее обслуживание одной дорожки не мешает обслуживать остальные;
   D. возраст последнего успеха растёт (метрика, на которой висит алерт).
+  E. зажившийся браузер планово пересоздаётся по возрасту (recycle) — течь
+     памяти, из-за которой 20-08-2026 хост ушёл в глобальный OOM.
 
 Запуск: python3 ali-miner/test_lane_deadlock.py
 Зависимостей нет — aiohttp/patchright замоканы.
@@ -33,6 +35,8 @@ os.environ.update({
     "ALI_LANE_STUCK_SECONDS": "1",
     "ALI_HEALTH_INTERVAL_SECONDS": "0.2",
     "ALI_LANE_MIN_INTERVAL_MS": "0",
+    "ALI_LANE_MAX_AGE_SECONDS": "1",
+    "ALI_LANE_MAX_AGE_JITTER": "0",
     "LOG_LEVEL": "CRITICAL",
 })
 
@@ -182,9 +186,40 @@ async def test_last_success_age_grows():
     check(age2 < 1, "успешный запрос обнуляет возраст")
 
 
+async def test_recycle_by_age():
+    """E. Браузер, проживший дольше порога, планово пересоздаётся."""
+    lane = make_lane()
+    lane._launched_at = server.time.monotonic() - 3600  # зажился
+    lane._age_limit = server.LANE_MAX_AGE_S
+    now = server.time.monotonic()
+    check(lane.due_recycle(now), "зажившаяся дорожка подлежит recycle")
+
+    fresh = make_lane(1)
+    fresh._launched_at = now
+    fresh._age_limit = server.LANE_MAX_AGE_S
+    check(not fresh.due_recycle(now), "свежая дорожка НЕ рециклится раньше срока")
+
+    # Нездоровую чинит due_rewarm, а не recycle — иначе поводов два и они спорят.
+    sick = make_lane(2)
+    sick._launched_at = now - 3600
+    sick._age_limit = server.LANE_MAX_AGE_S
+    sick.healthy = False
+    check(not sick.due_recycle(now), "нездоровая дорожка не идёт через recycle")
+
+    pool = server.Pool([lane])
+    maint = asyncio.ensure_future(pool.maintenance_loop())
+    await asyncio.sleep(0.6)
+    maint.cancel()
+
+    check(lane.healthy is False, "recycle снял healthy (браузер сейчас исчезнет)")
+    check(lane._needs_relaunch, "дорожка помечена на пересоздание")
+    check(lane.age(server.time.monotonic()) > 0, "возраст дорожки отдаётся метрикой")
+
+
 async def main():
     for t in (test_fetch_deadline, test_watchdog_frees_stuck_lane,
-              test_stuck_lane_does_not_block_others, test_last_success_age_grows):
+              test_stuck_lane_does_not_block_others, test_last_success_age_grows,
+              test_recycle_by_age):
         print(f"\n{t.__doc__.splitlines()[0]}")
         await t()
     print("\nПРОВАЛЕНО" if check.failed else "\nвсё зелено")

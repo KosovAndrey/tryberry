@@ -30,6 +30,8 @@ blocked/пустой ответ уходит сюда (`ALI_BROWSER_URL`), ка�
 | `ALI_WARM_QUERY` | телефон | нейтральный запрос прогрева |
 | `ALI_SEARCH_PROXY_URL` / `ALI_LANE_<i>_PROXY` | — | опц. RU-прокси (обычно НЕ нужен — direct проходит) |
 | `ALI_WARM_RELAUNCH_AFTER` | 3 | пересоздать браузер после N неудач прогрева |
+| `ALI_LANE_MAX_AGE_SECONDS` | 21600 | плановый recycle: пересоздать браузер, проживший дольше (0 = выключить) |
+| `ALI_LANE_MAX_AGE_JITTER` | 0.2 | разброс порога по дорожкам, чтобы пул не пересоздавался разом |
 | `HEADLESS` | false | headful обязателен (иначе X5SEC палит) |
 
 ## Как проверить локально (нужен рабочий Docker; в WSL нет)
