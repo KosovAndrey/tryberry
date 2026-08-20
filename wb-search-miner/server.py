@@ -74,6 +74,15 @@ USEARCH_MARKER = os.getenv("WB_USEARCH_MARKER", "/u-search/")
 LANE_MIN_INTERVAL_S = float(os.getenv("WB_LANE_MIN_INTERVAL_MS", "800")) / 1000.0
 LANE_JITTER = float(os.getenv("WB_LANE_JITTER", "0.4"))
 
+# Плановое пересоздание браузера по ВОЗРАСТУ. Память дорожки растёт по аптайму:
+# 20-08-2026 у ali-miner chrome дорос до 6.7 ГиБ и увёл ВЕСЬ хост в OOM.
+# Здесь механизм тот же, но ВЫКЛЮЧЕН по умолчанию: прогрев дорого стоит —
+# браузеру заново проходить wbaas-стену (create-token 498), и дёргать это по
+# таймеру без нужды не стоит. Метрика wb_search_miner_lane_age_seconds пишется
+# всегда — по ней и решать, нужно ли включать (>0 = порог в секундах).
+LANE_MAX_AGE_S = float(os.getenv("WB_LANE_MAX_AGE_SECONDS", "0"))
+LANE_MAX_AGE_JITTER = float(os.getenv("WB_LANE_MAX_AGE_JITTER", "0.2"))
+
 MAINT_INTERVAL_S = float(os.getenv("WB_HEALTH_INTERVAL_SECONDS", "30"))
 # Лок дорожки держат дольше этого — считаем её залипшей. Порог с запасом над
 # самым долгим штатным запросом (навигация + ожидание u-search).
@@ -190,6 +199,8 @@ class Lane:
         self._warm_fails = 0            # подряд неудач (для backoff)
         self._fails_since_relaunch = 0  # подряд неудач с последнего relaunch
         self._next_warm = 0.0
+        self._launched_at = 0.0  # когда браузер создан (для recycle по возрасту)
+        self._age_limit = 0.0    # персональный порог возраста с джиттером
         self._pw = None
         self._browser = None
         self._ctx = None
@@ -220,6 +231,8 @@ class Lane:
                 except Exception:  # noqa: BLE001
                     pass
             await self._page.route("**/*", _route)
+        self._launched_at = time.monotonic()
+        self._age_limit = LANE_MAX_AGE_S * (1.0 + random.uniform(0.0, LANE_MAX_AGE_JITTER))
 
     async def start(self, pw):
         self._pw = pw
@@ -464,6 +477,17 @@ class Lane:
     def due_rewarm(self, now: float) -> bool:
         return (not self.healthy) and now >= self._next_warm
 
+    def age(self, now: float) -> float:
+        """Сколько секунд живёт текущий браузер (0 = ещё не создан)."""
+        return (now - self._launched_at) if self._launched_at else 0.0
+
+    def due_recycle(self, now: float) -> bool:
+        """Пора планово пересоздать браузер (см. LANE_MAX_AGE_S; 0 = выключено).
+        Только для здоровой дорожки — нездоровую и так чинит due_rewarm."""
+        return (LANE_MAX_AGE_S > 0 and self.healthy
+                and self._launched_at > 0 and self._age_limit > 0
+                and self.age(now) >= self._age_limit)
+
     def stuck_for(self, now: float) -> float:
         """Сколько секунд лок дорожки держат сверх LANE_STUCK_S (0 = не залипла)."""
         if not self.lock.locked() or not self._lock_since:
@@ -520,7 +544,15 @@ class Pool:
                     continue
                 if lane.lock.locked() or lane._servicing:
                     continue
-                if not (lane.due_rewarm(now) or lane.due_keepalive(now)):
+                if lane.due_recycle(now):
+                    # healthy снимаем ЧЕСТНО: браузер сейчас исчезнет. Дальше
+                    # штатный путь _service_lane: _relaunch() → due_rewarm → warm().
+                    log.info("дорожка %d: плановый recycle — браузер живёт %.0fч",
+                             lane.idx, lane.age(now) / 3600.0)
+                    lane.healthy = False
+                    lane._needs_relaunch = True
+                    lane._next_warm = 0.0
+                elif not (lane.due_rewarm(now) or lane.due_keepalive(now)):
                     continue
                 # Флаг ставим ЗДЕСЬ, а не в задаче: между ensure_future и первой
                 # строкой задачи цикл успел бы завести вторую такую же.
@@ -607,6 +639,13 @@ async def handle_metrics(request: web.Request) -> web.Response:
         "# HELP wb_search_miner_last_success_age_seconds Секунд с последнего успешного запроса или прогрева",
         "# TYPE wb_search_miner_last_success_age_seconds gauge",
         f"wb_search_miner_last_success_age_seconds {now - _last_success_at:.0f}",
+        # Возраст браузера: растущая память коррелирует именно с ним.
+        "# HELP wb_search_miner_lane_age_seconds Секунд с создания браузера дорожки",
+        "# TYPE wb_search_miner_lane_age_seconds gauge",
+    ] + [
+        f'wb_search_miner_lane_age_seconds{{lane="{l.idx}"}} {l.age(now):.0f}'
+        for l in pool.lanes
+    ] + [
         "# HELP wb_search_miner_stuck_lanes Дорожек с локом, занятым дольше порога",
         "# TYPE wb_search_miner_stuck_lanes gauge",
         f"wb_search_miner_stuck_lanes {pool.stuck_lanes(now)}",

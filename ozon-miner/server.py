@@ -315,6 +315,7 @@ class Lane:
         self._last_rotate = 0.0      # monotonic последней ротации
         self._warm_fails = 0
         self._next_warm = 0.0        # monotonic — раньше не перепрогревать (backoff)
+        self._launched_at = 0.0      # monotonic создания браузера (метрика возраста)
         self._cam = None
         self._browser = None
         self._page = None
@@ -342,6 +343,11 @@ class Lane:
         # camoufox через фингерпринт, viewport от playwright тут лишний и вредный.
         self._page = await self._browser.new_page(no_viewport=True)
         await _add_cookies_safe(self._page.context, _cookie_jar(self.cookie))
+        # Возраст браузера: память camoufox растёт по аптайму (плато ~5 ГиБ).
+        # Плановый recycle здесь НЕ делаем — пере-прохождение FAB дороже пользы,
+        # а mem_limit 6g плато перекрывает. Но следить надо: если плато поедет,
+        # это увидим по ozon_miner_lane_age_seconds раньше, чем по OOM.
+        self._launched_at = time.monotonic()
 
     async def start(self):
         await self._launch()
@@ -566,6 +572,10 @@ class Lane:
 
     def due_rewarm(self, now: float) -> bool:
         return (not self.healthy) and now >= self._next_warm
+
+    def age(self, now: float) -> float:
+        """Сколько секунд живёт текущий браузер (0 = ещё не создан)."""
+        return (now - self._launched_at) if self._launched_at else 0.0
 
     def stuck_for(self, now: float) -> float:
         """Сколько секунд лок дорожки держат сверх LANE_STUCK_S (0 = не залипла)."""
@@ -807,6 +817,16 @@ async def handle_metrics(request: web.Request) -> web.Response:
         lines.append(
             f'ozon_miner_lane_healthy{{lane="{l.idx}",authed="{1 if l.authed else 0}"}} '
             f'{1 if l.healthy else 0}')
+    lines += [
+        # Память camoufox коррелирует с АПТАЙМОМ браузера, а не с числом дорожек.
+        # 20-08-2026 у ali-miner такой рост увёл весь хост в OOM; здесь плато
+        # ~5 ГиБ и лимит 6g, но метрика нужна, чтобы заметить сдвиг плато.
+        "# HELP ozon_miner_lane_age_seconds Секунд с создания браузера дорожки",
+        "# TYPE ozon_miner_lane_age_seconds gauge",
+    ]
+    _now = time.monotonic()
+    for l in pool.lanes:
+        lines.append(f'ozon_miner_lane_age_seconds{{lane="{l.idx}"}} {l.age(_now):.0f}')
     lines.extend(_latency_metric_lines())
     return web.Response(text="\n".join(lines) + "\n", content_type="text/plain")
 
