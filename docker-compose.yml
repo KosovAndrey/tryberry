@@ -428,7 +428,8 @@ services:
       DIGEST_HOUR_END: "${DIGEST_HOUR_END:-18}"
       DIGEST_TICK_MINUTES: "${DIGEST_TICK_MINUTES:-60}"
       # Канарейка: DIGEST_TEST_TG_IDS=<твой_tg_id> — слать дайджест ТОЛЬКО себе.
-      # DIGEST_MIN_AGE_DAYS=0 — снять 7-дн. гейт (свежие товары попадут). В проде не задавать.
+      # DIGEST_MIN_AGE_DAYS=0 — снять гейт достаточности (в коде 14 дней, см.
+      # domain.honestMinAge): свежие товары попадут в дайджест. В проде не задавать.
       DIGEST_TEST_TG_IDS: "${DIGEST_TEST_TG_IDS:-}"
       DIGEST_MIN_AGE_DAYS: "${DIGEST_MIN_AGE_DAYS:--1}"
       # Нагрузочный тест (docs/LOAD-TEST-SYNTHETIC.md): алерты синтетических

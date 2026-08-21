@@ -29,8 +29,28 @@ type PriceStats struct {
 // может иметь 1 запись на 40 дней), поэтому гейтим по ВОЗРАСТУ наблюдения, а не по
 // количеству точек. История есть только с момента, как МЫ начали трекать товар.
 // var (не const) — чтобы можно было снизить для канареечного теста дайджеста
-// (DIGEST_MIN_AGE_DAYS=0); в проде 7 дней.
-var honestMinAge = 7 * 24 * time.Hour
+// (DIGEST_MIN_AGE_DAYS=0).
+//
+// 14 дней, а не 7 (поднято 21.08.2026). Семи дней хватает, чтобы вердикт был
+// формально посчитан, но не хватает, чтобы он что-то значил: недельное окно
+// накрывает один цикл распродаж маркетплейса, и «обычная цена» по нему — это
+// цена одной акции. Повод — повторная сверка price-insight
+// (docs/PRICE-INSIGHT-REVIEW.md §5.2): за неделю ≈1796 товаров перешагнули
+// семидневный гейт и начали получать вердикты, не став информированнее.
+var honestMinAge = 14 * 24 * time.Hour
+
+// medianWindow — номинальное окно медианы/минимума, которое называют тексты
+// вердиктов. Если наблюдение короче, Line подставляет фактический срок: сказать
+// «медиана за 30 дней», посчитав её по 17 дням, — это заявить горизонт, которого
+// нет.
+//
+// Минимумы за 30/90 дней такой правки НЕ требуют: Min30 >= Min90 >= MinAll по
+// построению (шире окно — меньше минимум), поэтому ветка VerdictLowest90
+// достижима только когда MinAll < Min90, то есть когда есть точка старше 90
+// дней; VerdictLowest30 — только когда наблюдение длиннее 30 дней. На коротком
+// окне обе ветки структурно недостижимы (подтверждено на проде: в матрице
+// вердиктов price-insight с окном 17 дней нет ни одного 2 или 3).
+const medianWindow = 30 * 24 * time.Hour
 
 // SetHonestMinAge переопределяет порог достаточности (для теста). 0 → выводы сразу.
 func SetHonestMinAge(d time.Duration) { honestMinAge = d }
@@ -50,6 +70,9 @@ const (
 type HonestPrice struct {
 	Verdict                        PriceVerdict
 	Min30, Median30, Min90, MinAll float64
+	// Observed — фактический срок наблюдения на момент оценки (now - Since).
+	// Нужен рендеру: тексты называют окно, и называть его надо честное.
+	Observed time.Duration
 }
 
 // AssessHonestPrice классифицирует текущую цену относительно истории. current уже
@@ -58,6 +81,9 @@ type HonestPrice struct {
 // устойчива к выбросам и к попытке «накрутить» нашу же историю одним скачком.
 func AssessHonestPrice(current float64, s PriceStats, now time.Time) HonestPrice {
 	hp := HonestPrice{Min30: s.Min30, Median30: s.Median30, Min90: s.Min90, MinAll: s.MinAll}
+	if !s.Since.IsZero() {
+		hp.Observed = now.Sub(s.Since)
+	}
 
 	tooYoung := s.Since.IsZero() || now.Sub(s.Since) < honestMinAge
 	if current <= 0 || !s.HasData || tooYoung {
@@ -93,8 +119,38 @@ func (hp HonestPrice) Line() string {
 	case VerdictTypical:
 		return "🟡 Обычная цена для этого товара"
 	case VerdictAboveTypical:
-		return fmt.Sprintf("🔴 Выше обычной — медиана за 30 дней %.0f ₽", hp.Median30)
+		return fmt.Sprintf("🔴 Выше обычной — медиана за %s %.0f ₽", hp.medianWindowLabel(), hp.Median30)
 	default:
 		return ""
+	}
+}
+
+// medianWindowLabel — как назвать окно медианы в тексте. Пока наблюдение короче
+// номинальных 30 дней, называем фактический срок: медиана посчитана по тому, что
+// есть, и выдавать её за тридцатидневную значит соврать про горизонт.
+func (hp HonestPrice) medianWindowLabel() string {
+	if hp.Observed <= 0 || hp.Observed >= medianWindow {
+		return "30 дней"
+	}
+	days := int(hp.Observed / (24 * time.Hour))
+	if days < 1 {
+		days = 1
+	}
+	return fmt.Sprintf("%d %s наблюдения", days, pluralDays(days))
+}
+
+// pluralDays — русское склонение слова «день» для чисел 1..29 (шире не нужно:
+// метка используется только когда наблюдение короче 30 дней).
+func pluralDays(n int) string {
+	if n%100 >= 11 && n%100 <= 14 {
+		return "дней"
+	}
+	switch n % 10 {
+	case 1:
+		return "день"
+	case 2, 3, 4:
+		return "дня"
+	default:
+		return "дней"
 	}
 }
