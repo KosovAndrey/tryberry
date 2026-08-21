@@ -26,9 +26,21 @@ public final class HonestPriceRules {
         this.minAge = minAge;
     }
 
-    /** Прод-значение — 7 дней, как {@code honestMinAge} в Go. */
+    /**
+     * Прод-значение — 14 дней, как {@code honestMinAge} в Go. Значение обязано
+     * совпадать с Go дословно: пока notifier читает Go-путь, а этот сервис
+     * сверяется с ним, разный гейт дал бы расхождение вердиктов, не связанное с
+     * логикой.
+     *
+     * <p>Поднято с 7 до 14 дней 21.08.2026. Семи дней хватает, чтобы вердикт был
+     * посчитан, но не хватает, чтобы он что-то значил: недельное окно накрывает
+     * один цикл распродаж маркетплейса, и «обычная цена» по нему — цена одной
+     * акции. Повод — повторная сверка (docs/PRICE-INSIGHT-REVIEW.md §5.2): за
+     * неделю ≈1796 товаров перешагнули семидневный гейт и начали получать
+     * вердикты, не став информированнее — история у них 17 дней против ~60 у Go.
+     */
     public static HonestPriceRules production() {
-        return new HonestPriceRules(Duration.ofDays(7));
+        return new HonestPriceRules(Duration.ofDays(14));
     }
 
     public HonestPrice assess(double current, PriceStats s, Instant now) {
