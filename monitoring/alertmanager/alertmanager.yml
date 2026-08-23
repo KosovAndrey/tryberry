@@ -1,5 +1,12 @@
 # Alertmanager группирует пришедшие алерты и решает кому их слать.
 # Маршрутизация по labels (severity, service).
+#
+# Доставка в Telegram идёт через xray (proxy_url у каждого telegram_config), как
+# и весь остальной egress бота: прямой путь с RU-хоста душит РКН. Раньше AM
+# ходил напрямую и это прокатывало, но 2026-08-23 прямой маршрут умер совсем —
+# AM по кругу ретраил `notify retry canceled after 2 attempts: context deadline
+# exceeded`, и алерты (включая ✅ о восстановлении) до получателя не доезжали.
+# Размен: если ляжет сам xray, алерт об этом тоже не доедет — оба плеча общие.
 
 global:
   resolve_timeout: 5m
@@ -44,6 +51,8 @@ receivers:
         parse_mode: HTML
         message: '{{ template "telegram.message" . }}'
         send_resolved: true  # шлём когда алерт прошёл
+        http_config:
+          proxy_url: 'http://xray:8888'
 
   - name: telegram-critical
     telegram_configs:
@@ -52,6 +61,8 @@ receivers:
         parse_mode: HTML
         message: '{{ template "telegram.message" . }}'
         send_resolved: true
+        http_config:
+          proxy_url: 'http://xray:8888'
 
 # Inhibit rules — подавление: если есть один алерт, другой не шлём.
 # Пример: если KafkaDown, нет смысла слать алерты про lag.
