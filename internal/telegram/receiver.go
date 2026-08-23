@@ -117,7 +117,7 @@ func (r *Receiver) SetCommands() error {
 // живая независимо от трафика.
 func (r *Receiver) RunPolling(ctx context.Context, fn func(context.Context, tgbotapi.Update)) error {
 	if err := r.DeleteWebhook(); err != nil {
-		r.log.Warn("delete webhook before polling (continuing)", "err", err)
+		r.log.Warn("delete webhook before polling (continuing)", "err", ScrubToken(err))
 	}
 
 	timeout := pollTimeoutSeconds() // из polling.go, env TELEGRAM_POLL_TIMEOUT_SECONDS
@@ -136,7 +136,7 @@ func (r *Receiver) RunPolling(ctx context.Context, fn func(context.Context, tgbo
 		updates, err := r.api.GetUpdates(u)
 		if err != nil {
 			metrics.TelegramPollErrors.Inc()
-			r.log.Warn("getUpdates failed, retrying", "err", err)
+			r.log.Warn("getUpdates failed, retrying", "err", ScrubToken(err))
 			select {
 			case <-ctx.Done():
 			case <-time.After(errorBackoff):

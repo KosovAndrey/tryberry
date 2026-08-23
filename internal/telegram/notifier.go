@@ -415,7 +415,7 @@ func (n *Notifier) call(ctx context.Context, method string, payload any) error {
 
 	resp, err := n.client.Do(req)
 	if err != nil {
-		return fmt.Errorf("http do: %w", err)
+		return fmt.Errorf("http do: %w", Scrub(err))
 	}
 	defer resp.Body.Close()
 

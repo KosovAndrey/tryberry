@@ -34,7 +34,7 @@ func InitWithRetry[T any](ctx context.Context, log *slog.Logger, build func() (T
 		}
 		metrics.TelegramConnected.Set(0)
 		log.Warn("telegram init failed (getMe), retrying",
-			"attempt", attempt, "backoff", backoff.String(), "err", err)
+			"attempt", attempt, "backoff", backoff.String(), "err", ScrubToken(err))
 		select {
 		case <-ctx.Done():
 			var zero T
