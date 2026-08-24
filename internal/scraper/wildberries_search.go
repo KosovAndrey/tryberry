@@ -51,6 +51,13 @@ type WildberriesSearchScraper struct {
 	// проходит челлендж/JA3, http.Client — нет), не в IP. На 403 уводим запрос в
 	// прогретый браузер сайдкара (in-page fetch к тому же u-search), как сделано у
 	// Ozon (FAB). Пусто → фолбэка нет, 403 уходит наверх как ErrMarketplaceBlocked.
+	// apiBase — база u-search. Пусто → wbSearchAPIBase (same-origin проксик за
+	// wbaas, требует cookie-токен). Замер 2026-08-24: ПУБЛИЧНЫЙ search.wb.ru
+	// отдаёт ту же выдачу БЕЗ токена и без браузера (200, фильтр xsubject
+	// работает) — при живом egress это снимает с критического пути и токен-пул,
+	// и браузерный сайдкар со стеной wbaas. Переключается WB_SEARCH_API_BASE.
+	apiBase string
+
 	browserURL    string
 	browserClient *http.Client
 	// browserMaxPages — сколько страниц тянуть через сайдкар (навигация-перехват
@@ -92,6 +99,27 @@ func NewWildberriesSearchScraper(base *WildberriesScraper, pool *ProxyPool, toke
 }
 
 var _ SearchScraper = (*WildberriesSearchScraper)(nil)
+
+// SetAPIBase переключает базу u-search (пусто → дефолтный same-origin проксик).
+// Публичный хост (search.wb.ru) токена не требует — см. поле apiBase.
+func (s *WildberriesSearchScraper) SetAPIBase(base string) {
+	s.apiBase = strings.TrimRight(strings.TrimSpace(base), "?&")
+}
+
+// searchAPIBase — действующая база запроса.
+func (s *WildberriesSearchScraper) searchAPIBase() string {
+	if s.apiBase == "" {
+		return wbSearchAPIBase
+	}
+	return s.apiBase
+}
+
+// tokenRequired — нужен ли cookie-токен wbaas. Он нужен ТОЛЬКО same-origin
+// проксику на www.wildberries.ru: публичный search.wb.ru пускает без него, и
+// требовать токен там означало бы падать из-за пустого пула на ровном месте.
+func (s *WildberriesSearchScraper) tokenRequired() bool {
+	return strings.Contains(s.searchAPIBase(), "wildberries.ru")
+}
 
 // SetBrowserSidecar подключает сайдкар wb-search-miner как 403-фолбэк: на 403
 // direct запрос уходит в прогретый браузер (GET /search?query=&sort=&page=).
@@ -203,7 +231,7 @@ func (s *WildberriesSearchScraper) ScrapeSearch(ctx context.Context, rawURL stri
 			body, err = s.fetchViaBrowser(ctx, query, sortMode, page, filters)
 			browserUsed++
 		} else {
-			body, err = s.fetchPage(ctx, buildSearchAPIURL(query, sortMode, page, filters), referer)
+			body, err = s.fetchPage(ctx, buildSearchAPIURL(s.searchAPIBase(), query, sortMode, page, filters), referer)
 			// direct заблокирован (обычно 403 на горячем) → уводим в браузер и
 			// залипаем на нём до конца запроса.
 			if err != nil && s.browserURL != "" && browserUsed < s.browserMaxPages {
@@ -320,18 +348,25 @@ func (s *WildberriesSearchScraper) fetchPage(ctx context.Context, apiURL, refere
 		default:
 		}
 
+		needToken := s.tokenRequired()
 		tok, err := s.tokens.Token(ctx)
 		if err != nil {
-			lastErr = fmt.Errorf("%w: token provider: %v", ErrMarketplaceBlocked, err)
-			s.sleep(ctx, delay)
-			delay = bumpDelay(delay)
-			continue
+			if needToken {
+				lastErr = fmt.Errorf("%w: token provider: %v", ErrMarketplaceBlocked, err)
+				s.sleep(ctx, delay)
+				delay = bumpDelay(delay)
+				continue
+			}
+			tok = SearchToken{Slot: -1} // публичному хосту токен не нужен
 		}
 		if !tok.Valid() {
-			lastErr = fmt.Errorf("%w: пустой wbaas-токен (майнер не наполнил пул)", ErrMarketplaceBlocked)
-			s.sleep(ctx, delay)
-			delay = bumpDelay(delay)
-			continue
+			if needToken {
+				lastErr = fmt.Errorf("%w: пустой wbaas-токен (майнер не наполнил пул)", ErrMarketplaceBlocked)
+				s.sleep(ctx, delay)
+				delay = bumpDelay(delay)
+				continue
+			}
+			tok = SearchToken{Slot: -1}
 		}
 		ua := tok.UserAgent
 		if ua == "" {
@@ -546,7 +581,7 @@ func searchFilterKey(k string) (string, bool) {
 
 // buildSearchAPIURL — URL запроса к u-search v18. Набор параметров —
 // семантически нейтральный минимум, проверенный на живом 200-ответе.
-func buildSearchAPIURL(query, sortMode string, page int, filters url.Values) string {
+func buildSearchAPIURL(base, query, sortMode string, page int, filters url.Values) string {
 	q := url.Values{}
 	q.Set("appType", "1")
 	q.Set("curr", "rub")
@@ -564,7 +599,10 @@ func buildSearchAPIURL(query, sortMode string, page int, filters url.Values) str
 	for k, vs := range filters {
 		q[k] = vs
 	}
-	return wbSearchAPIBase + "?" + q.Encode()
+	if base == "" {
+		base = wbSearchAPIBase
+	}
+	return base + "?" + q.Encode()
 }
 
 func wbProductToItem(p wbSearchProduct, position int) SearchItem {

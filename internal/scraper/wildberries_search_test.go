@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"net/http"
 	"strings"
@@ -142,7 +143,7 @@ func TestNormalizeSearchURL(t *testing.T) {
 }
 
 func TestBuildSearchAPIURL(t *testing.T) {
-	got := buildSearchAPIURL("iphone 16", "popular", 2, nil)
+	got := buildSearchAPIURL("", "iphone 16", "popular", 2, nil)
 	for _, want := range []string{
 		wbSearchAPIBase,
 		"query=iphone+16",
@@ -191,7 +192,7 @@ func TestSearchFiltersPreserved(t *testing.T) {
 		t.Errorf("фильтры после обратного разбора: %v", filters)
 	}
 
-	api := buildSearchAPIURL(query, sortMode, 1, filters)
+	api := buildSearchAPIURL("", query, sortMode, 1, filters)
 	if !strings.Contains(api, "priceU=1343700%3B15000000") || !strings.Contains(api, "xsubject=3274") {
 		t.Errorf("фильтры не ушли в u-search: %q", api)
 	}
@@ -424,5 +425,48 @@ func TestSearchPriceRangeFilteredLocally(t *testing.T) {
 		if len(got.Items) != 2 {
 			t.Errorf("%s: собрано %d, want 2 (границы не применяем)", bad, len(got.Items))
 		}
+	}
+}
+
+// Публичный search.wb.ru токена не требует: пустой пул токенов не должен
+// валить запрос (замер 2026-08-24 — 200 без cookie). На same-origin проксике
+// поведение прежнее: без токена запрос не уходит.
+func TestPublicAPIBaseNeedsNoToken(t *testing.T) {
+	var gotURL, gotCookie string
+	client := &http.Client{Transport: rtFunc(func(r *http.Request) *http.Response {
+		gotURL, gotCookie = r.URL.String(), r.Header.Get("Cookie")
+		return stubResp(http.StatusOK, sampleSearchJSON)
+	})}
+	newScraper := func() *WildberriesSearchScraper {
+		return &WildberriesSearchScraper{
+			WildberriesScraper: NewWildberriesScraper(5),
+			pool:               &ProxyPool{clients: []proxyClient{{label: "direct", client: client}}},
+			tokens:             StaticTokenProvider{}, // пул пуст — токена нет
+			maxPages:           1,
+		}
+	}
+	const publicBase = "https://search.wb.ru/exactmatch/ru/common/v18/search"
+
+	s := newScraper()
+	s.SetAPIBase(publicBase)
+	set, err := s.ScrapeSearch(context.Background(),
+		"https://www.wildberries.ru/catalog/0/search.aspx?search=iphone")
+	if err != nil {
+		t.Fatalf("публичный хост без токена: %v", err)
+	}
+	if len(set.Items) != 2 {
+		t.Errorf("собрано %d товаров, want 2", len(set.Items))
+	}
+	if !strings.HasPrefix(gotURL, publicBase+"?") {
+		t.Errorf("запрос ушёл не на публичную базу: %q", gotURL)
+	}
+	if gotCookie != "" {
+		t.Errorf("на публичный хост уехала cookie: %q", gotCookie)
+	}
+
+	// Без переключения базы — прежнее поведение: пустой токен блокирует запрос.
+	if _, err := newScraper().ScrapeSearch(context.Background(),
+		"https://www.wildberries.ru/catalog/0/search.aspx?search=iphone"); !errors.Is(err, ErrMarketplaceBlocked) {
+		t.Errorf("на same-origin базе без токена ждём ErrMarketplaceBlocked, got %v", err)
 	}
 }

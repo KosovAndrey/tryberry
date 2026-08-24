@@ -294,6 +294,10 @@ services:
       KAFKA_BROKERS: "kafka:29092"
       KAFKA_GROUP_ID: "search-workers"
       SEARCH_TASKS_TOPIC: "search-tasks"
+      # База u-search. Пусто → same-origin проксик www.wildberries.ru/__internal
+      # (за wbaas, нужен cookie-токен). Публичный search.wb.ru отдаёт ту же
+      # выдачу без токена и без браузера — рычаг на случай стены wbaas.
+      WB_SEARCH_API_BASE: "${WB_SEARCH_API_BASE:-}"
       WB_TOKEN_POOL_PREFIX: "wb:search:"
       WB_TOKEN_POOL_SIZE: "5"
       # тот же WB-потолок, что у scraper (карточки в обогащении выдачи)
@@ -351,6 +355,10 @@ services:
       KAFKA_BROKERS: "kafka:29092"
       KAFKA_GROUP_ID: "reseller-workers"
       SEARCH_TASKS_TOPIC: "reseller-tasks"
+      # База u-search. Пусто → same-origin проксик www.wildberries.ru/__internal
+      # (за wbaas, нужен cookie-токен). Публичный search.wb.ru отдаёт ту же
+      # выдачу без токена и без браузера — рычаг на случай стены wbaas.
+      WB_SEARCH_API_BASE: "${WB_SEARCH_API_BASE:-}"
       WB_TOKEN_POOL_PREFIX: "wb:reseller:"
       WB_TOKEN_POOL_SIZE: "5"
       # 403-фолбэк перекуп-дорожки в тот же браузер-сайдкар wb-search-miner.

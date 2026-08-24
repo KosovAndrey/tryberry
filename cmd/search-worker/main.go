@@ -118,6 +118,10 @@ func run(log *slog.Logger) error {
 	// 403-фолбэк WB-поиска в браузер-сайдкар wb-search-miner: wbaas режет горячие
 	// запросы direct (различие в транспорте, не в токене). Пусто → фолбэка нет.
 	// Браузер-страницы дороги (навигация) → по умолчанию 1 (топ-100).
+	// База u-search: пусто → same-origin проксик за wbaas (нужен cookie-токен).
+	// WB_SEARCH_API_BASE=https://search.wb.ru/exactmatch/ru/common/v18/search —
+	// публичный хост, токен и браузер не нужны (замер 2026-08-24).
+	wbSearch.SetAPIBase(getEnv("WB_SEARCH_API_BASE", ""))
 	wbSearch.SetBrowserSidecar(getEnv("WB_SEARCH_BROWSER_URL", ""), getEnvInt("WB_SEARCH_BROWSER_MAX_PAGES", 1))
 	// WB-витрина продавца (/seller/{id}): открытый каталог-API, без токена/прокси.
 	// Тот же товарный базовый скрейпер, что у поиска. SELLER_MAX_PAGES = CAP×100.
