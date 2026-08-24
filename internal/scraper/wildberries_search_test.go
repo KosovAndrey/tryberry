@@ -375,3 +375,54 @@ func TestProxyPoolEmptyIsDirect(t *testing.T) {
 		t.Errorf("label = %q, want direct", pool.next().label)
 	}
 }
+
+// Ценовой фильтр досеивается на нашей стороне: u-search priceU игнорирует
+// (замер 2026-08-24), поэтому товар вне диапазона обязан отсеяться у нас, иначе
+// подписка «от 13 437 ₽» снова притащит наклейки по 700 ₽.
+func TestSearchPriceRangeFilteredLocally(t *testing.T) {
+	client := &http.Client{Transport: rtFunc(func(*http.Request) *http.Response {
+		return stubResp(http.StatusOK, sampleSearchJSON)
+	})}
+	newScraper := func() *WildberriesSearchScraper {
+		return &WildberriesSearchScraper{
+			WildberriesScraper: NewWildberriesScraper(5),
+			pool:               &ProxyPool{clients: []proxyClient{{label: "direct", client: client}}},
+			tokens:             StaticTokenProvider{T: SearchToken{Cookie: "x_wbaas_token=abc", Slot: -1}},
+			maxPages:           1,
+		}
+	}
+	// В фикстуре два товара с ценой: 66 735 ₽ и 54 595 ₽ (в копейках).
+	set, err := newScraper().ScrapeSearch(context.Background(),
+		"https://www.wildberries.ru/catalog/0/search.aspx?search=iphone&priceU=6000000;7000000")
+	if err != nil {
+		t.Fatalf("ScrapeSearch: %v", err)
+	}
+	if len(set.Items) != 1 || set.Items[0].PriceKopecks != 6673500 {
+		t.Fatalf("после фильтра цены: %+v", set.Items)
+	}
+	if set.Items[0].Position != 1 {
+		t.Errorf("позиция после отсева = %d, want 1 (нумерация без дыр)", set.Items[0].Position)
+	}
+
+	// Без фильтра — оба товара на месте (фильтр не должен «протекать»).
+	all, err := newScraper().ScrapeSearch(context.Background(),
+		"https://www.wildberries.ru/catalog/0/search.aspx?search=iphone")
+	if err != nil {
+		t.Fatalf("ScrapeSearch без фильтра: %v", err)
+	}
+	if len(all.Items) != 2 {
+		t.Errorf("без фильтра собрано %d товаров, want 2", len(all.Items))
+	}
+
+	// Битые/перепутанные границы выдачу в ноль не режут.
+	for _, bad := range []string{"priceU=abc", "priceU=15000000;1343700", "priceU=1343700"} {
+		got, err := newScraper().ScrapeSearch(context.Background(),
+			"https://www.wildberries.ru/catalog/0/search.aspx?search=iphone&"+bad)
+		if err != nil {
+			t.Fatalf("ScrapeSearch %s: %v", bad, err)
+		}
+		if len(got.Items) != 2 {
+			t.Errorf("%s: собрано %d, want 2 (границы не применяем)", bad, len(got.Items))
+		}
+	}
+}

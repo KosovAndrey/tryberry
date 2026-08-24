@@ -179,6 +179,7 @@ func (s *WildberriesSearchScraper) ScrapeSearch(ctx context.Context, rawURL stri
 		return nil, err
 	}
 	referer := canonicalSearchURL(query, sortMode, filters)
+	priceRange := parseWBPriceRange(filters.Get("priceU"))
 
 	out := &SearchResultSet{}
 	position := 0
@@ -237,11 +238,20 @@ func (s *WildberriesSearchScraper) ScrapeSearch(ctx context.Context, rawURL stri
 		}
 
 		for _, p := range parsed.Products {
-			position++
-			item := wbProductToItem(p, position)
+			item := wbProductToItem(p, position+1)
 			if item.PriceKopecks == 0 {
 				continue
 			}
+			// Ценовой фильтр досеиваем У СЕБЯ: замером 2026-08-24 подтверждено, что
+			// u-search параметр priceU ИГНОРИРУЕТ (786 результатов и max 1 295 100 ₽
+			// при priceU=1343700;15000000 — ровно как без фильтра), тогда как
+			// xsubject честно сужает (786 → 404). Наверх priceU всё равно шлём: если
+			// WB его починит, до нас доедет уже отфильтрованная страница.
+			if !priceRange.contains(item.PriceKopecks) {
+				continue
+			}
+			position++
+			item.Position = position
 			out.Items = append(out.Items, item)
 		}
 
@@ -251,6 +261,41 @@ func (s *WildberriesSearchScraper) ScrapeSearch(ctx context.Context, rawURL stri
 	}
 
 	return out, nil
+}
+
+// wbPriceRange — ценовой диапазон из priceU=<мин>;<макс> (обе границы в
+// КОПЕЙКАХ, как и цены в ответе u-search). Нулевая граница — «не задана».
+type wbPriceRange struct{ min, max int64 }
+
+// contains — попадает ли цена в диапазон. Пустой диапазон пропускает всё.
+func (r wbPriceRange) contains(kopecks int64) bool {
+	if r.min > 0 && kopecks < r.min {
+		return false
+	}
+	if r.max > 0 && kopecks > r.max {
+		return false
+	}
+	return true
+}
+
+// parseWBPriceRange разбирает «1343700;15000000». Мусор → пустой диапазон
+// (фильтруем как раньше, ничего не теряя).
+func parseWBPriceRange(v string) wbPriceRange {
+	lo, hi, ok := strings.Cut(strings.TrimSpace(v), ";")
+	if !ok {
+		return wbPriceRange{}
+	}
+	var r wbPriceRange
+	if n, err := strconv.ParseInt(strings.TrimSpace(lo), 10, 64); err == nil && n > 0 {
+		r.min = n
+	}
+	if n, err := strconv.ParseInt(strings.TrimSpace(hi), 10, 64); err == nil && n > 0 {
+		r.max = n
+	}
+	if r.min > 0 && r.max > 0 && r.min > r.max {
+		return wbPriceRange{} // границы перепутаны — не режем выдачу в ноль
+	}
+	return r
 }
 
 // ── HTTP с токеном, ротацией прокси и backoff ────────────────────────────────
