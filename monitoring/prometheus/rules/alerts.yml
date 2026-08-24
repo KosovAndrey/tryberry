@@ -454,8 +454,8 @@ groups:
         labels:
           severity: critical
         annotations:
-          summary: "OOM-killer сработал на хосте"
-          description: "Ядро убило процесс из-за нехватки памяти за последние 10 мин. Найти жертву: sudo dmesg -T | grep -i 'killed process' | tail. Посмотреть, кто разросся: docker stats --no-stream."
+          summary: "OOM-killer сработал"
+          description: "Ядро убило процесс из-за нехватки памяти за последние 10 мин. ПЕРВЫМ ДЕЛОМ отличить контейнерный OOM от хостового: sudo dmesg -T | grep -iE 'oom-kill|killed process' | tail. Есть constraint=CONSTRAINT_MEMCG и 'Memory cgroup out of memory' — процесс упёрся в mem_limit СВОЕГО контейнера, хост цел, защита сработала как задумано; чей это контейнер — сопоставить id из oom_memcg со списком docker ps --no-trunc -q; повторяется у одного и того же — поднять ему потолок или искать утечку. Нет CONSTRAINT_MEMCG — глобальная нехватка на хосте, это авария (20-08 рост chrome уронил DNS докера и каскадом всё остальное). Кто разросся: docker stats --no-stream."
 
       # Свободной памяти мало. 15% от 15 ГиБ ≈ 2.3 ГиБ — на таком остатке
       # браузерный сайдкар доедает запас за минуты.
