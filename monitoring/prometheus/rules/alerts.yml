@@ -185,14 +185,23 @@ groups:
       # дедлайна и держало лок дорожки), при этом healthy_lanes=1 и метрики
       # зелёные — ровно тот же отказ, что у ozon-miner 29-07. Возраст последнего
       # успеха не врёт: он растёт, даже когда дорожка «здорова».
+      # Условие «к сайдкару обращались» обязательно: он по замыслу простаивает,
+      # когда основной путь работает, а с 24-08 (WB_SEARCH_API_BASE на публичный
+      # search.wb.ru) не зовётся вовсе. Без этой добавки правило звенело каждые
+      # 4 часа про исправную тишину — а вечный алерт учит игнорировать алерты.
+      # Стену как таковую ловит WbSearchMinerNoHealthyLanes, здесь — именно
+      # «звали и не смогли».
       - alert: WbSearchMinerStale
-        expr: wb_search_miner_last_success_age_seconds > 3600
+        expr: |
+          wb_search_miner_last_success_age_seconds > 3600
+            and on()
+          (sum(rate(tryberrybot_wb_search_fetch_total{transport="browser"}[1h])) > 0)
         for: 5m
         labels:
           severity: warning
         annotations:
           summary: "WB-search-сайдкар: нет успешных запросов час"
-          description: "wb-search-miner отвечает, но ни одного успешного запроса/прогрева больше часа (дорожки могут числиться healthy). Порог высокий намеренно: сайдкар зовётся только как фолбэк на 403 у горячих запросов и в тишине может простаивать законно. Смотреть wb_search_miner_stuck_lanes и логи pt_wb_search_miner; лечение — docker compose up -d --force-recreate wb-search-miner."
+          description: "wb-search-miner ЗВАЛИ за последний час, и ни один запрос/прогрев не удался (дорожки могут числиться healthy). Значит фолбэк на 403 не работает — горячие WB-запросы сейчас падают. Смотреть wb_search_miner_stuck_lanes и логи pt_wb_search_miner; лечение — docker compose up -d --force-recreate wb-search-miner. Простой без обращений алертом больше НЕ считается (правило требует ненулевой rate браузерных запросов)."
 
       # Дорожка держит лок дольше порога = подвисший драйвер. Вотчдог снимает с
       # неё healthy и пересоздаёт браузер сам; алерт нужен, если это повторяется.
