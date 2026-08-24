@@ -142,7 +142,7 @@ func TestNormalizeSearchURL(t *testing.T) {
 }
 
 func TestBuildSearchAPIURL(t *testing.T) {
-	got := buildSearchAPIURL("iphone 16", "popular", 2)
+	got := buildSearchAPIURL("iphone 16", "popular", 2, nil)
 	for _, want := range []string{
 		wbSearchAPIBase,
 		"query=iphone+16",
@@ -154,6 +154,109 @@ func TestBuildSearchAPIURL(t *testing.T) {
 		if !strings.Contains(got, want) {
 			t.Errorf("API URL %q не содержит %q", got, want)
 		}
+	}
+}
+
+// Ссылка с фильтрами WB (цена + предмет) — фильтры должны дойти и до ключа
+// дедупа/кнопки «Открыть выдачу», и до запроса в u-search. Регрессия: без них
+// «rtx 5080 от 13 437 ₽, предмет "видеокарты"» вырождался в голое «rtx 5080»
+// и приносил наклейки с кулерами.
+func TestSearchFiltersPreserved(t *testing.T) {
+	s := &WildberriesSearchScraper{}
+	raw := "https://www.wildberries.ru/catalog/0/search.aspx?page=1&sort=priceup&search=rtx+5080" +
+		"&priceU=1343700%3B15000000&xsubject=3274&meta_charcs=false"
+
+	norm, err := s.NormalizeSearchURL(raw)
+	if err != nil {
+		t.Fatalf("NormalizeSearchURL: %v", err)
+	}
+	for _, want := range []string{"search=rtx+5080", "sort=priceup", "priceU=1343700;15000000", "xsubject=3274"} {
+		if !strings.Contains(norm, want) {
+			t.Errorf("нормализованный URL %q не содержит %q", norm, want)
+		}
+	}
+	if strings.Contains(norm, "meta_charcs") || strings.Contains(norm, "page=") {
+		t.Errorf("в ключ дедупа попал не-фильтр: %q", norm)
+	}
+
+	// Нормализованный URL сам должен разбираться обратно (его же читает воркер).
+	query, sortMode, filters, err := s.parseSearchParams(norm)
+	if err != nil {
+		t.Fatalf("парсинг нормализованного URL: %v", err)
+	}
+	if query != "rtx 5080" || sortMode != "priceup" {
+		t.Errorf("query=%q sort=%q, want rtx 5080/priceup", query, sortMode)
+	}
+	if filters.Get("priceU") != "1343700;15000000" || filters.Get("xsubject") != "3274" {
+		t.Errorf("фильтры после обратного разбора: %v", filters)
+	}
+
+	api := buildSearchAPIURL(query, sortMode, 1, filters)
+	if !strings.Contains(api, "priceU=1343700%3B15000000") || !strings.Contains(api, "xsubject=3274") {
+		t.Errorf("фильтры не ушли в u-search: %q", api)
+	}
+
+	// Порядок параметров в ссылке не должен менять ключ дедупа.
+	shuffled := "https://www.wildberries.ru/catalog/0/search.aspx?xsubject=3274&search=rtx+5080" +
+		"&priceU=1343700;15000000&sort=priceup"
+	if norm2, err := s.NormalizeSearchURL(shuffled); err != nil || norm2 != norm {
+		t.Errorf("ключ зависит от порядка параметров:\n%q\n%q (err=%v)", norm, norm2, err)
+	}
+
+	// Разные фильтры → разные подписки; без фильтров → отдельный ключ.
+	bare, _ := s.NormalizeSearchURL("https://www.wildberries.ru/catalog/0/search.aspx?search=rtx+5080&sort=priceup")
+	if bare == norm {
+		t.Error("выдача с фильтрами и без схлопнулись в один ключ")
+	}
+	other, _ := s.NormalizeSearchURL("https://www.wildberries.ru/catalog/0/search.aspx?search=rtx+5080&sort=priceup&xsubject=515")
+	if other == norm {
+		t.Error("разные значения xsubject дали один ключ")
+	}
+}
+
+// Фасеты f<цифры> (бренд/характеристика) — тоже фильтры, значения внутри «;»
+// сортируются, чтобы порядок галочек не плодил подписки.
+func TestSearchFacetFiltersNormalized(t *testing.T) {
+	s := &WildberriesSearchScraper{}
+	a, err := s.NormalizeSearchURL("https://www.wildberries.ru/catalog/0/search.aspx?search=кофе&f5023=b;a&fbrand=6049")
+	if err != nil {
+		t.Fatalf("NormalizeSearchURL: %v", err)
+	}
+	b, _ := s.NormalizeSearchURL("https://www.wildberries.ru/catalog/0/search.aspx?search=кофе&fbrand=6049&f5023=a;b")
+	if a != b {
+		t.Errorf("порядок значений фасета изменил ключ:\n%q\n%q", a, b)
+	}
+	if !strings.Contains(a, "f5023=a;b") || !strings.Contains(a, "fbrand=6049") {
+		t.Errorf("фасеты потеряны: %q", a)
+	}
+}
+
+// На 403 direct запрос уходит в сайдкар — фильтры должны уехать с ним, иначе
+// браузер-дорожка принесёт голую выдачу.
+func TestBrowserFallbackCarriesFilters(t *testing.T) {
+	directClient := &http.Client{Transport: rtFunc(func(*http.Request) *http.Response {
+		return stubResp(http.StatusForbidden, "blocked")
+	})}
+	var gotFilters string
+	sidecarClient := &http.Client{Transport: rtFunc(func(r *http.Request) *http.Response {
+		gotFilters = r.URL.Query().Get("filters")
+		return stubResp(http.StatusOK, sampleSearchJSON)
+	})}
+	s := &WildberriesSearchScraper{
+		WildberriesScraper: NewWildberriesScraper(5),
+		pool:               &ProxyPool{clients: []proxyClient{{label: "direct", client: directClient}}},
+		tokens:             StaticTokenProvider{T: SearchToken{Cookie: "x_wbaas_token=abc", Slot: -1}},
+		maxPages:           1,
+		browserURL:         "http://wb-search-miner:8081",
+		browserClient:      sidecarClient,
+		browserMaxPages:    1,
+	}
+	if _, err := s.ScrapeSearch(context.Background(),
+		"https://www.wildberries.ru/catalog/0/search.aspx?search=rtx+5080&priceU=1343700;15000000&xsubject=3274"); err != nil {
+		t.Fatalf("ScrapeSearch: %v", err)
+	}
+	if gotFilters != "priceU=1343700;15000000&xsubject=3274" {
+		t.Errorf("сайдкар получил filters=%q", gotFilters)
 	}
 }
 

@@ -157,15 +157,40 @@ def _is_dead(exc) -> bool:
 def _first_line(exc) -> str:
     return (str(exc).splitlines() or [""])[0]
 
-def _search_page_url(query: str, sort: str, page: int) -> str:
-    """URL страницы поиска для навигации (фронт сам дёрнет u-search). sort/page —
-    штатные query-параметры каталога WB."""
+# Ключ фильтра выдачи WB: именованный (priceU, xsubject, fbrand…) или числовой
+# фасет f5023. Белый список — чтобы через параметр filters нельзя было подставить
+# в навигацию произвольный кусок URL.
+_FILTER_KEY_RE = re.compile(r"^(?:priceU|dprice|xsubject|subject|fbrand|fsupplier|"
+                            r"fcolor|fdlvr|fkind|frating|foriginal|f\d+)$")
+# Значение фильтра: id-шники, диапазоны цен, списки через «;».
+_FILTER_VAL_RE = re.compile(r"^[0-9A-Za-z;,._-]{1,200}$")
+
+
+def _sanitize_filters(raw: str) -> str:
+    """Отфильтровать кусок query WB («priceU=1;2&xsubject=3») до известных пар."""
+    out = []
+    for pair in (raw or "").split("&"):
+        if not pair or "=" not in pair:
+            continue
+        k, v = pair.split("=", 1)
+        v = unquote(v)
+        if _FILTER_KEY_RE.match(k) and _FILTER_VAL_RE.match(v):
+            out.append(k + "=" + quote(v, safe=";,"))
+    return "&".join(out)
+
+
+def _search_page_url(query: str, sort: str, page: int, filters: str = "") -> str:
+    """URL страницы поиска для навигации (фронт сам дёрнет u-search). sort/page и
+    фильтры (цена/предмет/бренд) — штатные query-параметры каталога WB: без них
+    фронт запросит у u-search ГОЛУЮ выдачу, а не то, что выбрал пользователь."""
     url = SEARCH_PAGE_URL.format(query=quote(query))
     extra = []
     if sort and sort != "popular":
         extra.append("sort=" + quote(sort))
     if page and page > 1:
         extra.append("page=" + str(page))
+    if filters:
+        extra.append(filters)
     if extra:
         url += "&" + "&".join(extra)
     return url
@@ -385,11 +410,11 @@ class Lane:
         except Exception as e:  # noqa: BLE001
             log.warning("диагностика упала: %s", _first_line(e))
 
-    async def fetch_search(self, query: str, sort: str, page: int):
+    async def fetch_search(self, query: str, sort: str, page: int, filters: str = ""):
         """Навигируем прогретый браузер на страницу запроса и ПЕРЕХВАТЫВАЕМ ответ
         u-search, который фронт делает сам (нативно, со всеми нужными заголовками —
         ручной fetch wbaas отвергает 403). Возвращает (status, body_bytes)."""
-        nav_url = _search_page_url(query, sort, page)
+        nav_url = _search_page_url(query, sort, page, filters)
         async with self.lock:
             self._lock_since = time.monotonic()
             t0 = time.monotonic()
@@ -599,10 +624,11 @@ async def handle_search(request: web.Request) -> web.Response:
         page = max(1, int(request.query.get("page") or "1"))
     except ValueError:
         page = 1
+    filters = _sanitize_filters(request.query.get("filters") or "")
     lane = pool.pick()
     if lane is None:
         return web.Response(status=502, text="no healthy lanes")
-    status, body = await lane.fetch_search(query, sort, page)
+    status, body = await lane.fetch_search(query, sort, page, filters)
     if status == 0:
         return web.Response(status=502, text="lane fetch failed")
     return web.Response(status=status, body=body, content_type="application/json",

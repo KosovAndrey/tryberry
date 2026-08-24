@@ -7,6 +7,8 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"regexp"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -123,25 +125,60 @@ func (s *WildberriesSearchScraper) MatchesSearch(rawURL string) bool {
 	return strings.TrimSpace(u.Query().Get("search")) != ""
 }
 
-// NormalizeSearchURL — канонический ключ дедупликации (query + sort).
+// NormalizeSearchURL — канонический ключ дедупликации (query + sort + фильтры).
+// Он же уходит пользователю кнопкой «Открыть выдачу», поэтому остаётся рабочей
+// ссылкой WB: фильтры пишем в родном виде (priceU=1343700;15000000), без
+// %3B-экранирования точки с запятой.
 func (s *WildberriesSearchScraper) NormalizeSearchURL(rawURL string) (string, error) {
-	query, sortMode, err := s.parseSearchParams(rawURL)
+	query, sortMode, filters, err := s.parseSearchParams(rawURL)
 	if err != nil {
 		return "", err
 	}
+	return canonicalSearchURL(query, sortMode, filters), nil
+}
+
+// canonicalSearchURL — стабильная ссылка на выдачу: search+sort, затем фильтры
+// в порядке ключей (и значений внутри ключа), чтобы один и тот же набор давал
+// один ключ независимо от порядка в исходной ссылке.
+func canonicalSearchURL(query, sortMode string, filters url.Values) string {
 	canon := url.Values{}
 	canon.Set("search", strings.ToLower(query))
 	canon.Set("sort", sortMode)
-	return "https://www.wildberries.ru/catalog/0/search.aspx?" + canon.Encode(), nil
+	out := "https://www.wildberries.ru/catalog/0/search.aspx?" + canon.Encode()
+	if f := encodeFilterQuery(filters); f != "" {
+		out += "&" + f
+	}
+	return out
+}
+
+// encodeFilterQuery — фильтры как готовый кусок query-строки WB
+// («priceU=1343700;15000000&xsubject=3274»), в том же каноническом порядке, что
+// и в ссылке. Пусто, если фильтров нет.
+func encodeFilterQuery(filters url.Values) string {
+	keys := make([]string, 0, len(filters))
+	for k := range filters {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	var parts []string
+	for _, k := range keys {
+		vs := append([]string(nil), filters[k]...)
+		sort.Strings(vs)
+		for _, v := range vs {
+			// «;» оставляем литеральной — так фильтр выглядит в ссылке WB.
+			parts = append(parts, k+"="+strings.ReplaceAll(url.QueryEscape(v), "%3B", ";"))
+		}
+	}
+	return strings.Join(parts, "&")
 }
 
 // ScrapeSearch — постранично собрать выдачу.
 func (s *WildberriesSearchScraper) ScrapeSearch(ctx context.Context, rawURL string) (*SearchResultSet, error) {
-	query, sortMode, err := s.parseSearchParams(rawURL)
+	query, sortMode, filters, err := s.parseSearchParams(rawURL)
 	if err != nil {
 		return nil, err
 	}
-	referer := "https://www.wildberries.ru/catalog/0/search.aspx?search=" + url.QueryEscape(query)
+	referer := canonicalSearchURL(query, sortMode, filters)
 
 	out := &SearchResultSet{}
 	position := 0
@@ -162,14 +199,14 @@ func (s *WildberriesSearchScraper) ScrapeSearch(ctx context.Context, rawURL stri
 			if browserUsed >= s.browserMaxPages {
 				break // лимит браузер-страниц исчерпан — партиал (топ-N) достаточно
 			}
-			body, err = s.fetchViaBrowser(ctx, query, sortMode, page)
+			body, err = s.fetchViaBrowser(ctx, query, sortMode, page, filters)
 			browserUsed++
 		} else {
-			body, err = s.fetchPage(ctx, buildSearchAPIURL(query, sortMode, page), referer)
+			body, err = s.fetchPage(ctx, buildSearchAPIURL(query, sortMode, page, filters), referer)
 			// direct заблокирован (обычно 403 на горячем) → уводим в браузер и
 			// залипаем на нём до конца запроса.
 			if err != nil && s.browserURL != "" && browserUsed < s.browserMaxPages {
-				if bbody, berr := s.fetchViaBrowser(ctx, query, sortMode, page); berr == nil {
+				if bbody, berr := s.fetchViaBrowser(ctx, query, sortMode, page, filters); berr == nil {
 					body, err = bbody, nil
 					preferBrowser = true
 					browserUsed++
@@ -318,7 +355,7 @@ func (s *WildberriesSearchScraper) fetchPage(ctx context.Context, apiURL, refere
 // браузер на страницу запроса и ПЕРЕХВАТЫВАЕТ нативный ответ u-search фронта
 // (ручной fetch wbaas отвергает 403) — отдаёт СЫРОЙ JSON той же формы
 // (wbSearchResponse), зеркаля upstream-статус. Токен тут не нужен — cookie в браузере.
-func (s *WildberriesSearchScraper) fetchViaBrowser(ctx context.Context, query, sortMode string, page int) ([]byte, error) {
+func (s *WildberriesSearchScraper) fetchViaBrowser(ctx context.Context, query, sortMode string, page int, filters url.Values) ([]byte, error) {
 	if s.browserURL == "" || s.browserClient == nil {
 		return nil, fmt.Errorf("%w: browser sidecar not configured", ErrMarketplaceBlocked)
 	}
@@ -326,6 +363,11 @@ func (s *WildberriesSearchScraper) fetchViaBrowser(ctx context.Context, query, s
 	q.Set("query", query)
 	q.Set("sort", sortMode)
 	q.Set("page", strconv.Itoa(page))
+	// Фильтры отдаём сайдкару одной строкой (готовый кусок query WB): он дописывает
+	// её в URL страницы навигации, чтобы фронт запросил у u-search ту же выдачу.
+	if f := encodeFilterQuery(filters); f != "" {
+		q.Set("filters", f)
+	}
 	api := s.browserURL + "/search?" + q.Encode()
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, api, nil)
@@ -386,27 +428,80 @@ func bumpDelay(d time.Duration) time.Duration {
 
 // ── Парсинг ──────────────────────────────────────────────────────────────────
 
-func (s *WildberriesSearchScraper) parseSearchParams(rawURL string) (query, sortMode string, err error) {
+// parseSearchParams — текст запроса, сортировка и ФИЛЬТРЫ выдачи из ссылки.
+// Фильтры (цена/предмет/бренд) сужают выдачу так же, как у витрины продавца:
+// потеряв их, мы следим не за тем, что выбрал пользователь (ссылка «rtx 5080
+// дороже 13 437 ₽, предмет "видеокарты"» без них превращается в голое «rtx 5080»
+// и приносит наклейки с кулерами). Поэтому парсим их и прокидываем и в API,
+// и в ключ дедупа.
+func (s *WildberriesSearchScraper) parseSearchParams(rawURL string) (query, sortMode string, filters url.Values, err error) {
 	u, err := url.Parse(rawURL)
 	if err != nil {
-		return "", "", fmt.Errorf("%w: %v", ErrInvalidURL, err)
+		return "", "", nil, fmt.Errorf("%w: %v", ErrInvalidURL, err)
 	}
-	q := u.Query()
+	// RawQuery разбираем вручную: url.Query() с Go 1.17 отбрасывает пары с «;»,
+	// а фильтры WB именно такие (priceU=1343700;15000000, f5023=a;b;c).
+	q := parseRawQuery(u.RawQuery)
 	query = strings.TrimSpace(q.Get("search"))
 	if query == "" {
-		return "", "", fmt.Errorf("%w: no search query in URL", ErrInvalidURL)
+		return "", "", nil, fmt.Errorf("%w: no search query in URL", ErrInvalidURL)
 	}
 	query = strings.Join(strings.Fields(query), " ")
 	sortMode = strings.TrimSpace(strings.ToLower(q.Get("sort")))
 	if sortMode == "" {
 		sortMode = "popular"
 	}
-	return query, sortMode, nil
+	filters = url.Values{}
+	for k, vs := range q {
+		canon, ok := searchFilterKey(k)
+		if !ok {
+			continue
+		}
+		for _, v := range vs {
+			if v = strings.TrimSpace(v); v != "" {
+				filters.Add(canon, sortSemicolonValues(v))
+			}
+		}
+	}
+	return query, sortMode, filters, nil
+}
+
+// wbSearchFacetRe — числовой фасет WB (f5023=..., f204557=...): предмет/бренд/
+// цвет/характеристика. Именованные фильтры — в wbSearchFilterNames.
+var wbSearchFacetRe = regexp.MustCompile(`^f\d+$`)
+
+// wbSearchFilterNames — именованные фильтры выдачи WB в КАНОНИЧЕСКОМ написании
+// (u-search чувствителен к регистру: priceU, не priceu). Ключ карты — нижний
+// регистр, значение — как слать в API. Белый список, а не «всё кроме трекинга»:
+// трекинг-параметры у WB бесконечны, фильтры наперечёт.
+var wbSearchFilterNames = map[string]string{
+	"priceu":    "priceU",
+	"dprice":    "dprice",
+	"xsubject":  "xsubject",
+	"subject":   "subject",
+	"fbrand":    "fbrand",
+	"fsupplier": "fsupplier",
+	"fcolor":    "fcolor",
+	"fdlvr":     "fdlvr",
+	"fkind":     "fkind",
+	"frating":   "frating",
+	"foriginal": "foriginal",
+}
+
+// searchFilterKey — фильтр ли это выдачи, и как он пишется в API.
+func searchFilterKey(k string) (string, bool) {
+	if canon, ok := wbSearchFilterNames[strings.ToLower(strings.TrimSpace(k))]; ok {
+		return canon, true
+	}
+	if wbSearchFacetRe.MatchString(k) {
+		return k, true
+	}
+	return "", false
 }
 
 // buildSearchAPIURL — URL запроса к u-search v18. Набор параметров —
 // семантически нейтральный минимум, проверенный на живом 200-ответе.
-func buildSearchAPIURL(query, sortMode string, page int) string {
+func buildSearchAPIURL(query, sortMode string, page int, filters url.Values) string {
 	q := url.Values{}
 	q.Set("appType", "1")
 	q.Set("curr", "rub")
@@ -420,6 +515,10 @@ func buildSearchAPIURL(query, sortMode string, page int) string {
 	q.Set("sort", sortMode)
 	q.Set("spp", "30")
 	q.Set("suppressSpellcheck", "false")
+	// Фильтры из ссылки — последними: они и есть выбор пользователя.
+	for k, vs := range filters {
+		q[k] = vs
+	}
 	return wbSearchAPIBase + "?" + q.Encode()
 }
 

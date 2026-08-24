@@ -154,3 +154,16 @@ func TestQueryTextFromNormalized(t *testing.T) {
 		}
 	}
 }
+
+// Ярлык подписки различает выдачу с фильтрами и без — иначе в списке подписок
+// «rtx 5080» с выбранной ценой/предметом неотличим от голого запроса.
+func TestQueryTextFromNormalizedFilters(t *testing.T) {
+	bare := QueryTextFromNormalized("https://www.wildberries.ru/catalog/0/search.aspx?search=rtx+5080&sort=priceup")
+	if bare != "rtx 5080" {
+		t.Errorf("голый запрос: %q, want %q", bare, "rtx 5080")
+	}
+	withF := QueryTextFromNormalized("https://www.wildberries.ru/catalog/0/search.aspx?search=rtx+5080&sort=priceup&priceU=1343700;15000000&xsubject=3274")
+	if withF != "rtx 5080 · с фильтрами" {
+		t.Errorf("запрос с фильтрами: %q", withF)
+	}
+}

@@ -129,6 +129,11 @@ func QueryTextFromNormalized(normalized string) string {
 		q := u.Query()
 		for _, key := range []string{"search", "text", "SearchText"} {
 			if v := strings.TrimSpace(q.Get(key)); v != "" {
+				// Пометка про фильтры: иначе «rtx 5080» с выбранной ценой/предметом
+				// и голое «rtx 5080» выглядят в списке подписок одинаково.
+				if SearchHasSiteFilter(normalized) {
+					return v + " · с фильтрами"
+				}
 				return v
 			}
 		}
