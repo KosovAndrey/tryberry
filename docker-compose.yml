@@ -298,6 +298,9 @@ services:
       # (за wbaas, нужен cookie-токен). Публичный search.wb.ru отдаёт ту же
       # выдачу без токена и без браузера — рычаг на случай стены wbaas.
       WB_SEARCH_API_BASE: "${WB_SEARCH_API_BASE:-}"
+      # Прокси HTTP-клиента WB/Ali-поиска (у перекуп-дорожки свой ключ ниже).
+      # Пусто → direct. http://xray:8888 — рычаг, когда WB режет IP хоста.
+      SEARCH_PROXY_URLS: "${SEARCH_PROXY_URLS:-}"
       WB_TOKEN_POOL_PREFIX: "wb:search:"
       WB_TOKEN_POOL_SIZE: "5"
       # тот же WB-потолок, что у scraper (карточки в обогащении выдачи)
