@@ -41,6 +41,13 @@ func TestSearchHasSiteFilter(t *testing.T) {
 		"https://www.wildberries.ru/catalog/0/search.aspx?search=футболка&f204557=15000704&page=1&sort=popular": true,
 		"https://www.wildberries.ru/catalog/0/search.aspx?search=наушники&fbrand=123":                           true,
 		"https://www.ozon.ru/search/?text=наушники&brand=apple":                                                 true,
+		"https://www.ozon.ru/search/?text=rtx+5080&currency_price=13437.000%3B150000.000":                       true,
+		"https://www.ozon.ru/search/?text=наушники&seller=12345":                                                true,
+		// Ozon: фасет по характеристике — ключ параметра сам числовой id.
+		"https://www.ozon.ru/search/?text=наушники&8322=8322_1": true,
+		// YM: цена и конкретный магазин — тоже фильтры.
+		"https://market.yandex.ru/search?text=наушники&pricefrom=1000&priceto=5000": true,
+		"https://market.yandex.ru/search?text=наушники&fesh=431782":                 true,
 		// Ozon: выбран бренд (второй slug-сегмент под /category/) — фильтр есть.
 		"https://www.ozon.ru/category/aksessuary-7697/calvin-klein-72378013/?text=кепка": true,
 		// AliExpress: фасеты в pvid (размер/цвет) и бренд в brandValueIds — фильтр есть.

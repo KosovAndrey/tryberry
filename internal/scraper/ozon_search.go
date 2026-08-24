@@ -59,24 +59,80 @@ func (s *OzonSearchScraper) MatchesSearch(rawURL string) bool {
 	return strings.Contains(u.Path, "/search") || strings.TrimSpace(u.Query().Get("text")) != ""
 }
 
-// NormalizeSearchURL — канонический ключ дедупликации: text (+ опц. sorting).
-// Без text → ErrInvalidURL.
+// NormalizeSearchURL — канонический ключ дедупликации: text + sorting + ФИЛЬТРЫ
+// выдачи. Без text → ErrInvalidURL.
+//
+// Фильтры (цена, бренд, продавец, характеристики) сужают выдачу: потеряв их, мы
+// следим не за тем, что выбрал пользователь. Ключ = ссылка «Открыть выдачу»,
+// поэтому остаётся рабочим URL Ozon.
 func (s *OzonSearchScraper) NormalizeSearchURL(rawURL string) (string, error) {
 	u, err := url.Parse(rawURL)
 	if err != nil {
 		return "", fmt.Errorf("%w: %v", ErrInvalidURL, err)
 	}
-	text := strings.TrimSpace(u.Query().Get("text"))
-	if text == "" {
-		return "", fmt.Errorf("%w: no text query in ozon search URL", ErrInvalidURL)
+	text, params, err := parseOzonSearchParams(u)
+	if err != nil {
+		return "", err
 	}
-	text = strings.Join(strings.Fields(strings.ToLower(text)), " ")
-	canon := url.Values{}
-	canon.Set("text", text)
-	if sort := strings.TrimSpace(u.Query().Get("sorting")); sort != "" {
-		canon.Set("sorting", sort)
+	canon := url.Values{"text": {text}}
+	for k, vs := range params {
+		canon[k] = vs
 	}
 	return "https://www.ozon.ru/search/?" + canon.Encode(), nil
+}
+
+// parseOzonSearchParams — текст запроса (нормализованный) и значимые параметры
+// выдачи из ссылки Ozon. Значения уже декодированы.
+//
+// Здесь, в отличие от WB, работает ЧЁРНЫЙ список, а не белый: фасеты Ozon имеют
+// динамические имена (числовые id характеристик, напр. «8322=...»), перечислить их
+// белым списком нельзя — а именно тихая потеря фильтра и есть баг, который мы
+// чиним. Цена ошибки несимметрична: лишний параметр в ключе — это дубль подписки
+// (лишний скрейп), потерянный фильтр — мусор в уведомлениях. Поэтому выкидываем
+// только заведомый шум: пагинацию, токены сессии и трекинг.
+func parseOzonSearchParams(u *url.URL) (string, url.Values, error) {
+	// RawQuery парсим вручную: url.Query() отбрасывает пары с «;», а цена у Ozon
+	// именно такая (currency_price=13437.000;150000.000).
+	q := parseRawQuery(u.RawQuery)
+	text := strings.TrimSpace(q.Get("text"))
+	if text == "" {
+		return "", nil, fmt.Errorf("%w: no text query in ozon search URL", ErrInvalidURL)
+	}
+	text = strings.Join(strings.Fields(strings.ToLower(text)), " ")
+	params := url.Values{}
+	for k, vs := range q {
+		if strings.EqualFold(k, "text") || isOzonNoiseParam(k) {
+			continue
+		}
+		for _, v := range vs {
+			if v = strings.TrimSpace(v); v != "" {
+				params.Add(k, v)
+			}
+		}
+	}
+	return text, params, nil
+}
+
+// ozonNoiseParams — параметры, которые НЕ влияют на состав выдачи: пагинация,
+// токены сессии/дорожки, аналитика. Всё остальное считаем выбором пользователя.
+var ozonNoiseParams = map[string]bool{
+	// Пагинация и раскладка (страницы мы перебираем сами через nextPage).
+	"page": true, "layout_page_index": true, "layout_container": true,
+	"paginator_token": true, "perpage": true, "start_page_id": true,
+	// Сессия/навигация/аналитика.
+	"__rr": true, "opened": true, "sh": true, "miniapp": true, "asb": true,
+	"asb2": true, "avtc": true, "avte": true, "avts": true, "advert_id": true,
+	"keywords_ids": true, "search_page_state": true, "suggest_type": true,
+	"category_was_predicted": true, "product_hash": true, "cid": true,
+}
+
+// isOzonNoiseParam — шумовой ли параметр (в т.ч. utm_*/*_id-метки рекламы).
+func isOzonNoiseParam(k string) bool {
+	k = strings.ToLower(strings.TrimSpace(k))
+	if ozonNoiseParams[k] {
+		return true
+	}
+	return strings.HasPrefix(k, "utm_") || k == "gclid" || k == "yclid"
 }
 
 // ScrapeSearch — забрать выдачу через сайдкар ozon-miner (browser-пул), с
@@ -89,12 +145,38 @@ func (s *OzonSearchScraper) ScrapeSearch(ctx context.Context, rawURL string) (*S
 	if err != nil {
 		return nil, fmt.Errorf("%w: %v", ErrInvalidURL, err)
 	}
-	text := strings.TrimSpace(u.Query().Get("text"))
-	if text == "" {
-		return nil, fmt.Errorf("%w: no text in ozon search URL", ErrInvalidURL)
+	text, params, err := parseOzonSearchParams(u)
+	if err != nil {
+		return nil, err
 	}
-	// Inner-path выдачи; text не кодируем (encodeURIComponent в сайдкаре).
-	return s.scrapePaginated(ctx, "/search/?text="+text, "search", text)
+	// Inner-path выдачи; ничего не кодируем — весь path целиком проходит через
+	// encodeURIComponent в сайдкаре, а повторное экранирование composer сломало бы
+	// (он декодирует url= ровно один раз). Фильтры идут вместе с text, иначе
+	// браузерная дорожка принесёт голую выдачу.
+	path := "/search/?text=" + text
+	if f := ozonRawParams(params); f != "" {
+		path += "&" + f
+	}
+	return s.scrapePaginated(ctx, path, "search", text)
+}
+
+// ozonRawParams — параметры выдачи как кусок query-строки в СЫРОМ (декодированном)
+// виде, ключи и значения упорядочены — для стабильного inner-path.
+func ozonRawParams(params url.Values) string {
+	keys := make([]string, 0, len(params))
+	for k := range params {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	var parts []string
+	for _, k := range keys {
+		vs := append([]string(nil), params[k]...)
+		sort.Strings(vs)
+		for _, v := range vs {
+			parts = append(parts, k+"="+v)
+		}
+	}
+	return strings.Join(parts, "&")
 }
 
 // maxOzonPages — потолок страниц пагинации (по ~8–36 тайлов), чтобы не уходить в

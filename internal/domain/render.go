@@ -218,13 +218,14 @@ func HasTextFilter(rawURL string) bool {
 var searchFilterParams = map[string]bool{
 	// Я.Маркет: бренд/фасеты и цена.
 	"glfilter": true, "gfilter": true,
-	"pricefrom": true, "priceto": true, "onstock": true,
+	"pricefrom": true, "priceto": true, "onstock": true, "fesh": true,
 	// Wildberries: цена, предмет, бренд, поставщик, цвет (числовые фасеты f<digits>
 	// ловит wbFacetRe ниже).
 	"priceu": true, "dprice": true, "xsubject": true,
 	"fbrand": true, "fsupplier": true, "fcolor": true,
-	// Ozon: бренд/цена, если попадают в query (обычно у Ozon фильтр в пути).
-	"brand": true,
+	// Ozon: бренд/цена/продавец, если попадают в query (фасеты по характеристикам
+	// у Ozon динамические — числовые id, их ловит ozonFacetRe ниже).
+	"brand": true, "currency_price": true, "seller": true,
 	// AliExpress: выбранные фасеты (размер/цвет — пары propertyId-valueId через «;»)
 	// и бренд. Голый поиск их не содержит.
 	"pvid": true, "brandvalueids": true,
@@ -233,6 +234,10 @@ var searchFilterParams = map[string]bool{
 // wbFacetRe — фасетный фильтр Wildberries вида f204557=... (числовой id предмета/
 // бренда/цвета). Именованные fbrand/fcolor — в searchFilterParams.
 var wbFacetRe = regexp.MustCompile(`^f\d+$`)
+
+// ozonFacetRe — фасет Ozon по характеристике: ключ параметра — числовой id самой
+// характеристики (8322=...). Ни один трекинг-параметр так не выглядит.
+var ozonFacetRe = regexp.MustCompile(`^\d+$`)
 
 // SearchHasSiteFilter — выбрал ли пользователь сужающий фильтр (бренд, цена,
 // категория-фасет) поверх самого текста запроса. Нужно, чтобы советовать «добавь
@@ -261,7 +266,7 @@ func SearchHasSiteFilter(rawURL string) bool {
 			key = pair[:i]
 		}
 		key = strings.ToLower(key)
-		if searchFilterParams[key] || wbFacetRe.MatchString(key) {
+		if searchFilterParams[key] || wbFacetRe.MatchString(key) || ozonFacetRe.MatchString(key) {
 			return true
 		}
 	}

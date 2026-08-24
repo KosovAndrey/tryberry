@@ -6,6 +6,7 @@ import (
 	"errors"
 	"net/url"
 	"os"
+	"strings"
 	"testing"
 )
 
@@ -234,5 +235,117 @@ func TestOzonSearch_ParseTiles(t *testing.T) {
 	}
 	if it.Position != 1 {
 		t.Errorf("position = %d, want 1", it.Position)
+	}
+}
+
+// Фильтры выдачи Я.Маркета (бренд/характеристики через glfilter, цена, наличие)
+// не должны теряться: без них подписка следит за всей выдачей по словам.
+func TestYandexSearch_NormalizeKeepsFilters(t *testing.T) {
+	s := newYMSearch()
+	raw := "https://market.yandex.ru/search?text=видеокарта&hid=90555" +
+		"&glfilter=7893318%3A153043&glfilter=4925448%3A900,1500&pricefrom=40000&priceto=90000" +
+		"&onstock=1&how=aprice&rs=eJwzk&lr=213&foo=bar"
+	got, err := s.NormalizeSearchURL(raw)
+	if err != nil {
+		t.Fatalf("NormalizeSearchURL: %v", err)
+	}
+	u, _ := url.Parse(got)
+	q := u.Query()
+	if q.Get("pricefrom") != "40000" || q.Get("priceto") != "90000" || q.Get("onstock") != "1" || q.Get("how") != "aprice" {
+		t.Errorf("потерян фильтр: %v", q)
+	}
+	if gl := q["glfilter"]; len(gl) != 2 || gl[0] != "4925448:900,1500" || gl[1] != "7893318:153043" {
+		t.Errorf("glfilter = %v, want оба значения по порядку", gl)
+	}
+	if q.Get("hid") != "90555" {
+		t.Errorf("hid потерян: %v", q)
+	}
+	// rs/lr/foo — контекст поиска, регион и мусор: в ключе им не место (иначе
+	// одинаковые подписки размножатся).
+	for _, junk := range []string{"rs", "lr", "foo"} {
+		if q.Get(junk) != "" {
+			t.Errorf("в ключ попал %q: %v", junk, q)
+		}
+	}
+
+	// Порядок параметров и порядок галочек не меняют ключ.
+	shuffled := "https://market.yandex.ru/search?glfilter=4925448%3A900,1500&priceto=90000" +
+		"&glfilter=7893318%3A153043&text=видеокарта&hid=90555&pricefrom=40000&onstock=1&how=aprice"
+	if got2, err := s.NormalizeSearchURL(shuffled); err != nil || got2 != got {
+		t.Errorf("ключ зависит от порядка:\n%q\n%q (err=%v)", got, got2, err)
+	}
+
+	// Разные фильтры — разные подписки.
+	other, _ := s.NormalizeSearchURL("https://market.yandex.ru/search?text=видеокарта&hid=90555&pricefrom=40000")
+	if other == got {
+		t.Error("выдачи с разными фильтрами схлопнулись в один ключ")
+	}
+}
+
+// Фильтр с литеральной «;» (url.Query() такие пары молча выбрасывает) должен
+// пережить и нормализацию, и добавление &page на пагинации.
+func TestYandexSearch_SemicolonFilterSurvives(t *testing.T) {
+	s := newYMSearch()
+	got, err := s.NormalizeSearchURL("https://market.yandex.ru/search?text=ноутбук&glfilter=1;2")
+	if err != nil {
+		t.Fatalf("NormalizeSearchURL: %v", err)
+	}
+	if u, _ := url.Parse(got); u.Query().Get("glfilter") != "1;2" {
+		t.Fatalf("фильтр с «;» потерян: %q", got)
+	}
+	paged := ymWithPage(got, 2)
+	u, _ := url.Parse(paged)
+	if u.Query().Get("glfilter") != "1;2" || u.Query().Get("page") != "2" {
+		t.Errorf("после пагинации: %q", paged)
+	}
+}
+
+// Фильтры Ozon (цена, бренд, продавец, числовые фасеты характеристик) остаются и
+// в ключе дедупа, и в inner-path запроса; пагинация/трекинг — нет.
+func TestOzonSearch_NormalizeKeepsFilters(t *testing.T) {
+	s := NewOzonSearchScraper(NewOzonScraper(OzonOptions{}), 60)
+	raw := "https://www.ozon.ru/search/?text=RTX+5080&currency_price=13437.000%3B150000.000" +
+		"&brand=97795842&seller=12345&8322=8322_1&sorting=price" +
+		"&page=2&layout_page_index=2&paginator_token=abc&__rr=1&utm_source=x&category_was_predicted=true"
+	got, err := s.NormalizeSearchURL(raw)
+	if err != nil {
+		t.Fatalf("NormalizeSearchURL: %v", err)
+	}
+	q, _ := url.Parse(got)
+	for k, want := range map[string]string{
+		"text": "rtx 5080", "currency_price": "13437.000;150000.000",
+		"brand": "97795842", "seller": "12345", "8322": "8322_1", "sorting": "price",
+	} {
+		if got := q.Query().Get(k); got != want {
+			t.Errorf("%s = %q, want %q", k, got, want)
+		}
+	}
+	for _, junk := range []string{"page", "layout_page_index", "paginator_token", "__rr", "utm_source", "category_was_predicted"} {
+		if q.Query().Get(junk) != "" {
+			t.Errorf("в ключ попал шум %q: %v", junk, q.Query())
+		}
+	}
+
+	// Порядок параметров не меняет ключ; разные фильтры — разные ключи.
+	shuffled := "https://www.ozon.ru/search/?8322=8322_1&brand=97795842&sorting=price" +
+		"&seller=12345&currency_price=13437.000;150000.000&text=rtx+5080"
+	if got2, err := s.NormalizeSearchURL(shuffled); err != nil || got2 != got {
+		t.Errorf("ключ зависит от порядка:\n%q\n%q (err=%v)", got, got2, err)
+	}
+	bare, _ := s.NormalizeSearchURL("https://www.ozon.ru/search/?text=rtx+5080&sorting=price")
+	if bare == got {
+		t.Error("выдача с фильтрами и без схлопнулись в один ключ")
+	}
+
+	// Inner-path для сайдкара — в СЫРОМ виде (composer декодирует url= один раз,
+	// повторное экранирование сломало бы фильтр цены).
+	u, _ := url.Parse(got)
+	_, params, err := parseOzonSearchParams(u)
+	if err != nil {
+		t.Fatalf("parseOzonSearchParams: %v", err)
+	}
+	path := "/search/?text=rtx 5080&" + ozonRawParams(params)
+	if !strings.Contains(path, "currency_price=13437.000;150000.000") {
+		t.Errorf("inner-path потерял/переэкранировал цену: %q", path)
 	}
 }

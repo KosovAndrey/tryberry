@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/url"
 	"regexp"
+	"sort"
 	"strconv"
 	"strings"
 
@@ -198,7 +199,10 @@ func (s *YandexMarketSearchScraper) NormalizeSearchURL(rawURL string) (string, e
 	if id := ymSellerID(u); id != "" {
 		return "https://market.yandex.ru/business--m/" + id, nil
 	}
-	text := strings.TrimSpace(u.Query().Get("text"))
+	// RawQuery разбираем вручную: url.Query() отбрасывает пары с «;», а фильтры
+	// Я.Маркета бывают многозначными (glfilter=<id>:<знач>, повторяется).
+	q := parseRawQuery(u.RawQuery)
+	text := strings.TrimSpace(q.Get("text"))
 	if text == "" {
 		return "", fmt.Errorf("%w: no text query in yandex search URL", ErrInvalidURL)
 	}
@@ -207,10 +211,52 @@ func (s *YandexMarketSearchScraper) NormalizeSearchURL(rawURL string) (string, e
 	canon.Set("text", text)
 	// hid (категория) сужает выдачу — сохраняем в ключе, чтобы «кофемашина в
 	// категории X» и «...в категории Y» не схлопывались в одну подписку.
-	if hid := strings.TrimSpace(u.Query().Get("hid")); hid != "" {
+	if hid := strings.TrimSpace(q.Get("hid")); hid != "" {
 		canon.Set("hid", hid)
 	}
+	// Фильтры (бренд/характеристики через glfilter, цена, наличие, магазин) —
+	// в ключ и в ссылку: без них подписка следит за всей выдачей по словам, а не
+	// за тем, что выбрал пользователь. Значения внутри повторяющегося ключа
+	// сортируем, чтобы порядок галочек не плодил подписки.
+	for k, vs := range q {
+		canonKey, ok := ymFilterKey(k)
+		if !ok {
+			continue
+		}
+		clean := make([]string, 0, len(vs))
+		for _, v := range vs {
+			if v = strings.TrimSpace(v); v != "" {
+				clean = append(clean, v)
+			}
+		}
+		if len(clean) == 0 {
+			continue
+		}
+		sort.Strings(clean)
+		canon[canonKey] = clean
+	}
 	return "https://market.yandex.ru/search?" + canon.Encode(), nil
+}
+
+// ymFilterNames — фильтры выдачи Я.Маркета в каноническом написании. У YM все
+// фасеты идут через один стабильный ключ glfilter=<id>:<значение>, поэтому здесь
+// (в отличие от Ozon) хватает белого списка: остальное — трекинг, регион,
+// пагинация и авто-категория (nid), которые состав выдачи не определяют.
+// Ключ карты — нижний регистр.
+var ymFilterNames = map[string]string{
+	"glfilter":  "glfilter",  // бренд/характеристики
+	"gfilter":   "gfilter",   // старая форма того же фасета
+	"pricefrom": "pricefrom", // цена от
+	"priceto":   "priceto",   // цена до
+	"onstock":   "onstock",   // только в наличии
+	"fesh":      "fesh",      // конкретный магазин
+	"how":       "how",       // сортировка (аналог sort у WB)
+}
+
+// ymFilterKey — фильтр ли это выдачи, и как он пишется в ссылке.
+func ymFilterKey(k string) (string, bool) {
+	canon, ok := ymFilterNames[strings.ToLower(strings.TrimSpace(k))]
+	return canon, ok
 }
 
 // ymSearchPriceRe — те же сниппеты стейта, что у карточки, но их много (по одному
@@ -309,7 +355,9 @@ func ymWithPage(base string, page int) string {
 	if err != nil {
 		return base
 	}
-	q := u.Query()
+	// parseRawQuery, а не u.Query(): последний отбрасывает пары с «;» — так
+	// фильтр из «сырой» пользовательской ссылки терялся бы на пагинации.
+	q := parseRawQuery(u.RawQuery)
 	q.Set("page", strconv.Itoa(page))
 	u.RawQuery = q.Encode()
 	return u.String()
