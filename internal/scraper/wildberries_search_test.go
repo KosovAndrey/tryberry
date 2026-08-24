@@ -470,3 +470,58 @@ func TestPublicAPIBaseNeedsNoToken(t *testing.T) {
 		t.Errorf("на same-origin базе без токена ждём ErrMarketplaceBlocked, got %v", err)
 	}
 }
+
+// spyTokenProvider — считает обращения к пулу токенов.
+type spyTokenProvider struct {
+	tok       SearchToken
+	asked     int
+	markedBad int
+}
+
+func (s *spyTokenProvider) Token(context.Context) (SearchToken, error) {
+	s.asked++
+	return s.tok, nil
+}
+func (s *spyTokenProvider) MarkBad(_ context.Context, slot int) {
+	if slot >= 0 {
+		s.markedBad++
+	}
+}
+func (s *spyTokenProvider) MarkGood(context.Context, int) {}
+
+// На публичном хосте 429 — это rate-limit, а не протухший токен: слот жечь
+// нельзя (прод 24-08 успел пометить слот 4 битым на ровном месте), а пул
+// вообще не должен опрашиваться — cookie wbaas чужому домену не нужна.
+func TestPublicBase429DoesNotBurnTokenSlot(t *testing.T) {
+	var calls int
+	client := &http.Client{Transport: rtFunc(func(*http.Request) *http.Response {
+		calls++
+		if calls == 1 {
+			return stubResp(http.StatusTooManyRequests, "slow down")
+		}
+		return stubResp(http.StatusOK, sampleSearchJSON)
+	})}
+	spy := &spyTokenProvider{tok: SearchToken{Cookie: "x_wbaas_token=abc", Slot: 4}}
+	s := &WildberriesSearchScraper{
+		WildberriesScraper: NewWildberriesScraper(5),
+		pool:               &ProxyPool{clients: []proxyClient{{label: "xray", client: client}}},
+		tokens:             spy,
+		maxPages:           1,
+	}
+	s.SetAPIBase("https://search.wb.ru/exactmatch/ru/common/v18/search")
+
+	set, err := s.ScrapeSearch(context.Background(),
+		"https://www.wildberries.ru/catalog/0/search.aspx?search=iphone")
+	if err != nil {
+		t.Fatalf("после 429 ждём ретрай и успех, got %v", err)
+	}
+	if len(set.Items) != 2 {
+		t.Errorf("собрано %d товаров, want 2", len(set.Items))
+	}
+	if spy.markedBad != 0 {
+		t.Errorf("слот помечен битым %d раз(а) из-за rate-limit публичного хоста", spy.markedBad)
+	}
+	if spy.asked != 0 {
+		t.Errorf("пул токенов опрошен %d раз(а) — публичному хосту токен не нужен", spy.asked)
+	}
+}

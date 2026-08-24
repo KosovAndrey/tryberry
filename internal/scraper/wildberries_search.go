@@ -349,24 +349,25 @@ func (s *WildberriesSearchScraper) fetchPage(ctx context.Context, apiURL, refere
 		}
 
 		needToken := s.tokenRequired()
-		tok, err := s.tokens.Token(ctx)
-		if err != nil {
-			if needToken {
+		// На публичном хосте пул токенов НЕ трогаем вовсе: cookie wbaas туда
+		// не нужна (и незачем светить её на чужом домене), а 429 оттуда —
+		// это rate-limit, а не протухший токен, и слоты за него жечь нельзя.
+		tok := SearchToken{Slot: -1}
+		if needToken {
+			t, err := s.tokens.Token(ctx)
+			if err != nil {
 				lastErr = fmt.Errorf("%w: token provider: %v", ErrMarketplaceBlocked, err)
 				s.sleep(ctx, delay)
 				delay = bumpDelay(delay)
 				continue
 			}
-			tok = SearchToken{Slot: -1} // публичному хосту токен не нужен
-		}
-		if !tok.Valid() {
-			if needToken {
+			if !t.Valid() {
 				lastErr = fmt.Errorf("%w: пустой wbaas-токен (майнер не наполнил пул)", ErrMarketplaceBlocked)
 				s.sleep(ctx, delay)
 				delay = bumpDelay(delay)
 				continue
 			}
-			tok = SearchToken{Slot: -1}
+			tok = t
 		}
 		ua := tok.UserAgent
 		if ua == "" {
@@ -406,7 +407,8 @@ func (s *WildberriesSearchScraper) fetchPage(ctx context.Context, apiURL, refere
 		case resp.StatusCode == http.StatusTooManyRequests:
 			// 429 + server: wbaas — токен протух/невалиден. После 2 подряд 429 на
 			// слоте провайдер выводит его из ротации; следующая попытка (round-robin)
-			// берёт другой токен из пула.
+			// берёт другой токен из пула. На публичном хосте токена нет — там 429
+			// это обычный rate-limit, лечится только паузой (Slot -1 пул игнорит).
 			s.tokens.MarkBad(ctx, tok.Slot)
 			metrics.WBSearchFetch.WithLabelValues("direct", "429").Inc()
 			lastErr = fmt.Errorf("%w: 429 via %s (slot %d, возможно протух токен)", ErrMarketplaceBlocked, pc.label, tok.Slot)
