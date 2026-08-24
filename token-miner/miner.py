@@ -27,6 +27,8 @@ import signal
 import sys
 import time
 from collections import Counter
+import urllib.error
+import urllib.request
 from urllib.parse import quote, unquote, urlparse
 
 import redis
@@ -48,6 +50,22 @@ REFRESH_MARGIN_H = float(os.getenv("MINE_REFRESH_MARGIN_HOURS", "24"))
 MAX_AGE_H = float(os.getenv("MINE_MAX_AGE_HOURS", "48"))
 
 MINE_RETRY_MINUTES = float(os.getenv("MINE_RETRY_MINUTES", "10"))
+# Потолок паузы, когда минт не удаётся ЦИКЛ ЗА ЦИКЛОМ (стена wbaas). Без него
+# пустой пул ускорял ретраи (healthy==0 → MINE_RETRY_MINUTES), и майнер долбил
+# стену навигациями каждые 5 минут — ровно то, чего делать нельзя (инцидент
+# 24-08: 5 слотов × 2 навигации каждые 5 мин сорок минут подряд).
+MINE_WALL_BACKOFF_MAX_MINUTES = float(os.getenv("MINE_WALL_BACKOFF_MAX_MINUTES", "60"))
+# Перед минтом слота, помеченного broken, проверяем его cookie ДЕШЁВЫМ запросом:
+# 429 от воркера мог быть rate-limit'ом, а не протухшим токеном, и тогда слот
+# чинится без браузера (инцидент 24-08 сжёг так весь перекупный пул).
+MINE_REVALIDATE = os.getenv("MINE_REVALIDATE", "true").lower() in ("1", "true", "yes")
+MINE_VALIDATE_URL = os.getenv(
+    "MINE_VALIDATE_URL",
+    "https://www.wildberries.ru/__internal/u-search/exactmatch/ru/common/v18/search"
+    "?appType=1&curr=rub&dest=-1257786&lang=ru&locale=ru&page=1"
+    "&query=%D0%BA%D0%B0%D0%BF%D0%B8%D0%B1%D0%B0%D1%80%D0%B0&resultset=catalog&sort=popular&spp=30",
+)
+MINE_VALIDATE_TIMEOUT_S = float(os.getenv("MINE_VALIDATE_TIMEOUT_SECONDS", "15"))
 MINE_TIMEOUT_SECONDS = float(os.getenv("MINE_TIMEOUT_SECONDS", "150"))
 MINE_MAX_RELOADS = int(os.getenv("MINE_MAX_RELOADS", "2"))
 MINE_ONCE = os.getenv("MINE_ONCE", "false").lower() in ("1", "true", "yes")
@@ -338,8 +356,41 @@ def _release_mine_lock(r):
         log.error("лок майнинга: ошибка снятия: %s", e)
 
 
+# Итоги минта последнего цикла — по ним main решает, стоит ли стена.
+_cycle = {"mint_ok": 0, "mint_fail": 0}
+
+
+def revalidate_cookie(h: dict) -> bool:
+    """Жива ли cookie слота: один дешёвый GET к u-search (без браузера).
+    True — 200, слот можно вернуть в строй. False — всё остальное (в т.ч. стена
+    и сетевые ошибки): решение о минте принимает вызывающий."""
+    cookie = h.get("cookie") or ""
+    if not cookie:
+        return False
+    req = urllib.request.Request(MINE_VALIDATE_URL, headers={
+        "Accept": "*/*",
+        "Accept-Language": "ru,en;q=0.9",
+        "User-Agent": h.get("ua") or "Mozilla/5.0",
+        "Cookie": cookie,
+        "X-Requested-With": "XMLHttpRequest",
+    })
+    opener = urllib.request.build_opener(
+        urllib.request.ProxyHandler({"https": PROXY_URL, "http": PROXY_URL} if PROXY_URL else {})
+    )
+    try:
+        with opener.open(req, timeout=MINE_VALIDATE_TIMEOUT_S) as resp:
+            return resp.status == 200
+    except urllib.error.HTTPError as e:
+        log.info("ревалидация: %s", e.code)
+        return False
+    except Exception as e:  # noqa: BLE001
+        log.info("ревалидация не удалась: %s", e)
+        return False
+
+
 def run_cycle(r: "redis.Redis", pw):
     now = int(time.time())
+    _cycle["mint_ok"] = _cycle["mint_fail"] = 0
     # 1) читаем все слоты, решаем какие нуждаются в майнинге
     state_by_i: dict = {}
     needy: list = []
@@ -353,6 +404,21 @@ def run_cycle(r: "redis.Redis", pw):
             h = {}
         state_by_i[i] = h
         need, reason = slot_needs_mine(h, now)
+        # Слот помечен broken, но cookie на месте и не протухла → сперва проверяем
+        # её живым запросом: минт в браузере — самая дорогая и рискованная
+        # операция, и гонять её из-за чужого 429 незачем.
+        if need and MINE_REVALIDATE and reason == "status=broken" and h.get("cookie"):
+            exp = _int(h.get("exp"))
+            if not exp or exp > now:
+                if revalidate_cookie(h):
+                    try:
+                        r.hset(slot_key(i), "status", "ok")
+                        h["status"] = "ok"
+                        state_by_i[i] = h
+                        log.info("слот %d: cookie жива — вернул в строй без минта", i)
+                        need = False
+                    except Exception as e:  # noqa: BLE001
+                        log.error("слот %d: возврат в строй не удался: %s", i, e)
         if need:
             needy.append((i, reason))
 
@@ -373,6 +439,7 @@ def run_cycle(r: "redis.Redis", pw):
             log.info("слот %d: майню (%s)", i, reason)
             data = mine_once(pw)
             if data:
+                _cycle["mint_ok"] += 1
                 exp = token_exp(data["token"]) or 0
                 try:
                     r.hset(slot_key(i), mapping={
@@ -388,6 +455,7 @@ def run_cycle(r: "redis.Redis", pw):
                 except Exception as e:  # noqa: BLE001
                     log.error("слот %d: запись в Redis упала: %s", i, e)
             else:
+                _cycle["mint_fail"] += 1
                 log.warning("слот %d: майнинг не удался — оставляю как есть", i)
                 try:
                     r.incr(KEY_MINE_FAILED)
@@ -448,6 +516,7 @@ def main():
         HEADLESS, os.getenv("DISPLAY", "—"), MINE_ONCE, bool(PROXY_URL), not DISABLE_LEGACY,
     )
 
+    wall_cycles = 0  # подряд идущих циклов, где не прошёл ни один минт
     with sync_playwright() as pw:
         while not _stop["flag"]:
             try:
@@ -457,8 +526,19 @@ def main():
                 healthy = 0
             if MINE_ONCE:
                 break
-            # если пул совсем пуст — повторяем быстрее (retry), иначе обычный интервал
-            sleep_min = MINE_RETRY_MINUTES if healthy == 0 else CHECK_INTERVAL_MIN
+            # Ни один минт в цикле не удался, а попытки были → снаружи стена.
+            # Ускоряться тут нельзя: ретраи её только подогревают. Пауза растёт
+            # вдвое за цикл до потолка и сбрасывается первым же успехом.
+            if _cycle["mint_ok"] == 0 and _cycle["mint_fail"] > 0:
+                wall_cycles += 1
+                sleep_min = min(MINE_RETRY_MINUTES * (2 ** (wall_cycles - 1)),
+                                MINE_WALL_BACKOFF_MAX_MINUTES)
+                log.warning("минт не проходит %d цикл(ов) подряд (похоже на стену) — пауза %.0f мин",
+                            wall_cycles, sleep_min)
+            else:
+                wall_cycles = 0
+                # если пул совсем пуст — повторяем быстрее (retry), иначе обычный интервал
+                sleep_min = MINE_RETRY_MINUTES if healthy == 0 else CHECK_INTERVAL_MIN
             interruptible_sleep(sleep_min * 60)
 
     log.info("майнер остановлен")
