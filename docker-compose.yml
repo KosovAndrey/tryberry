@@ -741,6 +741,11 @@ services:
         # 20–24 мин, вдвое раньше, чем он успевает дорасти до 2 ГиБ.
         ALI_LANE_MAX_AGE_SECONDS: "${ALI_LANE_MAX_AGE_SECONDS:-1200}"
         ALI_LANE_MAX_AGE_JITTER: "${ALI_LANE_MAX_AGE_JITTER:-0.2}"
+        # Пауза между закрытием старого браузера и запуском нового: ждём, пока
+        # cgroup реально отдаст память (browser.close() лишь просит chrome
+        # завершиться). Без неё новый браузер стартовал поверх умирающего.
+        ALI_RELAUNCH_SETTLE_SECONDS: "${ALI_RELAUNCH_SETTLE_SECONDS:-15}"
+        ALI_RELAUNCH_SETTLE_FRACTION: "${ALI_RELAUNCH_SETTLE_FRACTION:-0.5}"
         # Те же рычаги, что у wb-сайдкара. Значения = дефолты кода.
         ALI_WARM_BACKOFF_MAX_SECONDS: "${ALI_WARM_BACKOFF_MAX_SECONDS:-600}"
         ALI_WARM_WAIT_SECONDS: "${ALI_WARM_WAIT_SECONDS:-150}"

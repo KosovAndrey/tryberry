@@ -198,6 +198,55 @@ def _parse_proxy(url: str):
     return proxy
 
 
+# Сколько ждать, пока закрытый браузер реально отдаст память, прежде чем
+# поднимать новый. browser.close() лишь просит chrome завершиться — процессы
+# умирают асинхронно, и без паузы новый браузер стартует поверх ещё живого
+# старого. При потолке 2 ГиБ и старом браузере на ~1.9 ГиБ этого хватало, чтобы
+# cgroup упёрся в лимит ровно в момент замены: 25-08 OOM'ы шли с периодом
+# recycle (~23 мин), а не роста.
+RELAUNCH_SETTLE_MAX_S = float(os.getenv("ALI_RELAUNCH_SETTLE_SECONDS", "15"))
+# Ниже этой доли лимита считаем, что память освободилась.
+RELAUNCH_SETTLE_FRACTION = float(os.getenv("ALI_RELAUNCH_SETTLE_FRACTION", "0.5"))
+
+# cgroup v2: текущий расход и лимит контейнера видны изнутри.
+_CGROUP_CURRENT = "/sys/fs/cgroup/memory.current"
+_CGROUP_MAX = "/sys/fs/cgroup/memory.max"
+
+
+def _cgroup_bytes(path: str):
+    """Число из файла cgroup или None (нет cgroup v2 / "max" / нет доступа)."""
+    try:
+        with open(path) as f:
+            return int(f.read().strip())
+    except Exception:  # noqa: BLE001
+        return None
+
+
+async def _await_memory_release(idx: int):
+    """Подождать, пока расход cgroup опустится после закрытия браузера.
+
+    Без cgroup v2 (или без лимита) деградируем до короткой паузы: она всё равно
+    полезнее, чем мгновенный старт поверх умирающего chrome."""
+    limit = _cgroup_bytes(_CGROUP_MAX)
+    start = time.monotonic()
+    if not limit:
+        await asyncio.sleep(min(3.0, RELAUNCH_SETTLE_MAX_S))
+        return
+    target = limit * RELAUNCH_SETTLE_FRACTION
+    while time.monotonic() - start < RELAUNCH_SETTLE_MAX_S:
+        cur = _cgroup_bytes(_CGROUP_CURRENT)
+        if cur is None or cur <= target:
+            if cur is not None and time.monotonic() - start > 0.5:
+                log.info("дорожка %d: память освободилась за %.1fс (%.0f МиБ)",
+                         idx, time.monotonic() - start, cur / 1048576)
+            return
+        await asyncio.sleep(0.5)
+    cur = _cgroup_bytes(_CGROUP_CURRENT) or 0
+    log.warning("дорожка %d: за %.0fс расход не опустился ниже %.0f МиБ (сейчас %.0f МиБ) — "
+                "поднимаю браузер как есть", idx, RELAUNCH_SETTLE_MAX_S,
+                target / 1048576, cur / 1048576)
+
+
 # ── Дорожка ───────────────────────────────────────────────────────────────────
 class Lane:
     def __init__(self, idx: int, proxy: str):
@@ -257,6 +306,7 @@ class Lane:
         log.warning("дорожка %d: пересоздаю браузер", self.idx)
         await self.close()
         self._browser = self._ctx = self._page = None
+        await _await_memory_release(self.idx)
         try:
             await self._launch()
             return True
