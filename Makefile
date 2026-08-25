@@ -59,6 +59,9 @@ check:
 	@go vet ./...
 	@echo "→ go test -race"
 	@go test -race -count=1 ./...
+	@echo "→ env-audit (мёртвые ключи в compose)"
+	@if python3 -c "import yaml" 2>/dev/null; then python3 scripts/env-audit.py; \
+	 else echo "  пропущено: нет python3 с PyYAML"; fi
 	@echo "✅ check пройден"
 
 # Установить pre-push хук (симлинк на скрипт в репозитории — правки видны в git).

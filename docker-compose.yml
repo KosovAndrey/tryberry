@@ -478,7 +478,19 @@ services:
         REDIS_URL: "redis://:${REDIS_PASSWORD}@redis:6379"
         WB_TOKEN_POOL_SIZE: "5"
         WB_SEARCH_QUERY: "телефон"
-        MINE_INTERVAL_HOURS: "12"
+        # Как часто просыпается «ремонтник» пула и когда лезет за новым токеном.
+        # Раньше здесь стоял MINE_INTERVAL_HOURS="12", которого код НЕ ЧИТАЕТ —
+        # конфиг врал про поведение: майнер просыпается раз в 5 минут, а в браузер
+        # идёт только за теми слотами, что пусты/broken/скоро протухнут.
+        MINE_CHECK_INTERVAL_MINUTES: "${MINE_CHECK_INTERVAL_MINUTES:-5}"
+        MINE_REFRESH_MARGIN_HOURS: "${MINE_REFRESH_MARGIN_HOURS:-24}"
+        MINE_MAX_AGE_HOURS: "${MINE_MAX_AGE_HOURS:-48}"
+        MINE_LOCK_TTL_MINUTES: "${MINE_LOCK_TTL_MINUTES:-30}"
+        # Потолок паузы, когда минт не проходит цикл за циклом (стена wbaas), и
+        # проверка живой cookie перед минтом — оба рычага против долбёжки стены.
+        MINE_WALL_BACKOFF_MAX_MINUTES: "${MINE_WALL_BACKOFF_MAX_MINUTES:-60}"
+        MINE_REVALIDATE: "${MINE_REVALIDATE:-true}"
+        WB_TOKEN_POOL_PREFIX: "${WB_TOKEN_POOL_PREFIX:-wb:search:}"
         MINE_RETRY_MINUTES: "10"
         MINE_MAX_RELOADS: "2"
         MINE_TIMEOUT_SECONDS: "150"
@@ -516,6 +528,12 @@ services:
       environment:
         REDIS_URL: "redis://:${REDIS_PASSWORD}@redis:6379"
         WB_TOKEN_POOL_PREFIX: "wb:reseller:"
+        MINE_CHECK_INTERVAL_MINUTES: "${MINE_CHECK_INTERVAL_MINUTES:-5}"
+        MINE_REFRESH_MARGIN_HOURS: "${MINE_REFRESH_MARGIN_HOURS:-24}"
+        MINE_MAX_AGE_HOURS: "${MINE_MAX_AGE_HOURS:-48}"
+        MINE_LOCK_TTL_MINUTES: "${MINE_LOCK_TTL_MINUTES:-30}"
+        MINE_WALL_BACKOFF_MAX_MINUTES: "${MINE_WALL_BACKOFF_MAX_MINUTES:-60}"
+        MINE_REVALIDATE: "${MINE_REVALIDATE:-true}"
         WB_DISABLE_LEGACY_MIRROR: "true"
         WB_TOKEN_POOL_SIZE: "5"
         WB_SEARCH_QUERY: "телефон"
@@ -586,6 +604,15 @@ services:
         OZON_LANE_JITTER: "${OZON_LANE_JITTER:-0.4}"
         # Периодический re-warm живой сессии (рефреш токена/доверия), мин.
         OZON_WARM_KEEPALIVE_MINUTES: "${OZON_WARM_KEEPALIVE_MINUTES:-45}"
+        # Рычаги на инцидент (значения = дефолты кода). OZON_LANE_STUCK_SECONDS
+        # сюда НЕ выносим: его дефолт вычисляется из таймаутов операций, и
+        # фиксация числом заморозила бы связь между ними.
+        OZON_WARM_BACKOFF_MAX_SECONDS: "${OZON_WARM_BACKOFF_MAX_SECONDS:-600}"
+        OZON_WARM_WAIT_SECONDS: "${OZON_WARM_WAIT_SECONDS:-45}"
+        OZON_SCRAPE_RETRIES: "${OZON_SCRAPE_RETRIES:-2}"
+        OZON_SCRAPE_TIMEOUT_SECONDS: "${OZON_SCRAPE_TIMEOUT_SECONDS:-12}"
+        OZON_NAV_TIMEOUT_SECONDS: "${OZON_NAV_TIMEOUT_SECONDS:-60}"
+        OZON_HEALTH_INTERVAL_SECONDS: "${OZON_HEALTH_INTERVAL_SECONDS:-30}"
         # Ротация IP: switch-ссылка провайдера + период (мин, 0=выкл). Частую
         # можно, но каждая ротация = пере-прогрев (заново FAB на новом IP).
         OZON_PROXY_ROTATE_URL: "${OZON_PROXY_ROTATE_URL:-}"
@@ -633,6 +660,18 @@ services:
         # После N неудачных прогревов подряд — пересоздать браузер (свежий
         # фингерпринт против залипания на document-498). 0 — не пересоздавать.
         WB_WARM_RELAUNCH_AFTER: "${WB_WARM_RELAUNCH_AFTER:-3}"
+        # Рычаги на инцидент: путь u-search (менялся 24-08), длительность и число
+        # прогревов, ретраи/таймаут запроса, пороги вотчдога. Значения = дефолты
+        # кода, поведение не меняется — меняется лишь возможность их покрутить.
+        WB_USEARCH_PATH: "${WB_USEARCH_PATH:-/__internal/u-search/exactmatch/ru/common/v18/search}"
+        WB_WARM_WAIT_SECONDS: "${WB_WARM_WAIT_SECONDS:-150}"
+        WB_WARM_RELOADS: "${WB_WARM_RELOADS:-2}"
+        WB_FETCH_RETRIES: "${WB_FETCH_RETRIES:-2}"
+        WB_FETCH_TIMEOUT_SECONDS: "${WB_FETCH_TIMEOUT_SECONDS:-15}"
+        WB_NAV_TIMEOUT_SECONDS: "${WB_NAV_TIMEOUT_SECONDS:-60}"
+        WB_LANE_STUCK_SECONDS: "${WB_LANE_STUCK_SECONDS:-180}"
+        WB_HEALTH_INTERVAL_SECONDS: "${WB_HEALTH_INTERVAL_SECONDS:-30}"
+        WB_LANE_MAX_AGE_JITTER: "${WB_LANE_MAX_AGE_JITTER:-0.2}"
         # Плановый recycle по возрасту браузера. По умолчанию ВЫКЛЮЧЕН (0):
         # каждое пересоздание здесь — новый проход wbaas, то есть провокация,
         # а растёт wb-медленнее ali (1.4 ГиБ за 19ч против 2 ГиБ за 47 мин).
@@ -684,6 +723,14 @@ services:
         # посреди запроса. Течь это не лечит — лечит предсказуемость.
         ALI_LANE_MAX_AGE_SECONDS: "${ALI_LANE_MAX_AGE_SECONDS:-1800}"
         ALI_LANE_MAX_AGE_JITTER: "${ALI_LANE_MAX_AGE_JITTER:-0.2}"
+        # Те же рычаги, что у wb-сайдкара. Значения = дефолты кода.
+        ALI_WARM_BACKOFF_MAX_SECONDS: "${ALI_WARM_BACKOFF_MAX_SECONDS:-600}"
+        ALI_WARM_WAIT_SECONDS: "${ALI_WARM_WAIT_SECONDS:-150}"
+        ALI_WARM_RELOADS: "${ALI_WARM_RELOADS:-2}"
+        ALI_FETCH_TIMEOUT_SECONDS: "${ALI_FETCH_TIMEOUT_SECONDS:-20}"
+        ALI_NAV_TIMEOUT_SECONDS: "${ALI_NAV_TIMEOUT_SECONDS:-60}"
+        ALI_LANE_STUCK_SECONDS: "${ALI_LANE_STUCK_SECONDS:-180}"
+        ALI_HEALTH_INTERVAL_SECONDS: "${ALI_HEALTH_INTERVAL_SECONDS:-30}"
         HEADLESS: "false"
         LOG_LEVEL: "INFO"
       shm_size: "1gb"
