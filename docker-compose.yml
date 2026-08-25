@@ -528,7 +528,6 @@ services:
       environment:
         REDIS_URL: "redis://:${REDIS_PASSWORD}@redis:6379"
         WB_TOKEN_POOL_PREFIX: "wb:reseller:"
-        MINE_CHECK_INTERVAL_MINUTES: "${MINE_CHECK_INTERVAL_MINUTES:-5}"
         MINE_REFRESH_MARGIN_HOURS: "${MINE_REFRESH_MARGIN_HOURS:-24}"
         MINE_MAX_AGE_HOURS: "${MINE_MAX_AGE_HOURS:-48}"
         MINE_LOCK_TTL_MINUTES: "${MINE_LOCK_TTL_MINUTES:-30}"
@@ -537,7 +536,8 @@ services:
         WB_DISABLE_LEGACY_MIRROR: "true"
         WB_TOKEN_POOL_SIZE: "5"
         WB_SEARCH_QUERY: "телефон"
-        MINE_CHECK_INTERVAL_MINUTES: "3"
+        # У перекупов свой каданс (3 мин против 5): пул нужен горячим чаще.
+        MINE_CHECK_INTERVAL_MINUTES: "${RESELLER_MINE_CHECK_INTERVAL_MINUTES:-3}"
         MINE_RETRY_MINUTES: "5"
         MINE_MAX_RELOADS: "2"
         MINE_TIMEOUT_SECONDS: "150"
