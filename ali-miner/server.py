@@ -117,7 +117,12 @@ PRODUCTS_MARKER = b'"snippetContainer"'
 # ре-навигировать труп.
 _DEAD_RE = re.compile(
     r"Connection closed|pipe closed|Target (page|frame|browser).*closed|"
-    r"Browser.*closed|has been closed|Target closed",
+    r"Browser.*closed|has been closed|Target closed|"
+    # «Page crashed»/«Target crashed» — рендерер убит (обычно OOM в cgroup
+    # контейнера). Без этой ветки _is_dead возвращал False, браузер не
+    # пересоздавался, и код 75с × число попыток тыкал труп нуджами: 25-08 это
+    # дало 15 минут спама «Target crashed» и настолько же отложенное лечение.
+    r"crashed",
     re.IGNORECASE)
 
 

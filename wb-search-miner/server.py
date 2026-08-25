@@ -133,7 +133,10 @@ WALL_MARKERS = ("почти готов", "подозрительная акти�
 # надо пересоздать, а не ре-навигировать труп.
 _DEAD_RE = re.compile(
     r"Connection closed|pipe closed|Target (page|frame|browser).*closed|"
-    r"Browser.*closed|has been closed|Target closed",
+    r"Browser.*closed|has been closed|Target closed|"
+    # «Page crashed»/«Target crashed» — рендерер убит (обычно OOM в cgroup).
+    # См. разбор в ali-miner/server.py: без этого дорожка лечится минутами.
+    r"crashed",
     re.IGNORECASE)
 
 

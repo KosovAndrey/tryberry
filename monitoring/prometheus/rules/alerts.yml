@@ -449,10 +449,18 @@ groups:
     rules:
       # Ядро кого-то убило. Считаем по счётчику vmstat: даже если жертва
       # успела перезапуститься и внешне всё зелено, факт OOM виден.
+      #
+      # severity WARNING, а не critical (понижено 25-08). Метрика не отличает
+      # контейнерный OOM от хостового, а на практике почти всегда прилетает
+      # первый: процесс упёрся в свой mem_limit, вотчдог сайдкара его поднял,
+      # хост цел. Будить по такому нельзя — за сутки прилетело ~20 «critical»
+      # об исправно работающей защите, и это ровно тот шум, от которого потом
+      # перестают читать алерты. Настоящую хостовую нехватку ловят HostMemoryLow
+      # и HostSwapAlmostFull (заранее), а её последствия — ServiceDown (critical).
       - alert: HostOOMKill
         expr: increase(node_vmstat_oom_kill[10m]) > 0
         labels:
-          severity: critical
+          severity: warning
         annotations:
           summary: "OOM-killer сработал"
           description: "Ядро убило процесс из-за нехватки памяти за последние 10 мин. ПЕРВЫМ ДЕЛОМ отличить контейнерный OOM от хостового: sudo dmesg -T | grep -iE 'oom-kill|killed process' | tail. Есть constraint=CONSTRAINT_MEMCG и 'Memory cgroup out of memory' — процесс упёрся в mem_limit СВОЕГО контейнера, хост цел, защита сработала как задумано; чей это контейнер — сопоставить id из oom_memcg со списком docker ps --no-trunc -q; повторяется у одного и того же — поднять ему потолок или искать утечку. Нет CONSTRAINT_MEMCG — глобальная нехватка на хосте, это авария (20-08 рост chrome уронил DNS докера и каскадом всё остальное). Кто разросся: docker stats --no-stream."
