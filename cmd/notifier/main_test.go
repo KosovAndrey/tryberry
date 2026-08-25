@@ -4,6 +4,7 @@ import (
 	"testing"
 	"time"
 
+	"gitlab.com/KosovAndrey/tryberrybot/internal/domain"
 	"gitlab.com/KosovAndrey/tryberrybot/internal/repository/postgres"
 )
 
@@ -130,4 +131,50 @@ func eq(a, b []int64) bool {
 		}
 	}
 	return true
+}
+
+// Товар не в наличии в дайджест попадать не должен. Регрессия прода 25-08-2026:
+// у распроданного товара price_history замирает, CurrentPrice остаётся ценой
+// последнего живого скрейпа — а она и есть минимум истории, поэтому вердикт
+// «минимум за всё время» держится вечно. Юзеру пришло три таких «лучших цены»,
+// и все три товара были распроданы.
+func TestPickDigestDealsSkipsOutOfStock(t *testing.T) {
+	now := time.Now()
+	longAgo := now.Add(-200 * 24 * time.Hour)
+	// История, на которой текущая цена = минимум за всё время.
+	stats := domain.PriceStats{
+		Min30: 100, Median30: 200, Min90: 100, MinAll: 100,
+		Seg30: 5, CountAll: 50, Since: longAgo, HasData: true,
+	}
+	statsOf := func(int64) (domain.PriceStats, error) { return stats, nil }
+
+	inStock := &domain.Subscription{
+		ProductID: 1, ProductName: "В наличии", ProductURL: "https://example.com/1",
+		CurrentPrice: 100, ProductInStock: true,
+	}
+	sold := &domain.Subscription{
+		ProductID: 2, ProductName: "Распродан", ProductURL: "https://example.com/2",
+		CurrentPrice: 100, ProductInStock: false,
+	}
+
+	deals := pickDigestDeals([]*domain.Subscription{inStock, sold}, statsOf, now)
+	if len(deals) != 1 {
+		t.Fatalf("в дайджест попало %d товаров, want 1 (только тот, что в наличии): %+v", len(deals), deals)
+	}
+	if deals[0].name != "В наличии" {
+		t.Errorf("в дайджесте %q, ожидался товар в наличии", deals[0].name)
+	}
+
+	// Контроль: тот же распроданный товар с наличием — попадает. Значит
+	// отсекает именно флаг наличия, а не что-то ещё в условии.
+	sold.ProductInStock = true
+	if got := pickDigestDeals([]*domain.Subscription{sold}, statsOf, now); len(got) != 1 {
+		t.Errorf("с наличием товар должен попадать в дайджест, got %d", len(got))
+	}
+
+	// Нулевая цена не проходит независимо от наличия.
+	zero := &domain.Subscription{ProductID: 3, CurrentPrice: 0, ProductInStock: true}
+	if got := pickDigestDeals([]*domain.Subscription{zero}, statsOf, now); len(got) != 0 {
+		t.Errorf("товар без цены не должен попадать, got %d", len(got))
+	}
 }

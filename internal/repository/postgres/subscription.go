@@ -143,7 +143,8 @@ func (r *SubscriptionRepo) GetActiveByUserID(ctx context.Context, userID int64) 
 		           WHERE ph.product_id = s.product_id
 		           ORDER BY ph.recorded_at DESC
 		           LIMIT 1
-		       ), 0) AS current_price
+		       ), 0) AS current_price,
+		       p.in_stock
 		FROM subscriptions s
 		JOIN products p ON p.id = s.product_id
 		WHERE s.user_id = $1 AND s.active = TRUE
@@ -166,6 +167,7 @@ func (r *SubscriptionRepo) GetActiveByUserID(ctx context.Context, userID int64) 
 			&s.ProductPublicID,
 			&s.ProductMarketplace,
 			&s.CurrentPrice,
+			&s.ProductInStock,
 		); err != nil {
 			return nil, err
 		}

@@ -887,6 +887,45 @@ func digestSweep(ctx context.Context, log *slog.Logger, userRepo *postgres.UserR
 	log.Info("digest sweep done", "due", len(recipients), "sent", sent)
 }
 
+// digestDeal — строка дайджеста: товар, который сейчас по честно хорошей цене.
+type digestDeal struct {
+	name, url, verdict string
+	price              float64
+}
+
+// pickDigestDeals — отбор товаров в дайджест. Чистая функция: statsOf отдаёт
+// агрегаты price_history (ошибка → товар пропускаем).
+//
+// Товары НЕ В НАЛИЧИИ отсекаются, и это не мелочь. У пропавшего товара
+// price_history перестаёт пополняться, а CurrentPrice — это последняя записанная
+// точка, то есть цена, по которой его в последний раз видели живым (часто
+// распродажная — потому и кончился). Такая цена по построению оказывается
+// минимумом истории, и товар получает вердикт «минимум за всё время» НАВСЕГДА.
+// Прод 25-08-2026: юзеру пришёл дайджест из трёх «лучших цен», где все три
+// товара были распроданы. Совет купить по цене, которой нельзя воспользоваться,
+// хуже отсутствия совета — он подрывает доверие к остальным вердиктам.
+func pickDigestDeals(subs []*domain.Subscription,
+	statsOf func(productID int64) (domain.PriceStats, error), now time.Time) []digestDeal {
+	var deals []digestDeal
+	for _, s := range subs {
+		if s.CurrentPrice <= 0 || !s.ProductInStock {
+			continue
+		}
+		stats, err := statsOf(s.ProductID)
+		if err != nil {
+			continue
+		}
+		hp := domain.AssessHonestPrice(s.CurrentPrice, stats, now)
+		switch hp.Verdict {
+		case domain.VerdictLowestEver, domain.VerdictLowest90, domain.VerdictLowest30:
+			deals = append(deals, digestDeal{
+				name: s.ProductName, url: s.ProductURL, verdict: hp.Line(), price: s.CurrentPrice,
+			})
+		}
+	}
+	return deals
+}
+
 // buildDigest собирает текст дайджеста: товары пользователя, которые СЕЙЧАС по
 // честно хорошей цене (вердикт 🟢 минимум за 30/90д/всё время). Пусто (ok=false),
 // если показывать нечего — тогда дайджест не шлём (без спама «ничего нет»).
@@ -901,25 +940,9 @@ func buildDigest(ctx context.Context, log *slog.Logger, subRepo *postgres.Subscr
 		return "", false
 	}
 	now := time.Now()
-	type deal struct {
-		name, url, verdict string
-		price              float64
-	}
-	var deals []deal
-	for _, s := range subs {
-		if s.CurrentPrice <= 0 {
-			continue
-		}
-		stats, err := priceRepo.Stats(ctx, s.ProductID, now)
-		if err != nil {
-			continue
-		}
-		hp := domain.AssessHonestPrice(s.CurrentPrice, stats, now)
-		switch hp.Verdict {
-		case domain.VerdictLowestEver, domain.VerdictLowest90, domain.VerdictLowest30:
-			deals = append(deals, deal{name: s.ProductName, url: s.ProductURL, verdict: hp.Line(), price: s.CurrentPrice})
-		}
-	}
+	deals := pickDigestDeals(subs, func(productID int64) (domain.PriceStats, error) {
+		return priceRepo.Stats(ctx, productID, now)
+	}, now)
 	if len(deals) == 0 {
 		return "", false
 	}

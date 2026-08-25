@@ -90,6 +90,11 @@ type Subscription struct {
 	ProductImageURL string
 	ProductPublicID string // для ссылки на страницу графика /p/<public_id>
 	CurrentPrice    float64
+	// ProductInStock — наличие товара по последнему скрейпу (products.in_stock).
+	// Заполняется только там, где запрос его выбирает (GetActiveByUserID); в
+	// остальных путях остаётся false, поэтому проверять его можно лишь зная,
+	// что данные пришли из такого запроса.
+	ProductInStock bool
 }
 
 type Notification struct {
