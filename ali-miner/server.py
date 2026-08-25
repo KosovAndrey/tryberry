@@ -71,6 +71,11 @@ LANE_JITTER = float(os.getenv("ALI_LANE_JITTER", "0.4"))
 # ним на минуту легли DNS Docker и половина мониторинга. mem_limit (2g) сделал
 # такой отказ локальным, но рост не лечит: без recycle дорожку будет тихо
 # убивать раз в пару суток. 0 = выключить.
+# Гасить страницу выдачи, когда она не нужна (см. Lane._park). Выключается на
+# случай, если окажется, что антибот всё же смотрит на живую вкладку.
+PARK_PAGE = os.getenv("ALI_PARK_PAGE", "true").lower() in ("1", "true", "yes")
+PARK_TIMEOUT_S = float(os.getenv("ALI_PARK_TIMEOUT_SECONDS", "10"))
+
 LANE_MAX_AGE_S = float(os.getenv("ALI_LANE_MAX_AGE_SECONDS", "21600"))
 # Разброс порога по дорожкам, чтобы пул не пересоздавался весь разом и поиск
 # не проваливался в 502 на время общего прогрева.
@@ -314,6 +319,25 @@ class Lane:
             log.error("дорожка %d: пересоздание упало: %s", self.idx, e)
             return False
 
+    async def _park(self):
+        """Увести вкладку на about:blank, когда страница больше не нужна.
+
+        Замер 25-08: выдача aliexpress.ru раздувает рендерер с 288 МиБ до 3 ГиБ
+        за ~20 секунд, причём основной рост идёт УЖЕ ПОСЛЕ успешного прогрева —
+        то есть страница живёт своей жизнью, это не наш скролл и не течь по
+        аптайму. Дальше её убивал OOM, и дорожка стояла мёртвой до следующего
+        recycle. Сессия X5SEC живёт в cookie контекста, а не во вкладке, поэтому
+        гасить страницу между делами безопасно.
+
+        Ошибку глотаем: не смогли увести — переживём, дорожку вылечит вотчдог."""
+        if not PARK_PAGE or not self._page:
+            return
+        try:
+            await asyncio.wait_for(self._page.goto("about:blank", wait_until="commit"),
+                                   timeout=PARK_TIMEOUT_S)
+        except Exception as e:  # noqa: BLE001
+            log.info("дорожка %d: не увёл вкладку на about:blank: %s", self.idx, _first_line(e))
+
     async def _nudge(self):
         # Движение мыши + колесо: антибот смотрит на человекоподобные события
         # указателя.
@@ -407,6 +431,7 @@ class Lane:
             self._next_warm = 0.0
             self._last_warm = time.monotonic()
             log.info("дорожка %d прогрета: search 200 с товарами (X5SEC пройден)", self.idx)
+            await self._park()
             return
 
         self.healthy = False
@@ -531,6 +556,10 @@ class Lane:
                     self._page.remove_listener("response", on_resp)
                 except Exception:  # noqa: BLE001
                     pass
+                # Ответ уже забран — держать выдачу открытой незачем, а стоит она
+                # гигабайтами в минуту (см. _park). Гасим и после запроса, не
+                # только после прогрева.
+                await self._park()
 
     def due_keepalive(self, now: float) -> bool:
         return self.healthy and WARM_KEEPALIVE_S > 0 and (now - self._last_warm) >= WARM_KEEPALIVE_S

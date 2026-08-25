@@ -747,6 +747,12 @@ services:
         # Пауза между закрытием старого браузера и запуском нового: ждём, пока
         # cgroup реально отдаст память (browser.close() лишь просит chrome
         # завершиться). Без неё новый браузер стартовал поверх умирающего.
+        # Гасить вкладку (about:blank) после прогрева и после каждого запроса:
+        # выдача aliexpress.ru раздувает рендерер до 3 ГиБ за ~20 секунд и живёт
+        # так сама по себе. Рубильник на случай, если антибот смотрит на живую
+        # вкладку — тогда ALI_PARK_PAGE=false вернёт прежнее поведение.
+        ALI_PARK_PAGE: "${ALI_PARK_PAGE:-true}"
+        ALI_PARK_TIMEOUT_SECONDS: "${ALI_PARK_TIMEOUT_SECONDS:-10}"
         ALI_RELAUNCH_SETTLE_SECONDS: "${ALI_RELAUNCH_SETTLE_SECONDS:-15}"
         ALI_RELAUNCH_SETTLE_FRACTION: "${ALI_RELAUNCH_SETTLE_FRACTION:-0.5}"
         # Те же рычаги, что у wb-сайдкара. Значения = дефолты кода.
