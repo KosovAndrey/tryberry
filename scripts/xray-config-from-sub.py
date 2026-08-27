@@ -12,6 +12,10 @@ outbound'ов под общим balancer'ом (leastPing до Telegram), как 
 умолчанию — 16 штук, разложенных round-robin по странам (сначала близкие к
 RU/Telegram), чтобы падение одной локации не выкосило все плечи разом.
 
+Inbound'ов два: :8888 — общий egress (липкое лучшее плечо, под long-poll
+Telegram), :8889 — поисковый (случайное плечо на соединение, чтобы лимит
+search.wb.ru по IP делился на число узлов). См. spread_balancer().
+
 Использование (на сервере, из корня репо):
 
     python3 scripts/xray-config-from-sub.py 'https://sub.example/CODE' \
@@ -264,6 +268,28 @@ def balancer(prefer: list[str] | None) -> dict[str, Any]:
     }
 
 
+def spread_balancer() -> dict[str, Any]:
+    """Балансировщик для поискового плеча: РАЗНЫЙ узел на каждое соединение.
+
+    Основной egress намеренно липкий (одно плечо: long-poll к Telegram любит
+    стабильный путь). Поиску нужно ровно обратное: search.wb.ru лимитирует по
+    IP, и весь поиск с одного узла упирается в 429 — замер 24–27.08 дал 44 832
+    ответа 429 против 30 751 успешных, притом что 403 после ухода с
+    __internal исчезли совсем. random раскидывает соединения по всем плечам,
+    и лимит делится на их число.
+
+    random, а не leastPing/leastLoad: обе «умные» стратегии сходятся на лучшем
+    узле — то есть ровно на том, чего мы здесь избегаем. Мёртвое плечо ловится
+    ретраем на стороне скрейпера (fetchPage перебирает попытки), а не пробером.
+    """
+    return {
+        "//": "Поисковый egress: случайное плечо на соединение — лимит WB делится на число узлов.",
+        "tag": "egress-spread",
+        "selector": ["vless"],
+        "strategy": {"type": "random"},
+    }
+
+
 def build(nodes: list[dict[str, Any]], probe_interval: str,
           prefer: list[str] | None = None) -> dict[str, Any]:
     used: set[str] = set()
@@ -280,13 +306,25 @@ def build(nodes: list[dict[str, Any]], probe_interval: str,
             "port": 8888,
             "protocol": "http",
             "sniffing": {"enabled": True, "destOverride": ["http", "tls"]},
+        }, {
+            "//": "Поисковый прокси: SEARCH_PROXY_URLS=http://xray:8889 у search/reseller-worker.",
+            "tag": "in-search",
+            "listen": "0.0.0.0",
+            "port": 8889,
+            "protocol": "http",
+            "sniffing": {"enabled": True, "destOverride": ["http", "tls"]},
         }],
         "outbounds": outbounds,
         **watcher(prefer, probe_interval),
         "routing": {
             "domainStrategy": "AsIs",
-            "balancers": [balancer(prefer)],
-            "rules": [{"type": "field", "network": "tcp,udp", "balancerTag": "egress"}],
+            "balancers": [balancer(prefer), spread_balancer()],
+            # Порядок правил значим: первое совпавшее выигрывает, поэтому
+            # поисковый inbound перехватываем ДО общего правила.
+            "rules": [
+                {"type": "field", "inboundTag": ["in-search"], "balancerTag": "egress-spread"},
+                {"type": "field", "network": "tcp,udp", "balancerTag": "egress"},
+            ],
         },
     }
 

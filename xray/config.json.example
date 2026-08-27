@@ -20,6 +20,20 @@
           "tls"
         ]
       }
+    },
+    {
+      "//": "Поисковый прокси: SEARCH_PROXY_URLS=http://xray:8889 у search/reseller-worker.",
+      "tag": "in-search",
+      "listen": "0.0.0.0",
+      "port": 8889,
+      "protocol": "http",
+      "sniffing": {
+        "enabled": true,
+        "destOverride": [
+          "http",
+          "tls"
+        ]
+      }
     }
   ],
   "outbounds": [
@@ -148,9 +162,27 @@
         "strategy": {
           "type": "leastPing"
         }
+      },
+      {
+        "//": "Поисковый egress: случайное плечо на соединение — лимит search.wb.ru по IP делится на число узлов.",
+        "tag": "egress-spread",
+        "selector": [
+          "vless"
+        ],
+        "strategy": {
+          "type": "random"
+        }
       }
     ],
     "rules": [
+      {
+        "//": "Порядок значим: поисковый inbound перехватываем ДО общего правила.",
+        "type": "field",
+        "inboundTag": [
+          "in-search"
+        ],
+        "balancerTag": "egress-spread"
+      },
       {
         "type": "field",
         "network": "tcp,udp",
