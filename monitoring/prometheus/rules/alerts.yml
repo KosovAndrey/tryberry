@@ -180,6 +180,25 @@ groups:
           summary: "WB-search-сайдкар: нет живых дорожек"
           description: "wb-search-miner отвечает, но 0 прогретых дорожек 15+ минут — браузер не проходит wbaas-стену (create-token 498). Проверить версию patchright (пин 1.60.1) и логи дорожки; при тайтенинге wbaas — обновить движок. Горячие WB-запросы пока падают в 403."
 
+      # Основной путь WB-поиска (direct на публичный search.wb.ru) не отдаёт НИ
+      # одного успеха, а сайдкар при этом работает — значит поиск целиком уехал в
+      # браузер: он дорогой, тянет одну страницу вместо пяти и вывозит примерно
+      # половину запросов. Так выглядит мёртвый поисковый egress (inbound xray
+      # :8889) — отказ 27-08, который в метриках читался как ТИШИНА, а не как
+      # ошибки; с тех пор транспортные ошибки считаются как direct+error.
+      # Условие «сайдкар работает» отсекает штатный простой без запросов.
+      - alert: WbSearchDirectDown
+        expr: |
+          sum(increase(tryberrybot_wb_search_fetch_total{transport="direct",result="ok"}[15m])) == 0
+          and
+          sum(increase(tryberrybot_wb_search_fetch_total{transport="browser"}[15m])) > 0
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "WB-поиск: direct не даёт успехов, всё идёт через браузер"
+          description: "За 15 минут ни одного успешного direct-запроса к search.wb.ru при живом браузерном фолбэке. Смотреть долю result=error (egress не пропускает) против 429/forbidden (лимит/стена WB): sum by (result) (increase(tryberrybot_wb_search_fetch_total{transport=\"direct\"}[15m])). Проверить поисковое плечо: docker exec pt_xray netstat -ltn | grep 8889 и SEARCH_PROXY_URLS в .env. Откат — вернуть SEARCH_PROXY_URLS на http://xray:8888 и перезапустить search-worker/reseller-worker."
+
       # ГЛАВНЫЙ алерт по WB-сайдкару: healthy_lanes ВРЁТ при залипании драйвера.
       # Инцидент 13-08: /search висел бесконечно (чтение тела ответа было без
       # дедлайна и держало лок дорожки), при этом healthy_lanes=1 и метрики

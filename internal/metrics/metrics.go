@@ -204,6 +204,7 @@ var (
 
 	// WBSearchFetch — исходы запросов страниц WB-поиска по транспорту и результату.
 	// transport: direct | browser; result: ok | forbidden | 429 | other | error.
+	// direct+error = запрос не дошёл вовсе (мёртвый egress/прокси), а не ответ WB.
 	// browser+ok = горячий запрос, спасённый браузер-сайдкаром wb-search-miner
 	// (см. wildberries_search.go). browser+forbidden = челлендж не пройден и в
 	// браузере. direct+forbidden = обычный 403 на горячем (уходит в сайдкар).

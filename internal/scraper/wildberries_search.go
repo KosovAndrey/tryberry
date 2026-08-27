@@ -383,6 +383,11 @@ func (s *WildberriesSearchScraper) fetchPage(ctx context.Context, apiURL, refere
 
 		resp, err := pc.client.Do(req)
 		if err != nil {
+			// Считаем ОБЯЗАТЕЛЬНО: сюда попадает мёртвый egress (прокси не
+			// пропускает, узел лёг). Без метрики такой отказ выглядит не всплеском
+			// ошибок, а ТИШИНОЙ в direct — ровно то, что запутало разбор 27-08,
+			// когда весь поиск молча уехал в браузерный сайдкар.
+			metrics.WBSearchFetch.WithLabelValues("direct", "error").Inc()
 			lastErr = fmt.Errorf("request via %s: %w", pc.label, err)
 			s.sleep(ctx, delay)
 			delay = bumpDelay(delay)
