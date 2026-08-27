@@ -108,6 +108,15 @@ func (r *Receiver) SetCommands() error {
 // Блокируется до отмены ctx. getUpdates — синглтон, поэтому ingestor должен быть
 // single-instance (в отличие от реплицируемых bot-worker).
 //
+// Оффсет двигаем ТОЛЬКО после успеха fn. Telegram считает апдейт доставленным,
+// когда следующий getUpdates пришёл с offset больше его update_id, — то есть
+// подтверждение отдаём мы, и отдавать его до записи в Kafka значит терять
+// апдейты при недоступном брокере (пользователь пишет боту, бот молчит навсегда).
+// При ошибке fn остаток пачки не трогаем и перезапрашиваем её с того же оффсета
+// после паузы: уже опубликованные апдейты подтверждены сдвигом оффсета и заново
+// не придут, повторится ровно упавший и всё, что за ним. Размен — at-least-once:
+// если Kafka приняла запись, а ответ до нас не доехал, апдейт продублируется.
+//
 // Цикл явный, а не GetUpdatesChan: tgbotapi глотает ошибки getUpdates внутри
 // (лог + retry), и отозванный на лету токен / умерший egress снаружи не видны —
 // бот просто молчит (инцидент 2026-07-08). Здесь каждый успешный полл двигает
@@ -115,7 +124,7 @@ func (r *Receiver) SetCommands() error {
 // telegram_poll_errors_total; алерт TelegramPollingStale ловит застывший цикл.
 // Long-poll возвращается каждые ~timeout секунд и без апдейтов, так что метрика
 // живая независимо от трафика.
-func (r *Receiver) RunPolling(ctx context.Context, fn func(context.Context, tgbotapi.Update)) error {
+func (r *Receiver) RunPolling(ctx context.Context, fn func(context.Context, tgbotapi.Update) error) error {
 	if err := r.DeleteWebhook(); err != nil {
 		r.log.Warn("delete webhook before polling (continuing)", "err", ScrubToken(err))
 	}
@@ -125,6 +134,18 @@ func (r *Receiver) RunPolling(ctx context.Context, fn func(context.Context, tgbo
 
 	// Тот же ретрай-интервал, что у GetUpdatesChan внутри tgbotapi.
 	const errorBackoff = 3 * time.Second
+	return r.pollLoop(ctx, r.api.GetUpdates, fn, timeout, errorBackoff)
+}
+
+// pollLoop — сам цикл, отделённый от *tgbotapi.BotAPI ради тестов (getUpdates
+// и backoff подставляются).
+func (r *Receiver) pollLoop(
+	ctx context.Context,
+	getUpdates func(tgbotapi.UpdateConfig) ([]tgbotapi.Update, error),
+	fn func(context.Context, tgbotapi.Update) error,
+	timeout int,
+	backoff time.Duration,
+) error {
 	offset := 0
 	for {
 		if ctx.Err() != nil {
@@ -133,22 +154,45 @@ func (r *Receiver) RunPolling(ctx context.Context, fn func(context.Context, tgbo
 		}
 		u := tgbotapi.NewUpdate(offset)
 		u.Timeout = timeout
-		updates, err := r.api.GetUpdates(u)
+		updates, err := getUpdates(u)
 		if err != nil {
 			metrics.TelegramPollErrors.Inc()
 			r.log.Warn("getUpdates failed, retrying", "err", ScrubToken(err))
-			select {
-			case <-ctx.Done():
-			case <-time.After(errorBackoff):
-			}
+			r.sleep(ctx, backoff)
 			continue
 		}
 		metrics.TelegramPollLastSuccess.SetToCurrentTime()
+
+		// ingestFailed — публикация апдейта не удалась: остаток пачки не
+		// разбираем и перезапрашиваем её с того же оффсета после паузы.
+		ingestFailed := false
 		for _, update := range updates {
+			if err := fn(ctx, update); err != nil {
+				// Оффсет НЕ двигаем — апдейт не подтверждён и придёт снова.
+				r.log.Error("ingest update failed, will retry from same offset",
+					"update_id", update.UpdateID, "err", ScrubToken(err))
+				ingestFailed = true
+				break
+			}
 			if update.UpdateID >= offset {
 				offset = update.UpdateID + 1
 			}
-			fn(ctx, update)
 		}
+		if ingestFailed {
+			r.sleep(ctx, backoff)
+		}
+	}
+}
+
+// sleep — пауза, прерываемая отменой ctx.
+func (r *Receiver) sleep(ctx context.Context, d time.Duration) {
+	if d <= 0 {
+		return
+	}
+	t := time.NewTimer(d)
+	defer t.Stop()
+	select {
+	case <-ctx.Done():
+	case <-t.C:
 	}
 }

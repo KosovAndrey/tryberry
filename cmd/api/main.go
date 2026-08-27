@@ -119,14 +119,21 @@ func run(log *slog.Logger) error {
 
 	// publish — публикует апдейт в Kafka. Ключ = user ID, чтобы апдейты одного
 	// пользователя шли в одну партицию (порядок диалога сохраняется).
-	publish := func(ctx context.Context, update tgbotapi.Update) {
+	//
+	// Ошибку ОТДАЁМ наверх, а не просто логируем: и в polling-, и в webhook-режиме
+	// от неё зависит, будет ли апдейт доставлен повторно (оффсет getUpdates /
+	// код ответа Telegram). Проглоченная ошибка = молча потерянное сообщение
+	// пользователя при недоступной Kafka — как у VK и MAX ниже, отвечаем честно.
+	publish := func(ctx context.Context, update tgbotapi.Update) error {
 		key := ""
 		if u := update.SentFrom(); u != nil {
 			key = strconv.FormatInt(u.ID, 10)
 		}
 		if err := producer.Send(ctx, key, update); err != nil {
 			log.Error("publish update", "err", err)
+			return err
 		}
+		return nil
 	}
 
 	if webhookEnabled {
@@ -173,7 +180,11 @@ func run(log *slog.Logger) error {
 			w.WriteHeader(http.StatusBadRequest)
 			return
 		}
-		publish(r.Context(), update)
+		if err := publish(r.Context(), update); err != nil {
+			// 500 → Telegram повторит доставку апдейта (как у VK и MAX ниже).
+			w.WriteHeader(http.StatusInternalServerError)
+			return
+		}
 		w.WriteHeader(http.StatusOK)
 	})
 

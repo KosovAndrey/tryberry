@@ -419,6 +419,25 @@ groups:
           summary: "api: getUpdates не проходит >5 мин — бот не принимает команды"
           description: "Последний успешный long-poll был {{ $value | humanizeDuration }} назад. Причина в ошибках поллинга: rate(tryberrybot_telegram_poll_errors_total[5m]); токен — curl getMe; egress — dcp logs xray."
 
+      # Приём апдейтов встал НА ЗАПИСИ в Kafka. Поллинг при этом здоров (метка
+      # last_success двигается), поэтому TelegramPollingStale молчит, а бот всё
+      # равно не отвечает: с 2026-08-27 ingestor не двигает оффсет getUpdates,
+      # пока апдейт не записан, — сообщения не теряются, но копятся у Telegram.
+      # Ловим факт «продюс в telegram-updates падает и не проходит»: error>0 без
+      # success за 10 минут (unless — чтобы правило не онемело как раз тогда,
+      # когда успешных записей нет вовсе).
+      - alert: TelegramIngestStalled
+        expr: |
+          sum(increase(tryberrybot_kafka_messages_produced_total{topic="telegram-updates",status="error"}[10m])) > 0
+          unless
+          sum(increase(tryberrybot_kafka_messages_produced_total{topic="telegram-updates",status="success"}[10m])) > 0
+        for: 5m
+        labels:
+          severity: critical
+        annotations:
+          summary: "api: апдейты Telegram не пишутся в Kafka — бот не отвечает"
+          description: "Продюс в topic telegram-updates падает 5+ минут подряд, успешных записей нет. Апдейты не потеряны (оффсет getUpdates не подтверждается и Telegram отдаст их снова), но обработки нет. Смотреть брокер: docker logs pt_kafka --tail 100; логи приёмника: docker logs pt_api | grep -E 'publish update|ingest update failed'."
+
       # Все отправки канала падают (а не «нет трафика»): error>0 БЕЗ ok за 15м.
       # unless вместо and — если ok-серия за окно пуста, and не сматчился бы и
       # алерт молчал бы ровно тогда, когда всё лежит. Ловит и per-channel отказ
