@@ -21,3 +21,17 @@ func TestFormatPrice(t *testing.T) {
 		}
 	}
 }
+
+// Разделитель — именно неразрывный пробел: в мессенджерах обычный рвёт число
+// переносом строки («75\n000 ₽»), ради чего хелпер и заводился.
+func TestFormatPriceUsesNonBreakingSpace(t *testing.T) {
+	got := FormatPrice(75000)
+	if got != "75 000 ₽" {
+		t.Errorf("FormatPrice(75000) = %q; want %q", got, "75 000 ₽")
+	}
+	for _, r := range got {
+		if r == ' ' {
+			t.Errorf("в %q попал обычный пробел", got)
+		}
+	}
+}

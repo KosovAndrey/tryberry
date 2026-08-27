@@ -306,10 +306,10 @@ func (b *Bot) maybeInstantBelowTargetAlert(ctx context.Context, chatID, subID in
 	}
 
 	text := fmt.Sprintf(
-		"✅ Порог <b>%.0f ₽</b> установлен.\n\n"+
-			"🎯 <b>%s</b> уже стоит <b>%.0f ₽</b> — ниже твоего порога!\n"+
+		"✅ Порог <b>%s</b> установлен.\n\n"+
+			"🎯 <b>%s</b> уже стоит <b>%s</b> — ниже твоего порога!\n"+
 			"Следующее уведомление пришлю, когда цена опустится ещё ниже.",
-		target, product.Name, current,
+		domain.FormatPrice(target), product.Name, domain.FormatPrice(current),
 	)
 	m := tgbotapi.NewMessage(chatID, text)
 	m.ParseMode = "HTML"
@@ -425,11 +425,11 @@ func (b *Bot) buildListView(subs []*domain.Subscription) (string, tgbotapi.Inlin
 		}
 		currentPriceStr := "нет данных"
 		if sub.CurrentPrice > 0 {
-			currentPriceStr = fmt.Sprintf("%s%.0f ₽", priceEmoji, sub.CurrentPrice)
+			currentPriceStr = priceEmoji + domain.FormatPrice(sub.CurrentPrice)
 		}
 
-		fmt.Fprintf(&sb, "%d. %s <b>%s</b>\n   сейчас %s  |  при подписке %.0f ₽\n   %s\n\n",
-			i+1, marketplaceIcon(sub.ProductMarketplace), sub.ProductName, currentPriceStr, sub.FirstSeenPrice,
+		fmt.Fprintf(&sb, "%d. %s <b>%s</b>\n   сейчас %s  |  при подписке %s\n   %s\n\n",
+			i+1, marketplaceIcon(sub.ProductMarketplace), sub.ProductName, currentPriceStr, domain.FormatPrice(sub.FirstSeenPrice),
 			domain.TriggerDescription(sub.TriggerType, sub.TargetPrice, sub.DiscountPct),
 		)
 	}
@@ -644,7 +644,7 @@ func (b *Bot) doTrack(ctx context.Context, chatID int64, rawURL string, user *do
 
 		priceLine := "Цена появится, когда товар вернётся в продажу."
 		if sub.BaselinePrice > 0 {
-			priceLine = fmt.Sprintf("💰 Последняя цена: <b>%.0f ₽</b>", sub.BaselinePrice)
+			priceLine = fmt.Sprintf("💰 Последняя цена: <b>%s</b>", domain.FormatPrice(sub.BaselinePrice))
 		}
 		text := fmt.Sprintf(
 			"✅ <b>Добавил в отслеживание!</b>\n\n"+
@@ -684,18 +684,18 @@ func (b *Bot) doTrack(ctx context.Context, chatID int64, rawURL string, user *do
 		responseText = fmt.Sprintf(
 			"✅ <b>Добавил в отслеживание!</b>\n\n"+
 				"<b>%s</b>\n"+
-				"💰 Текущая цена: <b>%.0f ₽</b>\n\n"+
+				"💰 Текущая цена: <b>%s</b>\n\n"+
 				"🔔 Сейчас уведомлю при <b>любом снижении</b>. Можно сменить тип уведомления кнопками ниже 👇",
-			result.Name, result.Price,
+			result.Name, domain.FormatPrice(result.Price),
 		)
 	} else {
 		metrics.TrackCommands.WithLabelValues("reactivated").Inc()
 		responseText = fmt.Sprintf(
 			"🔄 <b>Отслеживание возобновлено!</b>\n\n"+
 				"<b>%s</b>\n"+
-				"💰 Текущая цена: <b>%.0f ₽</b>\n\n"+
+				"💰 Текущая цена: <b>%s</b>\n\n"+
 				"🔔 Тип уведомления: <b>любое снижение</b>. Сменить — кнопками ниже 👇",
-			result.Name, result.Price,
+			result.Name, domain.FormatPrice(result.Price),
 		)
 	}
 

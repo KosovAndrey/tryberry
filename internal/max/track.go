@@ -132,7 +132,7 @@ func (b *Bot) handleTrack(ctx context.Context, maxID int64, user *domain.User, r
 		}
 		priceLine := "Цена появится, когда товар вернётся в продажу."
 		if oos.BaselinePrice > 0 {
-			priceLine = fmt.Sprintf("💰 Последняя цена: %.0f ₽", oos.BaselinePrice)
+			priceLine = "💰 Последняя цена: " + domain.FormatPrice(oos.BaselinePrice)
 		}
 		b.send(ctx, maxID, fmt.Sprintf(
 			"✅ Добавил в отслеживание!\n\n%s\n🚫 Сейчас товара нет в наличии (нет активного предложения).\n%s\n\n"+
@@ -154,9 +154,9 @@ func (b *Bot) handleTrack(ctx context.Context, maxID int64, user *domain.User, r
 		head = "🔄 Отслеживание возобновлено!"
 	}
 	b.send(ctx, maxID, fmt.Sprintf(
-		"%s\n\n%s\n💰 Текущая цена: %.0f ₽\n\n"+
+		"%s\n\n%s\n💰 Текущая цена: %s\n\n"+
 			"🔔 Сейчас уведомлю при любом снижении. Сменить тип уведомления — кнопками ниже 👇",
-		head, result.Name, result.Price), maxTriggerKeyboard(sub.ID, domain.TriggerAnyDrop, b.chartURL(product.PublicID)))
+		head, result.Name, domain.FormatPrice(result.Price)), maxTriggerKeyboard(sub.ID, domain.TriggerAnyDrop, b.chartURL(product.PublicID)))
 }
 
 // ── Тип триггера товарной подписки ────────────────────────────────────────────
@@ -320,10 +320,10 @@ func (b *Bot) maybeInstantBelowTargetAlert(ctx context.Context, maxID, subID int
 	}
 
 	text := fmt.Sprintf(
-		"✅ Порог %.0f ₽ установлен.\n\n"+
-			"🎯 %s уже стоит %.0f ₽ — ниже твоего порога!\n"+
+		"✅ Порог %s установлен.\n\n"+
+			"🎯 %s уже стоит %s — ниже твоего порога!\n"+
 			"Следующее уведомление пришлю, когда цена опустится ещё ниже.",
-		target, product.Name, current,
+		domain.FormatPrice(target), product.Name, domain.FormatPrice(current),
 	)
 	b.send(ctx, maxID, text, maxTriggerKeyboard(subID, domain.TriggerBelowTarget, b.chartURL(product.PublicID)))
 	return true
@@ -444,10 +444,10 @@ func (b *Bot) showProductList(ctx context.Context, maxID int64, user *domain.Use
 			if sub.CurrentPrice < sub.FirstSeenPrice {
 				emoji = "📉 "
 			}
-			current = fmt.Sprintf("%s%.0f ₽", emoji, sub.CurrentPrice)
+			current = emoji + domain.FormatPrice(sub.CurrentPrice)
 		}
-		fmt.Fprintf(&sb, "%d. %s\n   сейчас %s | при подписке %.0f ₽\n   %s\n",
-			i+1, sub.ProductName, current, sub.FirstSeenPrice, sub.ProductURL)
+		fmt.Fprintf(&sb, "%d. %s\n   сейчас %s | при подписке %s\n   %s\n",
+			i+1, sub.ProductName, current, domain.FormatPrice(sub.FirstSeenPrice), sub.ProductURL)
 		if cu := b.chartURL(sub.ProductPublicID); cu != "" {
 			fmt.Fprintf(&sb, "   📈 График: %s\n", cu)
 		}

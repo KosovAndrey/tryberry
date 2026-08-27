@@ -12,6 +12,8 @@ import (
 	"net/http"
 	"strings"
 	"time"
+
+	"gitlab.com/KosovAndrey/tryberrybot/internal/domain"
 )
 
 // ErrTelegramPermanent — Telegram отверг запрос ПЕРМАНЕНТНО (HTTP 4xx, кроме 429):
@@ -86,8 +88,8 @@ func (n *Notifier) SendPriceAlert(ctx context.Context, a PriceAlert) error {
 	var caption string
 	if a.BackInStock {
 		caption = fmt.Sprintf(
-			"🔔 Снова в наличии!\n\n%s\n\nЦена: %.0f ₽\nТеперь слежу за снижением цены (поменять — /list)\n\n%s",
-			a.ProductName, a.NewPrice, a.ProductURL,
+			"🔔 Снова в наличии!\n\n%s\n\nЦена: %s\nТеперь слежу за снижением цены (поменять — /list)\n\n%s",
+			a.ProductName, domain.FormatPrice(a.NewPrice), a.ProductURL,
 		)
 	} else {
 		diff := a.OldPrice - a.NewPrice
@@ -97,11 +99,11 @@ func (n *Notifier) SendPriceAlert(ctx context.Context, a PriceAlert) error {
 			honest = "\n" + a.HonestLine
 		}
 		caption = fmt.Sprintf(
-			"📉 Цена снизилась!\n\n%s\n\nБыло: %.0f ₽ → Стало: %.0f ₽\nСкидка: %.0f ₽ (%.0f%%)%s\n\n%s",
+			"📉 Цена снизилась!\n\n%s\n\nБыло: %s → Стало: %s\nСкидка: %s (%.0f%%)%s\n\n%s",
 			a.ProductName,
-			a.OldPrice,
-			a.NewPrice,
-			diff,
+			domain.FormatPrice(a.OldPrice),
+			domain.FormatPrice(a.NewPrice),
+			domain.FormatPrice(diff),
 			percent,
 			honest,
 			a.ProductURL,
@@ -176,16 +178,17 @@ func (n *Notifier) SendBundledAlert(ctx context.Context, a BundledAlert) error {
 	for _, it := range shown {
 		name := html.EscapeString(it.ProductName)
 		if it.BackInStock {
-			fmt.Fprintf(&sb, "🔔 <a href=\"%s\">%s</a>\n    снова в наличии — <b>%.0f ₽</b>\n\n",
-				it.ProductURL, name, it.NewPrice)
+			fmt.Fprintf(&sb, "🔔 <a href=\"%s\">%s</a>\n    снова в наличии — <b>%s</b>\n\n",
+				it.ProductURL, name, domain.FormatPrice(it.NewPrice))
 			continue
 		}
 		fmt.Fprintf(&sb, "📉 <a href=\"%s\">%s</a>\n", it.ProductURL, name)
 		if it.OldPrice > it.NewPrice && it.OldPrice > 0 {
 			pct := math.Round((it.OldPrice - it.NewPrice) / it.OldPrice * 100)
-			fmt.Fprintf(&sb, "    <b>%.0f ₽</b>  (было %.0f ₽, -%.0f%%)\n\n", it.NewPrice, it.OldPrice, pct)
+			fmt.Fprintf(&sb, "    <b>%s</b>  (было %s, -%.0f%%)\n\n",
+				domain.FormatPrice(it.NewPrice), domain.FormatPrice(it.OldPrice), pct)
 		} else {
-			fmt.Fprintf(&sb, "    <b>%.0f ₽</b>\n\n", it.NewPrice)
+			fmt.Fprintf(&sb, "    <b>%s</b>\n\n", domain.FormatPrice(it.NewPrice))
 		}
 	}
 	if len(a.Items) > maxBundleItems {
@@ -290,9 +293,10 @@ func renderSearchAlert(a SearchAlert, budget int) string {
 		}
 		fmt.Fprintf(&sb, "📉 <a href=\"%s\">%s</a>\n", it.URL, html.EscapeString(name))
 		if it.PrevRub > it.EffectiveRub && it.PrevRub > 0 {
-			fmt.Fprintf(&sb, "    <b>%.0f ₽</b>  (было %.0f ₽)", it.EffectiveRub, it.PrevRub)
+			fmt.Fprintf(&sb, "    <b>%s</b>  (было %s)",
+				domain.FormatPrice(it.EffectiveRub), domain.FormatPrice(it.PrevRub))
 		} else {
-			fmt.Fprintf(&sb, "    <b>%.0f ₽</b>", it.EffectiveRub)
+			fmt.Fprintf(&sb, "    <b>%s</b>", domain.FormatPrice(it.EffectiveRub))
 		}
 		if it.PointsRub > 0 {
 			fmt.Fprintf(&sb, "  +%.0f баллов", it.PointsRub)

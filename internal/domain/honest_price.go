@@ -119,7 +119,7 @@ func (hp HonestPrice) Line() string {
 	case VerdictTypical:
 		return "🟡 Обычная цена для этого товара"
 	case VerdictAboveTypical:
-		return fmt.Sprintf("🔴 Выше обычной — медиана за %s %.0f ₽", hp.medianWindowLabel(), hp.Median30)
+		return fmt.Sprintf("🔴 Выше обычной — медиана за %s %s", hp.medianWindowLabel(), FormatPrice(hp.Median30))
 	default:
 		return ""
 	}

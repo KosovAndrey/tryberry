@@ -76,7 +76,7 @@ func TriggerDescription(t TriggerType, target *float64, pct *int16) string {
 	switch t {
 	case TriggerBelowTarget:
 		if target != nil {
-			return fmt.Sprintf("📉 уведомлю, когда цена опустится ниже %.0f ₽", *target)
+			return fmt.Sprintf("📉 уведомлю, когда цена опустится ниже %s", FormatPrice(*target))
 		}
 		return "📉 уведомлю при достижении целевой цены"
 	case TriggerAnyDrop:
