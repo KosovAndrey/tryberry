@@ -481,20 +481,29 @@ func (b *Bot) handleListSearch(ctx context.Context, chatID int64, user *domain.U
 		b.send(m)
 		return
 	}
-	text, keyboard := b.buildSearchListView(subs)
+	text, keyboard := b.buildSearchListView(subs, user.EffectivePlan(time.Now()).SearchInterval)
 	m := tgbotapi.NewMessage(chatID, text)
 	m.ParseMode = "HTML"
 	m.ReplyMarkup = keyboard
 	b.send(m)
 }
 
-func (b *Bot) buildSearchListView(subs []*domain.SearchSubscription) (string, tgbotapi.InlineKeyboardMarkup) {
+// searchInterval — ожидаемый каданс обновления выдачи на тарифе пользователя;
+// по нему решаем, застоялась ли подписка (см. domain.StaleSearchNote).
+func (b *Bot) buildSearchListView(subs []*domain.SearchSubscription, searchInterval time.Duration) (string, tgbotapi.InlineKeyboardMarkup) {
+	now := time.Now()
 	var sb strings.Builder
 	fmt.Fprintf(&sb, "🔎 <b>Поиск-подписки — %d активных</b>\n\n", len(subs))
 	for i, s := range subs {
-		fmt.Fprintf(&sb, "%d. %s <b>%s</b>\n   %s\n\n",
+		fmt.Fprintf(&sb, "%d. %s <b>%s</b>\n   %s\n",
 			i+1, marketplaceIcon(s.Marketplace), htmlEscape(s.QueryText),
 			domain.TriggerDescription(s.TriggerType, s.TargetPrice, s.DiscountPct))
+		// Молчание подписки под блоком площадки неотличимо от «цены не падали» —
+		// поэтому застоявшуюся выдачу проговариваем прямо в списке.
+		if note := domain.StaleSearchNote(s.LastScrapedAt, s.CreatedAt, searchInterval, now); note != "" {
+			fmt.Fprintf(&sb, "   %s\n", note)
+		}
+		sb.WriteString("\n")
 	}
 
 	var rows [][]tgbotapi.InlineKeyboardButton
@@ -540,7 +549,7 @@ func (b *Bot) callbackUntrackSearch(ctx context.Context, cb *tgbotapi.CallbackQu
 
 	subs, err := b.searchSubRepo.GetActiveByUserID(ctx, user.ID)
 	if err == nil && len(subs) > 0 {
-		text, keyboard := b.buildSearchListView(subs)
+		text, keyboard := b.buildSearchListView(subs, user.EffectivePlan(time.Now()).SearchInterval)
 		b.editMenu(cb.Message.Chat.ID, cb.Message.MessageID, text, keyboard)
 		b.answerCallback(cb.ID, "✅ Поиск-подписка отменена")
 		return

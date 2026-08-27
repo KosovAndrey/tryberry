@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log/slog"
 	"strings"
+	"time"
 
 	tgbotapi "github.com/go-telegram-bot-api/telegram-bot-api/v5"
 	"github.com/redis/go-redis/v9"
@@ -506,7 +507,7 @@ func (b *Bot) handleCallback(ctx context.Context, cb *tgbotapi.CallbackQuery) {
 			)
 			return
 		}
-		text, keyboard := b.buildSearchListView(subs)
+		text, keyboard := b.buildSearchListView(subs, user.EffectivePlan(time.Now()).SearchInterval)
 		b.editMenu(chatID, messageID, text, keyboard)
 
 	case cb.Data == "menu:trial":

@@ -326,10 +326,18 @@ func (b *Bot) showSearchList(ctx context.Context, maxID int64, user *domain.User
 		fmt.Fprintf(&sb, " (стр. %d/%d)", page+1, pages)
 	}
 	sb.WriteString("\n\n")
+	interval := user.EffectivePlan(time.Now()).SearchInterval
+	now := time.Now()
 	for i := start; i < end; i++ {
 		s := subs[i]
-		fmt.Fprintf(&sb, "%d. %s\n   %s\n   %s\n\n",
+		fmt.Fprintf(&sb, "%d. %s\n   %s\n   %s\n",
 			i+1, s.QueryText, domain.TriggerDescription(s.TriggerType, s.TargetPrice, s.DiscountPct), s.NormalizedURL)
+		// Молчание подписки под блоком площадки неотличимо от «цены не падали» —
+		// поэтому застоявшуюся выдачу проговариваем прямо в списке.
+		if note := domain.StaleSearchNote(s.LastScrapedAt, s.CreatedAt, interval, now); note != "" {
+			fmt.Fprintf(&sb, "   %s\n", note)
+		}
+		sb.WriteString("\n")
 	}
 	sb.WriteString("Отписаться — кнопки «❌ номер» под сообщением 👇")
 

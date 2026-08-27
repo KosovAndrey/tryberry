@@ -64,6 +64,11 @@ type SearchSubscription struct {
 	TelegramID    int64
 	QueryText     string
 	NormalizedURL string
+
+	// LastScrapedAt — когда выдачу по запросу последний раз успешно забирали
+	// (search_queries.last_scraped_at). nil → ни разу. Нужен, чтобы в списке
+	// подписок честно показать застоявшиеся данные, когда площадка не отвечает.
+	LastScrapedAt *time.Time
 	Marketplace   string // sq.marketplace — для иконки маркетплейса в списке
 
 	// Тариф владельца — для вычисления интервала уведомлений в воркере
