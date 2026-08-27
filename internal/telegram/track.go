@@ -18,6 +18,7 @@ import (
 
 	"gitlab.com/KosovAndrey/tryberrybot/internal/domain"
 	"gitlab.com/KosovAndrey/tryberrybot/internal/metrics"
+	"gitlab.com/KosovAndrey/tryberrybot/internal/repository/postgres"
 	"gitlab.com/KosovAndrey/tryberrybot/internal/scraper"
 )
 
@@ -567,6 +568,10 @@ func (b *Bot) doTrack(ctx context.Context, chatID int64, rawURL string, user *do
 			msg = ozonUnavailableMsg
 		case errors.Is(err, scraper.ErrNotImplemented):
 			msg = fmt.Sprintf("⚠️ Маркетплейс <b>%s</b> пока не поддерживается.\n\n%s", s.Marketplace(), supportedMarketplacesMsg)
+		case errors.Is(err, scraper.ErrMarketplaceBlocked):
+			// Площадка отказала — но если товар нам знаком, показываем последнюю
+			// известную цену из своей истории вместо глухого «не удалось».
+			msg = htmlEscape(b.blockedFallback(ctx, s.Marketplace(), rawURL))
 		}
 
 		edit := tgbotapi.NewEditMessageText(chatID, sent.MessageID, msg)
@@ -732,4 +737,23 @@ func (b *Bot) callbackUntrack(ctx context.Context, cb *tgbotapi.CallbackQuery) {
 
 	b.sendMainMenu(ctx, cb.Message.Chat.ID, cb.Message.MessageID, true)
 	b.answerCallback(cb.ID, "✅ Отслеживание отменено")
+}
+
+// blockedFallback — текст на отказ площадки: последняя известная цена из нашей
+// истории плюс её возраст, а если товар незнаком — только статус. Общий для
+// всех каналов (domain.BlockedFallbackText), здесь только доступ к репозиториям.
+func (b *Bot) blockedFallback(ctx context.Context, mp scraper.Marketplace, rawURL string) string {
+	canon := scraper.CanonicalProductURL(mp, rawURL)
+	lk, ok, err := postgres.FindLastKnown(ctx, b.prodRepo, b.priceRepo, canon)
+	if err != nil {
+		b.log.Warn("last known lookup failed", "url", canon, "err", err)
+	}
+	name := ""
+	if ok {
+		name = lk.Product.Name
+	}
+	if !ok {
+		return domain.BlockedFallbackText(mp.Label(), "", 0, time.Time{}, time.Now())
+	}
+	return domain.BlockedFallbackText(mp.Label(), name, lk.Price, lk.At, time.Now())
 }

@@ -109,6 +109,27 @@ func (r *ProductRepo) GetByID(ctx context.Context, id int64) (*domain.Product, e
 	return p, nil
 }
 
+// FindByURL — карточка по каноническому URL, без создания записи (в отличие от
+// Upsert). Нужна, когда площадка отказала и скрейпа нет: показать пользователю
+// то, что мы уже знаем, вместо «не удалось получить данные».
+// ok=false — товара в базе нет, показывать нечего.
+func (r *ProductRepo) FindByURL(ctx context.Context, url string) (*domain.Product, bool, error) {
+	const q = `
+		SELECT id, public_id, url, name, image_url, marketplace, in_stock, created_at, updated_at
+		FROM products WHERE url = $1`
+
+	p := &domain.Product{}
+	err := r.db.QueryRow(ctx, q, url).
+		Scan(&p.ID, &p.PublicID, &p.URL, &p.Name, &p.ImageURL, &p.Marketplace, &p.InStock, &p.CreatedAt, &p.UpdatedAt)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return nil, false, nil
+	}
+	if err != nil {
+		return nil, false, err
+	}
+	return p, true, nil
+}
+
 // GetByPublicID — резолв товара по публичному токену (страница графика /p/<public_id>).
 // Read-only путь для сервиса api; отдаёт и in_stock для блока «снова в наличии».
 func (r *ProductRepo) GetByPublicID(ctx context.Context, publicID string) (*domain.Product, bool, error) {

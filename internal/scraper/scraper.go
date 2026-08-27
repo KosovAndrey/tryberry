@@ -16,6 +16,24 @@ const (
 	MarketplaceAliexpress   Marketplace = "aliexpress"
 )
 
+// Label — как площадка называется в текстах для пользователя. Раньше названия
+// были рассыпаны по каналам строками, и после подключения Ozon/YM/Ali часть из
+// них осталась врать про «только Wildberries».
+func (m Marketplace) Label() string {
+	switch m {
+	case MarketplaceWildberries:
+		return "Wildberries"
+	case MarketplaceOzon:
+		return "Ozon"
+	case MarketplaceYandexMarket:
+		return "Яндекс.Маркет"
+	case MarketplaceAliexpress:
+		return "AliExpress"
+	default:
+		return string(m)
+	}
+}
+
 // Result — единый формат данных о товаре, независимый от маркетплейса
 type Result struct {
 	Name     string
