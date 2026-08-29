@@ -174,7 +174,7 @@ func run(log *slog.Logger) error {
 			searchQueryRepo, searchSubRepo, promoRepo, referralRepo, redisClient, parseAdminIDs(getEnv("ADMIN_IDS", "")),
 			getEnv("VK_BOT_URL", ""),
 			getEnv("MAX_BOT_URL", ""),
-			getEnv("PUBLIC_BASE_URL", "https://tryberry.ru"),
+			userLinkBaseURL(),
 		)
 	})
 	if err != nil {
@@ -201,7 +201,7 @@ func run(log *slog.Logger) error {
 			searchQueryRepo, searchSubRepo, promoRepo, referralRepo, registry, linkCodes, redisClient,
 			getEnv("VK_BOT_URL", ""),
 			getEnv("MAX_BOT_URL", ""),
-			getEnv("PUBLIC_BASE_URL", "https://tryberry.ru"),
+			userLinkBaseURL(),
 			parseAdminIDs(getEnv("VK_ADMIN_IDS", "")))
 		vkBot.SetInstantSearchEval(searchResultRepo, searchEvents)
 		vkConsumer := kafka.NewConsumer(kafkaBrokers, "vk-updates", "vk-workers")
@@ -241,7 +241,7 @@ func run(log *slog.Logger) error {
 				getEnv("MAX_BOT_URL", ""),
 				getEnv("TELEGRAM_BOT_URL", ""),
 				getEnv("VK_BOT_URL", ""),
-				getEnv("PUBLIC_BASE_URL", "https://tryberry.ru"),
+				userLinkBaseURL(),
 				parseAdminIDs(getEnv("MAX_ADMIN_IDS", "")))
 			maxBot.SetInstantSearchEval(searchResultRepo, searchEvents)
 			maxConsumer := kafka.NewConsumer(kafkaBrokers, "max-updates", "max-workers")
@@ -290,6 +290,20 @@ func run(log *slog.Logger) error {
 
 	log.Info("bot-worker started, consuming telegram-updates...", "group", groupID)
 	return consumer.Run(ctx, handler)
+}
+
+// userLinkBaseURL — база для ссылок, которые бот кладёт в СООБЩЕНИЯ пользователю
+// (график /p/<public_id>, оферта, политика). Отделена от PUBLIC_BASE_URL
+// намеренно: тот остаётся каноническим адресом страниц для поиска, а ссылки
+// людям иногда нужно увести на другой домен — основной может быть заблокирован
+// у части аудитории (Safari на iOS показывает «Обманчивый сайт» по записи в
+// списке Apple, разбор — docs/SAFE-BROWSING-APPEAL.md). Пусто → PUBLIC_BASE_URL,
+// то есть поведение по умолчанию не меняется.
+func userLinkBaseURL() string {
+	if v := os.Getenv("USER_LINK_BASE_URL"); v != "" {
+		return v
+	}
+	return getEnv("PUBLIC_BASE_URL", "https://tryberry.ru")
 }
 
 func getEnv(key, fallback string) string {

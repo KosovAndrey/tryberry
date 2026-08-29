@@ -117,6 +117,13 @@ services:
       OTLP_ENDPOINT: "jaeger:4317"
       # Базовый публичный URL сайта — для кнопки «📈 График цены» (ссылка на /p/).
       PUBLIC_BASE_URL: "${PUBLIC_BASE_URL:-https://tryberry.ru}"
+      # База для ссылок, которые бот КЛАДЁТ В СООБЩЕНИЯ пользователю (график
+      # /p/<public_id>, оферта, политика). Отделена от PUBLIC_BASE_URL, который
+      # остаётся каноническим адресом для SEO: если основной домен где-то
+      # заблокирован (Safari на iOS показывает «Обманчивый сайт» по записи
+      # Apple — docs/SAFE-BROWSING-APPEAL.md), ссылки пользователям можно
+      # увести на рабочее зеркало, не трогая индексацию. Пусто → PUBLIC_BASE_URL.
+      USER_LINK_BASE_URL: "${USER_LINK_BASE_URL:-}"
       # Egress к Telegram (ответы) через xray (VLESS).
       # api.vk.com — мимо прокси: VK доступен с RU-VM напрямую.
       HTTPS_PROXY: "http://xray:8888"
@@ -420,6 +427,13 @@ services:
       OTLP_ENDPOINT: "jaeger:4317"
       # Базовый публичный URL сайта — для кнопки «📈 График цены» в пушах (/p/).
       PUBLIC_BASE_URL: "${PUBLIC_BASE_URL:-https://tryberry.ru}"
+      # База для ссылок, которые бот КЛАДЁТ В СООБЩЕНИЯ пользователю (график
+      # /p/<public_id>, оферта, политика). Отделена от PUBLIC_BASE_URL, который
+      # остаётся каноническим адресом для SEO: если основной домен где-то
+      # заблокирован (Safari на iOS показывает «Обманчивый сайт» по записи
+      # Apple — docs/SAFE-BROWSING-APPEAL.md), ссылки пользователям можно
+      # увести на рабочее зеркало, не трогая индексацию. Пусто → PUBLIC_BASE_URL.
+      USER_LINK_BASE_URL: "${USER_LINK_BASE_URL:-}"
       # Egress к Telegram (уведомления) через xray (VLESS).
       # api.vk.com — мимо прокси: VK доступен напрямую.
       HTTPS_PROXY: "http://xray:8888"

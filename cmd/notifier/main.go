@@ -100,7 +100,15 @@ func run(log *slog.Logger) error {
 	// ── Telegram ─────────────────────────────────────────────────────────────
 	// Исходящие в Telegram идут через HTTPS_PROXY (см. compose) — поэтому и
 	// товарные, и поиск-уведомления пробиваются с RU-хостинга.
-	publicBaseURL := os.Getenv("PUBLIC_BASE_URL")
+	// USER_LINK_BASE_URL — база для ссылок в самих уведомлениях (кнопка
+	// «📈 График цены»). Отделена от PUBLIC_BASE_URL, который остаётся
+	// каноническим адресом для поиска: основной домен может быть заблокирован
+	// у части аудитории (docs/SAFE-BROWSING-APPEAL.md), и тогда людей надо
+	// вести на рабочее зеркало, не трогая индексацию. Пусто → PUBLIC_BASE_URL.
+	publicBaseURL := os.Getenv("USER_LINK_BASE_URL")
+	if publicBaseURL == "" {
+		publicBaseURL = os.Getenv("PUBLIC_BASE_URL")
+	}
 	if publicBaseURL == "" {
 		publicBaseURL = "https://tryberry.ru"
 	}
