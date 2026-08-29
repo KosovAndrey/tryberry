@@ -69,6 +69,34 @@ curl -s "https://transparencyreport.google.com/transparencyreport/api/v3/safebro
 
 Остался один кандидат: **запись в списке Apple**.
 
+## Решающий эксперимент: вердикт по домену, контент чист (2026-08-29)
+
+`botyanit.ru` — второй домен того же владельца на **том же сервере**: тот же IP
+194.164.245.150, тот же контейнер nginx, тот же Let's Encrypt, та же зона `.ru`,
+тот же регистратор. Отличается только именем и репутацией.
+
+В его конфиг (`nginx/conf.d/botyanit.conf`) добавлен проброс `/p/` на `api:8081`
+плюс статика страницы графика из того же тома `./web`. То есть по адресу
+`botyanit.ru/p/<public_id>/<slug>` отдаётся **байт в байт та же страница**, что
+и на основном домене.
+
+Результат на iPhone:
+
+| Адрес | Safari | Встроенный браузер Telegram |
+|---|---|---|
+| `tryberry.ru/p/…` | красный экран | не открывается |
+| `botyanit.ru/p/…` | **открывается** | **открывается** |
+
+Вывод однозначный: **запись стоит на доменном имени `tryberry.ru`, а не на
+содержимом страниц.** Значит правка контента не поможет в принципе — снять
+вердикт может только Apple. Этот же факт — сильнейший аргумент в письме: он
+показывает, что срабатывание ложное, а не заслуженное.
+
+Побочная польза: `botyanit.ru/p/` оставлен включённым как **датчик**. Если его
+зафлагают следом за неделю-две — значит эвристика всё-таки цепляется к контенту,
+и вывод придётся пересмотреть. Пока этого не произошло, версия «вердикт по
+домену» — рабочая.
+
 ## Что делать
 
 ### 1. Письмо в Apple (главное действие)
@@ -126,6 +154,13 @@ reproduced on multiple iPhones on different networks. Chrome on the same
 iPhone and on Android opens the site without any warning. Turning off
 Settings > Safari > Fraudulent Website Warning removes the warning, which
 points to the Safe Browsing list rather than to the network or the device.
+
+A controlled test shows the warning is tied to the domain name, not to the
+content: we serve the byte-identical page from a second domain of ours,
+botyanit.ru, on the very same server, same nginx instance, same Let's Encrypt
+certificate authority and same .ru zone. https://botyanit.ru/p/... opens in
+Safari on iOS with no warning, while the identical https://tryberry.ru/p/...
+is blocked.
 
 Google Safe Browsing does not flag this domain:
 - Search Console (verified owner, domain property): Security Issues —
