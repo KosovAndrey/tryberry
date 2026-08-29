@@ -97,6 +97,34 @@ curl -s "https://transparencyreport.google.com/transparencyreport/api/v3/safebro
 и вывод придётся пересмотреть. Пока этого не произошло, версия «вердикт по
 домену» — рабочая.
 
+## Найдено и устранено: wildcard DNS (2026-08-29)
+
+Сравнение зон двух доменов в reg.ru дало единственное структурное отличие:
+у `tryberry.ru` стояла запись **`A * → 194.164.245.150`**, у `botyanit.ru` —
+нет. Проверка живьём до правки:
+
+```
+wildberries-login.tryberry.ru  →  194.164.245.150   резолвился
+random-test-12345.tryberry.ru  →  194.164.245.150   резолвился
+random-test-12345.botyanit.ru  →  NXDOMAIN
+```
+
+То есть **любой** поддомен вёл на наш IP, и кто угодно мог дать людям ссылку
+вида `sberbank-vhod.tryberry.ru`. Контента там не отдавалось (catch-all в
+nginx: 444 и `ssl_reject_handshake`), но на уровне DNS домен выглядел как
+хостинг, раздающий произвольные поддомены, — типовая конструкция фишинг-китов.
+
+Это хорошо ложится на всю картину: Google чист (он смотрит краулингом реальный
+контент, а его на поддоменах нет), Apple флагует домен целиком, `botyanit.ru`
+чист (wildcard нет), вердикт по имени, а не по страницам.
+
+**Порядок правки важен:** через wildcard резолвились `www` и `grafana` — явных
+записей у них не было. Сначала добавлены `A www` и `A grafana`, и только потом
+удалена звёздочка. `chat-api` имела свою запись изначально.
+
+Итог после правки: apex, `www`, `grafana`, `chat-api` резолвятся; произвольные
+поддомены — NXDOMAIN; сайт отвечает 200 по обоим адресам; MX (improvmx) целы.
+
 ## Что делать
 
 ### 1. Письмо в Apple (главное действие)
@@ -174,9 +202,15 @@ service is not a seller, representative, partner or official service of
 Wildberries, Ozon, Yandex Market or AliExpress, and publishes the operator's
 legal details and terms of service.
 
-We have also removed internal staging pages (/screen*, /wall*) that were used
-for recording promotional videos and visually resembled a messenger interface.
-They now return HTTP 410.
+We have also addressed everything on our side that could look suspicious:
+
+1. Removed internal staging pages (/screen*, /wall*) that were used for recording
+   promotional videos and visually resembled a messenger interface. They now
+   return HTTP 410.
+2. Removed the wildcard DNS record (A * -> our IP). Previously any subdomain of
+   tryberry.ru resolved to our server, which could be abused in phishing links
+   even though our web server refused such hosts. Only the subdomains we actually
+   use resolve now; anything else returns NXDOMAIN.
 
 Could you please review the domain and remove the warning?
 
