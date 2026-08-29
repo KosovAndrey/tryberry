@@ -69,12 +69,16 @@ func (r *WinbackRepo) Create(ctx context.Context, userID, promoCodeID int64, cod
 }
 
 // ListStage1Unsent — строки с неотправленной стадией 1 (вкл. ретраи после
-// сбоя отправки прошлым тиком).
+// сбоя отправки прошлым тиком). Проверка плана обязательна и здесь: между
+// заведением строки и отправкой юзер мог оплатить тариф, а пуш «триал
+// заканчивается» купившему — худший вид спама.
 func (r *WinbackRepo) ListStage1Unsent(ctx context.Context) ([]WinbackRow, error) {
 	const q = `
 		SELECT w.user_id, w.code, w.code_expires_at
 		FROM trial_winbacks w
-		WHERE w.stage1_sent_at IS NULL AND w.code_expires_at > NOW()`
+		JOIN users u ON u.id = w.user_id
+		WHERE w.stage1_sent_at IS NULL AND w.code_expires_at > NOW()
+		  AND u.plan = 'trial' AND u.plan_expires_at > NOW()`
 	return r.scanRows(ctx, q)
 }
 

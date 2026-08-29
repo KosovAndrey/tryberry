@@ -2,6 +2,7 @@ package vk
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 	"time"
@@ -224,6 +225,10 @@ func (b *Bot) handleTrial(ctx context.Context, vkID int64, user *domain.User) {
 
 	exp := now.Add(dur)
 	ok, err := b.userRepo.ActivateTrial(ctx, user.ID, exp)
+	if errors.Is(err, domain.ErrPlanActive) {
+		b.send(ctx, vkID, domain.TrialPlanActiveText(user, now, "", ""), kb)
+		return
+	}
 	if err != nil {
 		b.log.Error("vk: activate trial", "err", err)
 		b.send(ctx, vkID, "Произошла ошибка, попробуй позже.", nil)

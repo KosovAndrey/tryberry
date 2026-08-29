@@ -2,6 +2,7 @@ package max
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 	"time"
@@ -210,6 +211,10 @@ func (b *Bot) handleTrial(ctx context.Context, maxID int64, user *domain.User) {
 
 	exp := now.Add(dur)
 	ok, err := b.userRepo.ActivateTrial(ctx, user.ID, exp)
+	if errors.Is(err, domain.ErrPlanActive) {
+		b.send(ctx, maxID, domain.TrialPlanActiveText(user, now, "", ""), kb)
+		return
+	}
 	if err != nil {
 		b.log.Error("max: activate trial", "err", err)
 		b.send(ctx, maxID, "Произошла ошибка, попробуй позже.", nil)

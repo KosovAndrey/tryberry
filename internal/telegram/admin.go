@@ -43,6 +43,10 @@ func (b *Bot) handleTrial(ctx context.Context, chatID int64, messageID int, user
 
 	exp := now.Add(dur)
 	ok, err := b.userRepo.ActivateTrial(ctx, user.ID, exp)
+	if errors.Is(err, domain.ErrPlanActive) {
+		b.showView(chatID, messageID, domain.TrialPlanActiveText(user, now, "<b>", "</b>"), backToMenuKeyboard())
+		return
+	}
 	if err != nil {
 		b.log.Error("activate trial", "err", err)
 		b.reply(chatID, "Произошла ошибка, попробуй позже.")

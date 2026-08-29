@@ -331,3 +331,18 @@ func ParsePct(s string) (int16, error) {
 	}
 	return int16(v), nil
 }
+
+// TrialPlanActiveText — ответ на попытку включить триал поверх действующего
+// тарифа (domain.ErrPlanActive). Активация переписала бы plan_expires_at своими
+// 10 днями и срезала оплаченный срок, поэтому триал остаётся неиспользованным.
+// b0/b1 — обёртка жирного (TG: "<b>"/"</b>"; VK/MAX: пустые строки).
+func TrialPlanActiveText(u *User, now time.Time, b0, b1 string) string {
+	until := "бессрочно"
+	if u.PlanExpiresAt != nil {
+		until = "до " + u.PlanExpiresAt.Format("02.01.2006")
+	}
+	return "🎁 " + b0 + "Триал не нужен" + b1 + "\n\n" +
+		fmt.Sprintf("У тебя уже действует тариф %s%s%s %s. ", b0, u.EffectivePlan(now).Title, b1, until) +
+		"Триал заменил бы этот срок своими 10 днями, поэтому не включаю его. " +
+		"Он остаётся за тобой — активируешь, когда тариф закончится."
+}

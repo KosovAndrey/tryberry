@@ -649,6 +649,12 @@ func (r *UserRepo) SetPlan(ctx context.Context, telegramID int64, plan string, e
 // использовался. Однократность держат ВЕЧНЫЕ trial_claims по идентичностям
 // (telegram_id/vk_id): строка users пересоздаётся при отвязке платформы, и
 // флаг trial_used сам по себе позволял фармить триалы циклом отвязок.
+//
+// При действующем платном (или выданном админом) тарифе возвращает
+// domain.ErrPlanActive и НЕ трогает ни план, ни trial_claims: активация
+// переписывает plan/plan_expires_at целиком, и юзер, нажавший /trial после
+// оплаты, менял Pro на 30 дней на триал на 10 (инцидент 29.08.2026). Триал
+// остаётся неиспользованным — включит, когда тариф кончится.
 func (r *UserRepo) ActivateTrial(ctx context.Context, userID int64, expiresAt time.Time) (bool, error) {
 	tx, err := r.db.Begin(ctx)
 	if err != nil {
@@ -658,9 +664,11 @@ func (r *UserRepo) ActivateTrial(ctx context.Context, userID int64, expiresAt ti
 
 	var tgID, vkID *int64
 	var used bool
+	var curPlan string
+	var curExpires *time.Time
 	err = tx.QueryRow(ctx,
-		`SELECT telegram_id, vk_id, trial_used FROM users WHERE id = $1 FOR UPDATE`, userID).
-		Scan(&tgID, &vkID, &used)
+		`SELECT telegram_id, vk_id, trial_used, plan, plan_expires_at FROM users WHERE id = $1 FOR UPDATE`, userID).
+		Scan(&tgID, &vkID, &used, &curPlan, &curExpires)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return false, nil
 	}
@@ -669,6 +677,9 @@ func (r *UserRepo) ActivateTrial(ctx context.Context, userID int64, expiresAt ti
 	}
 	if used {
 		return false, nil
+	}
+	if cur := domain.EffectivePlanFor(curPlan, curExpires, time.Now()); cur.Name != "free" && cur.Name != "trial" {
+		return false, domain.ErrPlanActive
 	}
 
 	claim := func(platform string, id *int64) (bool, error) {
