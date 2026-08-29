@@ -13,6 +13,29 @@
 -- (v_dir_tgstat). Каждый ролик получает СВОЮ ссылку → первая секция ниже
 -- сама даёт разрез «какой ролик приводит», вторая сворачивает до семейства.
 
+-- ── 0. Контроль: рилсы или органика ─────────────────────────────────────────
+-- Главный вопрос при малых объёмах: пришли ли люди ПО ССЫЛКЕ или сами.
+-- Живые (не синтетика) регистрации за 30 дней, разложенные на «с меткой» и
+-- «без метки». Старты без метки промо не приписываем — это органика, переход
+-- из профиля/шапки или прямой поиск бота.
+SELECT
+    CASE WHEN a.user_id IS NULL THEN 'без метки (органика)'
+         ELSE 'по промо-ссылке' END              AS source,
+    COUNT(*)                                     AS users,
+    COUNT(*) FILTER (WHERE u.trial_used)         AS trials,
+    COUNT(*) FILTER (WHERE pay.user_id IS NOT NULL) AS paid,
+    min(u.created_at)::date                      AS first_seen,
+    max(u.created_at)::date                      AS last_seen
+FROM users u
+LEFT JOIN user_attribution a ON a.user_id = u.id
+LEFT JOIN (
+    SELECT DISTINCT user_id FROM payments WHERE status = 'succeeded'
+) pay ON pay.user_id = u.id
+WHERE NOT u.is_synthetic
+  AND u.created_at >= now() - interval '30 days'
+GROUP BY 1
+ORDER BY users DESC;
+
 -- Ролик (формат) × площадка (сводная, канал суммарно)
 SELECT
     a.format,

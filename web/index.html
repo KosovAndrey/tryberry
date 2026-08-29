@@ -1314,6 +1314,33 @@ function syncLegalFromHash(){
 }
 window.addEventListener('hashchange',syncLegalFromHash);
 syncLegalFromHash();
+
+/* Проброс промо-метки в мессенджеры: ролик ведёт на сайт (?v=<метка>), а сайт
+   должен донести метку до бота — иначе атрибуция (user_attribution, миграция
+   029) теряется и старты из роликов неотличимы от органики. Формат метки —
+   v_<семья>-<вариант>_<площадка>, тот же, что в deep-link'ах.
+   TG: ?start=, VK: ?ref=, MAX: ?start= (см. domain.MaxStartLink). */
+(function(){
+  var raw=new URLSearchParams(location.search).get('v');
+  if(!raw)return;
+  /* Метку кладём в ссылку как есть — но только если она нашего формата:
+     чужой ?v= из внешней ссылки не должен попадать боту. */
+  /* Только нижний регистр: domain.validAttributionPart отбрасывает
+     заглавные, и бот молча проигнорирует такую метку. */
+  if(!/^v_[a-z0-9]+(-[a-z0-9]+)*_[a-z0-9]+$/.test(raw)||raw.length>64)return;
+  var map=[
+    ['t.me/TryBerryBot','https://t.me/TryBerryBot?start='],
+    ['vk.me/tryberrybot','https://vk.me/tryberrybot?ref='],
+    ['max.ru/se13426918_bot','https://max.ru/se13426918_bot?start=']
+  ];
+  document.querySelectorAll('a[href]').forEach(function(a){
+    var h=a.getAttribute('href')||'';
+    for(var i=0;i<map.length;i++){
+      /* Ссылки с уже готовым параметром (ref_/link_) не трогаем. */
+      if(h.indexOf(map[i][0])>-1&&h.indexOf('?')===-1){a.setAttribute('href',map[i][1]+raw);return;}
+    }
+  });
+})();
 </script>
 </body>
 </html>
