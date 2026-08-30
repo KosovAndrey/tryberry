@@ -3,7 +3,12 @@
 # *.conf, а с несуществующим сертификатом он не стартует. После выпуска серта
 # копируется в tryberrybot-ssl.conf (команда — в шапке tryberrybot.conf).
 #
-# Мотивация и роль домена — в шапке tryberrybot.conf.
+# Роль домена: ОСНОВНОЙ САЙТ (решение 2026-08-30). tryberry.ru остаётся
+# открытым и рабочим, но канонические адреса, sitemap и OG ведут сюда —
+# он одинаково доступен во всех браузерах, а tryberry.ru отрезан у Safari
+# на iOS вердиктом Apple (docs/SAFE-BROWSING-APPEAL.md). Редиректа со
+# старого домена нет намеренно: на нём висят вебхуки Telegram, VK, MAX и
+# Робокассы, и уводить их нельзя. Поисковики переедут по canonical.
 # ────────────────────────────────────────────────────────────────────────────
 
 server {
@@ -20,9 +25,8 @@ server {
     resolver 127.0.0.11 valid=10s ipv6=off;
     resolver_timeout 5s;
 
-    # Те же security-заголовки, что на основном домене (грейд A на
-    # securityheaders). Отличие одно — noindex: зеркало не индексируем.
-    add_header X-Robots-Tag "noindex, nofollow" always;
+    # Security-заголовки — те же, что на tryberry.ru (грейд A на securityheaders).
+    # X-Robots-Tag здесь НЕТ: домен основной и должен индексироваться.
     add_header Strict-Transport-Security "max-age=31536000; includeSubDomains" always;
     add_header X-Content-Type-Options "nosniff" always;
     add_header X-Frame-Options "SAMEORIGIN" always;
@@ -76,14 +80,28 @@ server {
         proxy_connect_timeout 5s;
     }
 
-    # Зеркало не индексируем — свой robots.txt вместо проксирования на api.
+    # robots.txt и sitemap.xml отдаёт api — они строятся из PUBLIC_BASE_URL,
+    # который теперь равен https://tryberrybot.ru.
     location = /robots.txt {
-        add_header Content-Type text/plain;
-        return 200 "User-agent: *\nDisallow: /\n";
+        set $upstream_api api:8081;
+        proxy_pass http://$upstream_api/robots.txt;
+        proxy_http_version 1.1;
+        proxy_set_header   Host       $host;
+        proxy_set_header   Connection "";
+        proxy_read_timeout 10s;
+        proxy_connect_timeout 5s;
     }
 
-    # Карта сайта у зеркала своя не нужна: индексируется только основной домен.
-    location = /sitemap.xml { return 404; }
+    location = /sitemap.xml {
+        limit_req zone=api burst=5 nodelay;
+        set $upstream_api api:8081;
+        proxy_pass http://$upstream_api/sitemap.xml;
+        proxy_http_version 1.1;
+        proxy_set_header   Host       $host;
+        proxy_set_header   Connection "";
+        proxy_read_timeout 10s;
+        proxy_connect_timeout 5s;
+    }
 
     # ── Статика (те же правила кэширования, что на основном домене) ─────────
     location ^~ /assets/ {
@@ -91,21 +109,18 @@ server {
         try_files $uri =404;
         add_header Cache-Control "public, max-age=31536000, immutable" always;
         add_header X-Content-Type-Options "nosniff" always;
-        add_header X-Robots-Tag "noindex, nofollow" always;
     }
     location ^~ /vendor/ {
         root  /usr/share/nginx/html;
         try_files $uri =404;
         add_header Cache-Control "public, max-age=31536000, immutable" always;
         add_header X-Content-Type-Options "nosniff" always;
-        add_header X-Robots-Tag "noindex, nofollow" always;
     }
     location ^~ /fonts/ {
         root  /usr/share/nginx/html;
         try_files $uri =404;
         add_header Cache-Control "public, max-age=31536000, immutable" always;
         add_header X-Content-Type-Options "nosniff" always;
-        add_header X-Robots-Tag "noindex, nofollow" always;
         types { font/woff2 woff2; text/css css; }
     }
 
