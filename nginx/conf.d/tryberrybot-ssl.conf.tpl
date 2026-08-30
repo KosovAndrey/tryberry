@@ -32,6 +32,19 @@ server {
     add_header Cross-Origin-Resource-Policy "same-origin" always;
     add_header Content-Security-Policy "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data: https:; font-src 'self'; connect-src 'self'; frame-ancestors 'self'; base-uri 'self'; form-action 'self'; object-src 'none'" always;
 
+    # Внутренние markdown-файлы (web/CLAUDE.md) наружу не отдаём — как и на
+    # основном домене. Зеркало раздаёт тот же том ./web, поэтому правило нужно
+    # и здесь: без него внутренняя инструкция утекала бы через новый домен.
+    location ~* \.md$ {
+        return 404;
+    }
+
+    # Удалённые страницы-заготовки промо (/screen*, /wall*): файлов нет, но
+    # пусть ответ будет таким же однозначным, как на основном домене.
+    location ~ ^/(screen|wall) {
+        return 410;
+    }
+
     # ── SSR-страницы графиков ───────────────────────────────────────────────
     location ^~ /p/ {
         limit_req zone=api burst=20 nodelay;
