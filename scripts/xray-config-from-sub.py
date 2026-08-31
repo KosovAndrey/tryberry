@@ -114,6 +114,65 @@ def decode(payload: str) -> list[str]:
     return [ln.strip() for ln in text.splitlines() if ln.strip().startswith("vless://")]
 
 
+def nodes_from_json(payload: str) -> list[dict[str, Any]]:
+    """Панель отдала ГОТОВЫЙ конфиг v2rayN (JSON-профиль или массив профилей).
+
+    Так делает часть панелей вместо base64-списка vless://: внутри уже лежат
+    outbound'ы в формате ядра. Достаём из них те же поля, что `parse()` достаёт из
+    ссылки, чтобы дальше пайплайн (фильтры, слаги, сборка) не различал источники.
+    Дубли по (адрес, порт, uuid) схлопываем: один узел часто повторяется в
+    нескольких профилях-странах.
+    """
+    try:
+        data = json.loads(payload)
+    except ValueError:
+        return []
+    profiles = data if isinstance(data, list) else [data]
+    out: list[dict[str, Any]] = []
+    seen: set[tuple[str, int, str]] = set()
+    for prof in profiles:
+        if not isinstance(prof, dict) or "outbounds" not in prof:
+            continue
+        # Человекочитаемая метка профиля: у v2rayN это remarks, у некоторых
+        # панелей — имя балансировщика («Netherlands»). Нужна только для тега.
+        label = str(prof.get("remarks") or "")
+        for bal in (prof.get("routing") or {}).get("balancers") or []:
+            label = label or str(bal.get("__name__") or "")
+        for ob in prof.get("outbounds") or []:
+            if not isinstance(ob, dict) or ob.get("protocol") != "vless":
+                continue
+            st = ob.get("streamSettings") or {}
+            if st.get("security") != "reality":
+                continue
+            rs = st.get("realitySettings") or {}
+            vnext = ((ob.get("settings") or {}).get("vnext") or [{}])[0]
+            user = (vnext.get("users") or [{}])[0]
+            host, uuid = str(vnext.get("address") or ""), str(user.get("id") or "")
+            if not host or not uuid:
+                continue
+            port = int(vnext.get("port") or 443)
+            key = (host, port, uuid)
+            if key in seen:
+                continue
+            seen.add(key)
+            out.append({
+                "uuid": uuid,
+                "host": host,
+                "port": port,
+                "name": f'{label} {ob.get("tag", "")}'.strip(),
+                "type": st.get("network") or "tcp",
+                "sni": rs.get("serverName") or host,
+                "fp": rs.get("fingerprint") or "chrome",
+                "pbk": rs.get("publicKey", ""),
+                "sid": rs.get("shortId", ""),
+                "spx": rs.get("spiderX", ""),
+                "flow": user.get("flow", ""),
+                "service": (st.get("grpcSettings") or {}).get("serviceName", ""),
+                "path": (st.get("xhttpSettings") or {}).get("path", ""),
+            })
+    return out
+
+
 def parse(link: str) -> dict[str, Any] | None:
     """vless://UUID@host:port?params#name → плоский dict. Не-reality пропускаем."""
     u = urllib.parse.urlparse(link)
@@ -362,7 +421,7 @@ def build(nodes: list[dict[str, Any]], probe_interval: str,
 def main() -> None:
     ap = argparse.ArgumentParser(description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("source", help="URL подписки или путь к файлу с vless://-ссылками")
+    ap.add_argument("source", help="URL подписки (base64-список vless:// или JSON-профиль v2rayN) либо путь к такому же файлу")
     ap.add_argument("-o", "--out", default="-", help="куда писать конфиг (по умолчанию stdout)")
     ap.add_argument("-n", "--limit", type=int, default=DEFAULT_LIMIT,
                     help=f"сколько плеч оставить (по умолчанию {DEFAULT_LIMIT}, 0 = все)")
@@ -396,8 +455,9 @@ def main() -> None:
     if args.raw:
         print(raw[:4000])
         return
-    links = decode(raw)
-    nodes = [n for n in (parse(l) for l in links) if n]
+    nodes = nodes_from_json(raw)
+    if not nodes:
+        nodes = [n for n in (parse(l) for l in decode(raw)) if n]
     if not nodes:
         sys.exit("в подписке нет VLESS+Reality узлов")
 
