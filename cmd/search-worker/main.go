@@ -97,7 +97,12 @@ func run(log *slog.Logger) error {
 	poolSize := getEnvInt("WB_TOKEN_POOL_SIZE", 5)
 	tokenProvider := scraper.NewRedisSearchTokenPool(redisClient, poolSize, log, poolPrefix)
 
-	proxyPool, proxyErrs := scraper.NewProxyPool(splitCSV(getEnv("SEARCH_PROXY_URLS", "")), 12*time.Second)
+	// keep-alive по умолчанию ВЫКЛЮЧЕН: за SEARCH_PROXY_URLS стоит xray с
+	// балансировщиком «случайное плечо на соединение», и переиспользование
+	// соединений приклеивает весь поиск к горстке адресов (разбор 01-09).
+	proxyPool, proxyErrs := scraper.NewProxyPoolWithOptions(
+		splitCSV(getEnv("SEARCH_PROXY_URLS", "")), 12*time.Second,
+		scraper.ProxyPoolOptions{DisableKeepAlives: getEnv("SEARCH_PROXY_KEEPALIVE", "false") != "true"})
 	for _, e := range proxyErrs {
 		log.Warn("bad search proxy, skipped", "err", e)
 	}

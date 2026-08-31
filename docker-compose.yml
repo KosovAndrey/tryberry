@@ -308,6 +308,11 @@ services:
       # Прокси HTTP-клиента WB/Ali-поиска (у перекуп-дорожки свой ключ ниже).
       # Пусто → direct. http://xray:8888 — рычаг, когда WB режет IP хоста.
       SEARCH_PROXY_URLS: "${SEARCH_PROXY_URLS:-}"
+      # keep-alive к поисковому прокси. По умолчанию ВЫКЛЮЧЕН: за :8889 стоит
+      # балансировщик «случайное плечо на соединение», и переиспользование
+      # соединений приклеивает поиск к горстке адресов (разбор 01-09-2026).
+      # "true" вернёт прежнее поведение, если поиск поедет мимо балансировщика.
+      SEARCH_PROXY_KEEPALIVE: "${SEARCH_PROXY_KEEPALIVE:-false}"
       WB_TOKEN_POOL_PREFIX: "wb:search:"
       WB_TOKEN_POOL_SIZE: "5"
       # тот же WB-потолок, что у scraper (карточки в обогащении выдачи)
@@ -382,6 +387,8 @@ services:
       SEARCH_MAX_ITEMS_OZON: "${SEARCH_MAX_ITEMS_OZON:-72}"
       SEARCH_BELOW_TARGET_COOLDOWN_MINUTES: "${SEARCH_BELOW_TARGET_COOLDOWN_MINUTES:-360}"
       SEARCH_PROXY_URLS: "${RESELLER_SEARCH_PROXY_URLS:-}"
+      # См. комментарий у search-worker.
+      SEARCH_PROXY_KEEPALIVE: "${SEARCH_PROXY_KEEPALIVE:-false}"
       SEARCH_WORKER_HEALTH_PORT: "8094"
       OTLP_ENDPOINT: "jaeger:4317"
       # Я.Маркет-поиск на быстрых тарифах (interval ≤ resellerLaneCutoff)
