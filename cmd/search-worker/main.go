@@ -100,12 +100,18 @@ func run(log *slog.Logger) error {
 	// keep-alive по умолчанию ВЫКЛЮЧЕН: за SEARCH_PROXY_URLS стоит xray с
 	// балансировщиком «случайное плечо на соединение», и переиспользование
 	// соединений приклеивает весь поиск к горстке адресов (разбор 01-09).
+	searchProxies := splitCSV(getEnv("SEARCH_PROXY_URLS", ""))
+	keepAlive := getEnv("SEARCH_PROXY_KEEPALIVE", "false") == "true"
 	proxyPool, proxyErrs := scraper.NewProxyPoolWithOptions(
-		splitCSV(getEnv("SEARCH_PROXY_URLS", "")), 12*time.Second,
-		scraper.ProxyPoolOptions{DisableKeepAlives: getEnv("SEARCH_PROXY_KEEPALIVE", "false") != "true"})
+		searchProxies, 12*time.Second,
+		scraper.ProxyPoolOptions{DisableKeepAlives: !keepAlive})
 	for _, e := range proxyErrs {
 		log.Warn("bad search proxy, skipped", "err", e)
 	}
+	// Печатаем в старте: по этой строке видно, доехал ли деплой (прод уже ловил
+	// «собралось из кэша, поехал старый код») и с каким транспортом идёт поиск.
+	log.Info("search proxy pool configured",
+		"proxies", len(searchProxies), "size", proxyPool.Size(), "keepalive", keepAlive)
 
 	wbCard := scraper.NewWildberriesScraper(rpsWB)
 	if redisClient != nil {
