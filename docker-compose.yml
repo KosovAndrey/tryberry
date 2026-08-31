@@ -322,8 +322,12 @@ services:
       # браузер wb-search-miner (in-page fetch к тому же u-search).
       WB_SEARCH_BROWSER_URL: "${WB_SEARCH_BROWSER_URL:-http://wb-search-miner:8081}"
       SEARCH_SCRAPE_INTERVAL_MINUTES: "20"
-      SEARCH_MAX_PAGES: "5"
-      SEARCH_PAGE_DELAY_MS: "700"
+      # Темп запросов к поисковой ручке WB: страниц на запрос × пауза между ними.
+      # Крутилки вынесены в .env, потому что при 429 это единственный рычаг на
+      # НАШЕЙ стороне (разброс по адресам и отключение keep-alive не помогли,
+      # разбор 01-09-2026). Меньше страниц = уже выдача, больше пауза = дольше поиск.
+      SEARCH_MAX_PAGES: "${SEARCH_MAX_PAGES:-5}"
+      SEARCH_PAGE_DELAY_MS: "${SEARCH_PAGE_DELAY_MS:-700}"
       SEARCH_MAX_ITEMS_OZON: "${SEARCH_MAX_ITEMS_OZON:-72}"
       # Анти-спам below_target на широких/ротирующихся выдачах: не чаще раза в N мин.
       SEARCH_BELOW_TARGET_COOLDOWN_MINUTES: "${SEARCH_BELOW_TARGET_COOLDOWN_MINUTES:-360}"
@@ -382,8 +386,10 @@ services:
       SEARCH_SCRAPE_INTERVAL_MINUTES: "20"
       # Reseller — премиум-тариф: даём WB-поиску покрытие 3 стр (300) против 2 у
       # бесплатной дорожки. WB-каталог дёшев, поэтому +1 страница ничего не стоит.
-      SEARCH_MAX_PAGES: "3"
-      SEARCH_PAGE_DELAY_MS: "400"
+      # См. комментарий у search-worker. У перекуп-дорожки свой темп: страниц
+      # меньше, пауза короче — каданс раз в минуту.
+      SEARCH_MAX_PAGES: "${RESELLER_SEARCH_MAX_PAGES:-3}"
+      SEARCH_PAGE_DELAY_MS: "${RESELLER_SEARCH_PAGE_DELAY_MS:-400}"
       SEARCH_MAX_ITEMS_OZON: "${SEARCH_MAX_ITEMS_OZON:-72}"
       SEARCH_BELOW_TARGET_COOLDOWN_MINUTES: "${SEARCH_BELOW_TARGET_COOLDOWN_MINUTES:-360}"
       SEARCH_PROXY_URLS: "${RESELLER_SEARCH_PROXY_URLS:-}"
