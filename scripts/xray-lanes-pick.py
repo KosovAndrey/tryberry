@@ -15,6 +15,7 @@
 
 Примеры:
     python3 scripts/xray-lanes-pick.py --from /tmp/xray-all.json -n 24
+    python3 scripts/xray-lanes-pick.py --from /tmp/xray-all.json /tmp/xray-new.json -n 24
     python3 scripts/xray-lanes-pick.py --sub 'https://ПОДПИСКА/КОД' -n 24
     python3 scripts/xray-lanes-pick.py --from /tmp/xray-all.json \\
         --results /tmp/wb-lane-results.json      # выкинуть плечи, забракованные WB
@@ -86,7 +87,9 @@ def main() -> None:
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
     src = ap.add_mutually_exclusive_group(required=True)
     src.add_argument("--sub", help="URL подписки — собрать полный список генератором")
-    src.add_argument("--from", dest="src_path", help="готовый полный конфиг (все узлы)")
+    src.add_argument("--from", dest="src_paths", nargs="+",
+                     help="готовые конфиги со всеми узлами; можно НЕСКОЛЬКО — "
+                          "пулы разных подписок сливаются в один (теги при совпадении разводятся)")
     ap.add_argument("-n", "--limit", type=int, default=24,
                     help="сколько плеч оставить (по умолчанию 24: observatory пробит каждое раз в 30с)")
     ap.add_argument("-o", "--out", default="xray/config.json", help="куда писать конфиг")
@@ -96,18 +99,36 @@ def main() -> None:
     args = ap.parse_args()
 
     if args.sub:
-        src_path = "/tmp/xray-all.json"
-        gen = subprocess.run([sys.executable, GENERATOR, args.sub, "-n", "0", "-o", src_path],
+        src_paths = ["/tmp/xray-all.json"]
+        gen = subprocess.run([sys.executable, GENERATOR, args.sub, "-n", "0", "-o", src_paths[0]],
                              capture_output=True, text=True)
         sys.stdout.write(gen.stdout)
         if gen.returncode != 0:
             sys.exit("генератор конфига упал: " + gen.stderr.strip()[:200])
     else:
-        src_path = args.src_path
+        src_paths = args.src_paths
 
-    cfg = json.load(open(src_path))
-    lanes = [o for o in cfg["outbounds"] if str(o.get("tag", "")).startswith("vless")]
+    # Первый файл задаёт скелет (inbounds/routing/observatory), плечи берём из всех.
+    cfg = json.load(open(src_paths[0]))
     tail = [o for o in cfg["outbounds"] if not str(o.get("tag", "")).startswith("vless")]
+    lanes: list[dict[str, Any]] = []
+    seen_tags: set[str] = set()
+    for path in src_paths:
+        one = json.load(open(path))
+        for lane in one["outbounds"]:
+            tag = str(lane.get("tag", ""))
+            if not tag.startswith("vless"):
+                continue
+            # Слаги генерятся внутри каждой подписки, между подписками совпадают.
+            if tag in seen_tags:
+                n = 2
+                while f"{tag}-s{n}" in seen_tags:
+                    n += 1
+                lane = dict(lane, tag=f"{tag}-s{n}")
+            seen_tags.add(lane["tag"])
+            lanes.append(lane)
+    if len(src_paths) > 1:
+        print(f"слито подписок: {len(src_paths)}, плеч всего {len(lanes)}")
 
     rejected: set[str] = set()
     if args.results:
