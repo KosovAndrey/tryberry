@@ -31,6 +31,7 @@ import argparse
 import base64
 import binascii
 import json
+import os
 import re
 import sys
 import urllib.parse
@@ -62,10 +63,32 @@ PREFER_COSTS = [1, 3, 9, 27]
 UNPREFERRED_COST = 100
 
 
-def fetch(src: str) -> str:
+def sub_headers(hwid: str = "") -> dict[str, str]:
+    """Заголовки запроса подписки.
+
+    Панели с привязкой к устройству (Remnawave и подобные) вместо узлов отдают
+    подсказку «включите отправку HWID», а лимит устройств считают по заголовку
+    `x-hwid`. Идентификатор должен быть ПОСТОЯННЫМ: каждый новый занимает слот
+    устройства, и на тарифе «1 устройство» второй запрос с новым HWID получает
+    «вы достигли максимального количества устройств» (проверено 01-09-2026).
+    Поэтому берём его из XRAY_SUB_HWID и держим в .env рядом с самой подпиской.
+    """
+    headers = {"User-Agent": "v2rayN/7.12.5"}
+    hwid = hwid or os.getenv("XRAY_SUB_HWID", "").strip()
+    if hwid:
+        headers.update({
+            "x-hwid": hwid,
+            "x-device-os": "Windows",
+            "x-ver-os": "11",
+            "x-device-model": "tryberrybot-prod",
+        })
+    return headers
+
+
+def fetch(src: str, hwid: str = "") -> str:
     """Скачать подписку (или прочитать локальный файл — удобно для отладки)."""
     if src.startswith(("http://", "https://")):
-        req = urllib.request.Request(src, headers={"User-Agent": "v2rayNG/1.8.0"})
+        req = urllib.request.Request(src, headers=sub_headers(hwid))
         with urllib.request.urlopen(req, timeout=30) as resp:
             return resp.read().decode("utf-8", "replace")
     with open(src, encoding="utf-8") as fh:
@@ -344,6 +367,9 @@ def main() -> None:
                                      "переключает балансировщик на leastLoad с весами")
     ap.add_argument("--probe-interval", default="30s", help="как часто observatory пробит плечи")
     ap.add_argument("--list", action="store_true", help="только показать узлы подписки и выйти")
+    ap.add_argument("--hwid", default="", help="идентификатор устройства для панелей с HWID-привязкой "
+                                               "(или XRAY_SUB_HWID); должен быть ПОСТОЯННЫМ — каждый новый "
+                                               "занимает слот устройства")
     args = ap.parse_args()
 
     prefer: list[str] = []
@@ -357,7 +383,7 @@ def main() -> None:
             sys.exit(f"--prefer поддерживает до {len(PREFER_COSTS)} стран: дальше веса "
                      "перестают что-либо значить, проще сузить пул через --include")
 
-    links = decode(fetch(args.source))
+    links = decode(fetch(args.source, args.hwid))
     nodes = [n for n in (parse(l) for l in links) if n]
     if not nodes:
         sys.exit("в подписке нет VLESS+Reality узлов")
