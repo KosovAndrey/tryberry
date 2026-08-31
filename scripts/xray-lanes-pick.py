@@ -8,7 +8,11 @@
 адрес. В ночь на 01-09 из 16 плеч конфига живыми были 10, а уникальных адресов в
 подписке нашлось 35 в 17 подсетях.
 
-Что делает: берёт полный конфиг (или собирает его из подписки), отсеивает
+Подписок может быть НЕСКОЛЬКО: их адреса складываются в общий пул (лимит WB
+считается по IP, поэтому чем больше разных адресов, тем лучше). Список живёт в
+XRAY_SUBS в .env — добавить провайдера значит дописать туда ещё один URL.
+
+Что делает: берёт полные конфиги (или собирает их из подписок), отсеивает
 мёртвые узлы TCP-пробой, схлопывает по резолвнутому IP, затем выбирает N плеч
 ПО КРУГУ ПО ПОДСЕТЯМ — сначала по одному из каждой /24, потом второй круг и так
 далее. Так пул не вырождается в одну сеть, даже если в ней больше всего узлов.
@@ -16,7 +20,8 @@
 Примеры:
     python3 scripts/xray-lanes-pick.py --from /tmp/xray-all.json -n 24
     python3 scripts/xray-lanes-pick.py --from /tmp/xray-all.json /tmp/xray-new.json -n 24
-    python3 scripts/xray-lanes-pick.py --sub 'https://ПОДПИСКА/КОД' -n 24
+    python3 scripts/xray-lanes-pick.py --sub 'https://ПОДПИСКА-1' 'https://ПОДПИСКА-2' -n 24
+    XRAY_SUBS='https://ПОДПИСКА-1,https://ПОДПИСКА-2' python3 scripts/xray-lanes-pick.py -n 24
     python3 scripts/xray-lanes-pick.py --from /tmp/xray-all.json \\
         --results /tmp/wb-lane-results.json      # выкинуть плечи, забракованные WB
 
@@ -85,8 +90,10 @@ def pick_round_robin(by_net: dict[str, list], limit: int) -> list:
 def main() -> None:
     ap = argparse.ArgumentParser(description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
-    src = ap.add_mutually_exclusive_group(required=True)
-    src.add_argument("--sub", help="URL подписки — собрать полный список генератором")
+    src = ap.add_mutually_exclusive_group()
+    src.add_argument("--sub", nargs="+", metavar="URL",
+                     help="URL подписок (можно несколько). Если не задано — берём XRAY_SUBS "
+                          "из окружения (список через запятую)")
     src.add_argument("--from", dest="src_paths", nargs="+",
                      help="готовые конфиги со всеми узлами; можно НЕСКОЛЬКО — "
                           "пулы разных подписок сливаются в один (теги при совпадении разводятся)")
@@ -98,15 +105,26 @@ def main() -> None:
     ap.add_argument("--dry-run", action="store_true", help="показать отбор, ничего не записывать")
     args = ap.parse_args()
 
-    if args.sub:
-        src_paths = ["/tmp/xray-all.json"]
-        gen = subprocess.run([sys.executable, GENERATOR, args.sub, "-n", "0", "-o", src_paths[0]],
-                             capture_output=True, text=True)
-        sys.stdout.write(gen.stdout)
-        if gen.returncode != 0:
-            sys.exit("генератор конфига упал: " + gen.stderr.strip()[:200])
-    else:
+    subs = args.sub or [u.strip() for u in os.getenv("XRAY_SUBS", "").split(",") if u.strip()]
+    if subs and args.src_paths:
+        sys.exit("--from и подписки одновременно не имеют смысла: выбери что-то одно")
+    if subs:
+        # Каждая подписка разворачивается в свой файл: так видно, что откуда, и
+        # можно переиспользовать выгрузку, не дёргая панель лишний раз (у панелей
+        # с HWID-привязкой каждый запрос — это обращение за слотом устройства).
+        src_paths = []
+        for i, sub in enumerate(subs, 1):
+            path = f"/tmp/xray-sub-{i}.json"
+            gen = subprocess.run([sys.executable, GENERATOR, sub, "-n", "0", "-o", path],
+                                 capture_output=True, text=True)
+            if gen.returncode != 0:
+                sys.exit(f"подписка №{i}: генератор упал: {gen.stderr.strip()[:200]}")
+            sys.stderr.write(gen.stderr)
+            src_paths.append(path)
+    elif args.src_paths:
         src_paths = args.src_paths
+    else:
+        sys.exit("нечего собирать: задай --sub, --from или XRAY_SUBS в окружении")
 
     # Первый файл задаёт скелет (inbounds/routing/observatory), плечи берём из всех.
     cfg = json.load(open(src_paths[0]))
