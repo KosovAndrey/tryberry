@@ -1,0 +1,160 @@
+#!/usr/bin/env python3
+"""Отбор плеч xray: живые, по одному на адрес, с максимальным разбросом по /24.
+
+Зачем. Поисковая ручка WB лимитирует ПО АДРЕСУ выхода, поэтому потолок поиска
+упирается не в скорость, а в число разных IP в пуле. Генератор
+`xray-config-from-sub.py` берёт первые N узлов подписки как есть, а там
+вперемешку мёртвые узлы и дубли: один адрес на пяти портах — для WB это ОДИН
+адрес. В ночь на 01-09 из 16 плеч конфига живыми были 10, а уникальных адресов в
+подписке нашлось 35 в 17 подсетях.
+
+Что делает: берёт полный конфиг (или собирает его из подписки), отсеивает
+мёртвые узлы TCP-пробой, схлопывает по резолвнутому IP, затем выбирает N плеч
+ПО КРУГУ ПО ПОДСЕТЯМ — сначала по одному из каждой /24, потом второй круг и так
+далее. Так пул не вырождается в одну сеть, даже если в ней больше всего узлов.
+
+Примеры:
+    python3 scripts/xray-lanes-pick.py --from /tmp/xray-all.json -n 24
+    python3 scripts/xray-lanes-pick.py --sub 'https://ПОДПИСКА/КОД' -n 24
+    python3 scripts/xray-lanes-pick.py --from /tmp/xray-all.json \\
+        --results /tmp/wb-lane-results.json      # выкинуть плечи, забракованные WB
+
+После записи конфига: `docker exec pt_xray xray -test -c /etc/xray/config.json`
+и `up -d --force-recreate xray` (несколько секунд без egress — бот молчит).
+"""
+
+from __future__ import annotations
+
+import argparse
+import datetime
+import json
+import os
+import shutil
+import socket
+import subprocess
+import sys
+from collections import defaultdict
+from typing import Any
+
+HERE = os.path.dirname(os.path.abspath(__file__))
+GENERATOR = os.path.join(HERE, "xray-config-from-sub.py")
+
+
+def resolve(lane: dict[str, Any]) -> str | None:
+    try:
+        return socket.gethostbyname(lane["settings"]["vnext"][0]["address"])
+    except OSError:
+        return None
+
+
+def tcp_alive(ip: str, port: int, timeout: float) -> bool:
+    s = socket.socket()
+    s.settimeout(timeout)
+    try:
+        s.connect((ip, port))
+        return True
+    except OSError:
+        return False
+    finally:
+        s.close()
+
+
+def subnet(ip: str) -> str:
+    return ".".join(ip.split(".")[:3]) + ".0/24"
+
+
+def pick_round_robin(by_net: dict[str, list], limit: int) -> list:
+    """По кругу: сначала по одному плечу из каждой подсети, потом второй круг."""
+    picked: list = []
+    round_no = 0
+    while len(picked) < limit:
+        added = 0
+        for net in sorted(by_net):
+            if round_no < len(by_net[net]):
+                picked.append(by_net[net][round_no])
+                added += 1
+                if len(picked) >= limit:
+                    break
+        if added == 0:
+            break
+        round_no += 1
+    return picked
+
+
+def main() -> None:
+    ap = argparse.ArgumentParser(description=__doc__,
+                                 formatter_class=argparse.RawDescriptionHelpFormatter)
+    src = ap.add_mutually_exclusive_group(required=True)
+    src.add_argument("--sub", help="URL подписки — собрать полный список генератором")
+    src.add_argument("--from", dest="src_path", help="готовый полный конфиг (все узлы)")
+    ap.add_argument("-n", "--limit", type=int, default=24,
+                    help="сколько плеч оставить (по умолчанию 24: observatory пробит каждое раз в 30с)")
+    ap.add_argument("-o", "--out", default="xray/config.json", help="куда писать конфиг")
+    ap.add_argument("--results", help="JSON от wb-lane-test.py: выкинуть плечи без единой двухсотки")
+    ap.add_argument("--timeout", type=float, default=5.0, help="таймаут TCP-пробы, сек")
+    ap.add_argument("--dry-run", action="store_true", help="показать отбор, ничего не записывать")
+    args = ap.parse_args()
+
+    if args.sub:
+        src_path = "/tmp/xray-all.json"
+        gen = subprocess.run([sys.executable, GENERATOR, args.sub, "-n", "0", "-o", src_path],
+                             capture_output=True, text=True)
+        sys.stdout.write(gen.stdout)
+        if gen.returncode != 0:
+            sys.exit("генератор конфига упал: " + gen.stderr.strip()[:200])
+    else:
+        src_path = args.src_path
+
+    cfg = json.load(open(src_path))
+    lanes = [o for o in cfg["outbounds"] if str(o.get("tag", "")).startswith("vless")]
+    tail = [o for o in cfg["outbounds"] if not str(o.get("tag", "")).startswith("vless")]
+
+    rejected: set[str] = set()
+    if args.results:
+        for tag, row in json.load(open(args.results)).items():
+            if "'200'" not in row.get("verdict", ""):
+                rejected.add(tag)
+
+    best: dict[str, dict[str, Any]] = {}
+    dead = 0
+    for lane in lanes:
+        if lane["tag"] in rejected:
+            continue
+        ip = resolve(lane)
+        if ip is None or not tcp_alive(ip, lane["settings"]["vnext"][0]["port"], args.timeout):
+            dead += 1
+            continue
+        cur = best.get(ip)
+        # tcp предпочитаем grpc: тот же пул несёт long-poll Telegram.
+        if cur is None or (lane["streamSettings"]["network"] == "tcp"
+                           and cur["streamSettings"]["network"] != "tcp"):
+            best[ip] = lane
+
+    by_net: dict[str, list] = defaultdict(list)
+    for ip, lane in sorted(best.items()):
+        by_net[subnet(ip)].append((ip, lane))
+
+    picked = pick_round_robin(by_net, args.limit)
+    print(f"узлов {len(lanes)} | забраковано WB {len(rejected)} | мёртвых {dead} | "
+          f"уникальных адресов {len(best)} в {len(by_net)} подсетях | берём {len(picked)}")
+    for net in sorted({subnet(ip) for ip, _ in picked}):
+        tags = [f"{ip} {lane['tag']}" for ip, lane in picked if subnet(ip) == net]
+        print(f"  {net:20} {len(tags)}  " + ", ".join(t.split()[1] for t in tags))
+
+    if args.dry_run:
+        print("\n--dry-run: конфиг не записан")
+        return
+
+    cfg["outbounds"] = [lane for _, lane in picked] + tail
+    if os.path.exists(args.out):
+        backup = args.out + ".bak-" + datetime.datetime.now().strftime("%F-%H%M")
+        shutil.copy(args.out, backup)
+        print(f"\nбэкап прежнего конфига: {backup}")
+    json.dump(cfg, open(args.out, "w"), ensure_ascii=False, indent=2)
+    print(f"записан {args.out}: плеч {len(picked)}")
+    print("дальше: docker exec pt_xray xray -test -c /etc/xray/config.json && "
+          "docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d --force-recreate xray")
+
+
+if __name__ == "__main__":
+    main()

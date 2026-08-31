@@ -41,11 +41,11 @@ GENERATOR = os.path.join(HERE, "xray-config-from-sub.py")
 
 # Холодный запрос: на горячих («iphone 17») WB отвечает 403 по другой причине —
 # нам нужен чистый сигнал про rate-limit, а не про антибот.
-WB_URL = (
-    "https://search.wb.ru/exactmatch/ru/common/v18/search?"
-    "query=%D0%BA%D0%B0%D0%BF%D0%B8%D0%B1%D0%B0%D1%80%D0%B0"
-    "&resultset=catalog&curr=rub&dest=-1257786&spp=30&page=1"
-)
+WB_QS = ("query=%D0%BA%D0%B0%D0%BF%D0%B8%D0%B1%D0%B0%D1%80%D0%B0"
+         "&resultset=catalog&curr=rub&dest=-1257786&spp=30&page=1")
+# По умолчанию бьём в БОЕВУЮ ручку: с 01-09 это u-search.wb.ru (search.wb.ru
+# отдаёт 429 всем подряд). Другую ручку задаёт --url.
+WB_URL = f"https://u-search.wb.ru/exactmatch/ru/common/v18/search?{WB_QS}"
 
 # Проба запускается ВНУТРИ контейнера с python (сеть compose), потому что
 # временный xray портов наружу не публикует — он доступен только по имени.
@@ -145,7 +145,7 @@ def test_lane(lane: dict[str, Any], ip: str, args) -> str:
         time.sleep(args.warmup)
         probe = (PROBE_SRC
                  .replace("__PROXY__", f"http://{args.name}:{args.port}")
-                 .replace("__URL__", WB_URL)
+                 .replace("__URL__", args.url)
                  .replace("__N__", str(args.requests)))
         out = sh("docker", "exec", "-i", args.probe_container, "python", "-c", probe)
         return out.stdout.strip() or out.stderr.strip()[:60] or "нет ответа"
@@ -160,6 +160,7 @@ def main() -> None:
     src.add_argument("--sub", help="URL подписки: список узлов соберём генератором")
     src.add_argument("--lanes", help="готовый конфиг/список плеч (xray/config.json и т.п.)")
     ap.add_argument("--requests", type=int, default=3, help="запросов на плечо (по умолчанию 3)")
+    ap.add_argument("--url", default=WB_URL, help="какую ручку бить (по умолчанию боевая u-search)")
     ap.add_argument("--out", default="/tmp/wb-lane-results.json", help="куда сложить вердикты")
     ap.add_argument("--network", default="tryberrybot_default", help="docker-сеть compose")
     ap.add_argument("--probe-container", default="pt_wb_search_miner",
