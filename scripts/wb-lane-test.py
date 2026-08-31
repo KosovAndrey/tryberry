@@ -50,9 +50,11 @@ WB_URL = f"https://u-search.wb.ru/exactmatch/ru/common/v18/search?{WB_QS}"
 # Проба запускается ВНУТРИ контейнера с python (сеть compose), потому что
 # временный xray портов наружу не публикует — он доступен только по имени.
 PROBE_SRC = """
-import urllib.request, collections
+import urllib.request, collections, time
 c = collections.Counter()
-for _ in range(__N__):
+for _i in range(__N__):
+    if _i and __DELAY__:
+        time.sleep(__DELAY__)
     o = urllib.request.build_opener(urllib.request.ProxyHandler(
         {"https": "__PROXY__", "http": "__PROXY__"}))
     try:
@@ -146,7 +148,8 @@ def test_lane(lane: dict[str, Any], ip: str, args) -> str:
         probe = (PROBE_SRC
                  .replace("__PROXY__", f"http://{args.name}:{args.port}")
                  .replace("__URL__", args.url)
-                 .replace("__N__", str(args.requests)))
+                 .replace("__N__", str(args.requests))
+                 .replace("__DELAY__", str(args.delay)))
         out = sh("docker", "exec", "-i", args.probe_container, "python", "-c", probe)
         return out.stdout.strip() or out.stderr.strip()[:60] or "нет ответа"
     finally:
@@ -160,6 +163,9 @@ def main() -> None:
     src.add_argument("--sub", help="URL подписки: список узлов соберём генератором")
     src.add_argument("--lanes", help="готовый конфиг/список плеч (xray/config.json и т.п.)")
     ap.add_argument("--requests", type=int, default=3, help="запросов на плечо (по умолчанию 3)")
+    ap.add_argument("--delay", type=float, default=0.0,
+                    help="пауза между запросами одного плеча, сек. 0 = очередью подряд "
+                         "(проверяет burst-лимит), 2-3 = размеренно (проверяет устойчивый лимит)")
     ap.add_argument("--url", default=WB_URL, help="какую ручку бить (по умолчанию боевая u-search)")
     ap.add_argument("--out", default="/tmp/wb-lane-results.json", help="куда сложить вердикты")
     ap.add_argument("--network", default="tryberrybot_default", help="docker-сеть compose")
