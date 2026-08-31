@@ -206,7 +206,7 @@ groups:
           severity: warning
         annotations:
           summary: "WB-поиск: direct не даёт успехов, всё идёт через браузер"
-          description: "За 15 минут ни одного успешного direct-запроса к search.wb.ru при живом браузерном фолбэке. Смотреть долю result=error (egress не пропускает) против 429/forbidden (лимит/стена WB): sum by (result) (increase(tryberrybot_wb_search_fetch_total{transport=\"direct\"}[15m])). Проверить поисковое плечо: docker exec pt_xray netstat -ltn | grep 8889 и SEARCH_PROXY_URLS в .env. Откат — вернуть SEARCH_PROXY_URLS на http://xray:8888 и перезапустить search-worker/reseller-worker."
+          description: "За 15 минут ни одного успешного direct-запроса к поисковой ручке WB при живом браузерном фолбэке. Смотреть долю result=error (egress не пропускает) против 429/forbidden (лимит/бан WB): sum by (result) (increase(tryberrybot_wb_search_fetch_total{transport=\"direct\"}[15m])). Проверить ручку и плечи: python3 scripts/wb-endpoint-probe.py --proxy http://xray:8889 --repeat 5 (сравнить u-search.wb.ru с search.wb.ru) и python3 scripts/wb-lane-test.py --lanes xray/config.json (мёртвые плечи). Рычаги в .env: WB_SEARCH_API_BASE (ручка) и SEARCH_PROXY_URLS/RESELLER_SEARCH_PROXY_URLS (8889 random, 8888 липкий). НЕ откатывать вслепую на search.wb.ru: с 01-09 он отдаёт 429 всем подряд."
 
       # ГЛАВНЫЙ алерт по WB-сайдкару: healthy_lanes ВРЁТ при залипании драйвера.
       # Инцидент 13-08: /search висел бесконечно (чтение тела ответа было без
