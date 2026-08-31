@@ -177,11 +177,19 @@ groups:
       # сутки). Без добавки правило звенело бы про исправную тишину, а вечный
       # алерт учит игнорировать алерты. Нет дорожек И НИКТО НЕ ЗВАЛ — это не
       # инцидент, а нормальная работа основного пути.
+      # Третья добавка (01-09): дорожек может не быть НАМЕРЕННО. Пока прод-IP у
+      # wbaas в бане, браузер бесполезен (стена + 3 ГиБ памяти на ретраи), и
+      # WB_SEARCH_POOL_SIZE=0 выключает его штатно — /search как отвечал 502, так
+      # и отвечает. Серии wb_search_miner_lane_age_seconds при нулевом пуле нет
+      # вовсе: это и есть признак «дорожек не заведено», в отличие от «заведены,
+      # но не прогреваются». Без этого условия правило звенело бы вечно.
       - alert: WbSearchMinerNoHealthyLanes
         expr: |
           wb_search_miner_healthy_lanes == 0
           and on()
           (sum(rate(tryberrybot_wb_search_fetch_total{transport="browser"}[1h])) > 0)
+          and on()
+          (count(wb_search_miner_lane_age_seconds) > 0)
         for: 15m
         labels:
           severity: warning
@@ -224,6 +232,8 @@ groups:
           wb_search_miner_last_success_age_seconds > 3600
             and on()
           (sum(rate(tryberrybot_wb_search_fetch_total{transport="browser"}[1h])) > 0)
+            and on()
+          (count(wb_search_miner_lane_age_seconds) > 0)
         for: 5m
         labels:
           severity: warning
