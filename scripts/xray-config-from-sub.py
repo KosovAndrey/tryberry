@@ -103,7 +103,14 @@ def decode(payload: str) -> list[str]:
         try:
             text = base64.b64decode(text + pad).decode("utf-8", "replace")
         except (binascii.Error, ValueError) as err:
-            sys.exit(f"подписка не base64 и не содержит vless://: {err}")
+            # Панели отдают разное: base64-список, plain-текст, YAML для Clash,
+            # JSON sing-box, страницу-заглушку. Показываем начало ответа — по нему
+            # видно, что именно пришло, вместо гадания по тексту ошибки.
+            head = payload.strip()[:400].replace("\n", " ⏎ ")
+            sys.exit(f"подписка не base64 и не содержит vless:// ({err}).\n"
+                     f"начало ответа: {head}\n"
+                     f"если это YAML/JSON другого клиента — панель отдаёт формат по User-Agent; "
+                     f"если текст про устройства — нужен постоянный --hwid/XRAY_SUB_HWID")
     return [ln.strip() for ln in text.splitlines() if ln.strip().startswith("vless://")]
 
 
@@ -367,6 +374,8 @@ def main() -> None:
                                      "переключает балансировщик на leastLoad с весами")
     ap.add_argument("--probe-interval", default="30s", help="как часто observatory пробит плечи")
     ap.add_argument("--list", action="store_true", help="только показать узлы подписки и выйти")
+    ap.add_argument("--raw", action="store_true",
+                    help="показать сырой ответ подписки и выйти (диагностика формата)")
     ap.add_argument("--hwid", default="", help="идентификатор устройства для панелей с HWID-привязкой "
                                                "(или XRAY_SUB_HWID); должен быть ПОСТОЯННЫМ — каждый новый "
                                                "занимает слот устройства")
@@ -383,7 +392,11 @@ def main() -> None:
             sys.exit(f"--prefer поддерживает до {len(PREFER_COSTS)} стран: дальше веса "
                      "перестают что-либо значить, проще сузить пул через --include")
 
-    links = decode(fetch(args.source, args.hwid))
+    raw = fetch(args.source, args.hwid)
+    if args.raw:
+        print(raw[:4000])
+        return
+    links = decode(raw)
     nodes = [n for n in (parse(l) for l in links) if n]
     if not nodes:
         sys.exit("в подписке нет VLESS+Reality узлов")
