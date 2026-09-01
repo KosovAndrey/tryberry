@@ -148,7 +148,8 @@ def main() -> int:
     subs = [u for u in env["XRAY_SUBS"].split(",") if u.strip()]
     log(f"подписок: {len(subs)}, целевой размер пула: {args.limit}")
 
-    pick_cmd = [sys.executable, PICK, "-n", str(args.limit), "-o", CANDIDATE]
+    pick_cmd = [sys.executable, PICK, "-n", str(args.limit), "-o", CANDIDATE,
+                "--prefer-current", args.config]
     log("шаг 1/3: тянем подписки и пробим узлы")
     code, out = run_streaming(pick_cmd, env)
     if code != 0:

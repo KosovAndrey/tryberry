@@ -103,6 +103,10 @@ def main() -> None:
     ap.add_argument("-o", "--out", default="xray/config.json", help="куда писать конфиг")
     ap.add_argument("--results", help="JSON от wb-lane-test.py: выкинуть плечи, не давшие НИ ОДНОГО "
                                        "HTTP-ответа (не встал тоннель). 429 = плечо живое, не бракуем")
+    ap.add_argument("--prefer-current", metavar="CONFIG",
+                    help="конфиг с действующим пулом: живые плечи оттуда остаются на месте. "
+                         "Без этого отбор каждый раз тасует пул заново, и ночной прогон "
+                         "перекатывает xray (обрыв egress) без реальных изменений")
     ap.add_argument("--timeout", type=float, default=5.0, help="таймаут TCP-пробы, сек")
     ap.add_argument("--dry-run", action="store_true", help="показать отбор, ничего не записывать")
     args = ap.parse_args()
@@ -188,9 +192,31 @@ def main() -> None:
                                and cur["streamSettings"]["network"] != "tcp"):
                 best[ip] = lane
 
+    # Стабильность важнее «свежести»: плечо, которое уже работает, менять незачем.
+    # Внутри подсети действующие идут первыми, остальные — по адресу (детерминизм).
+    current: set[str] = set()
+    if args.prefer_current:
+        try:
+            cur_cfg = json.load(open(args.prefer_current))
+            for ob in cur_cfg.get("outbounds", []):
+                v = (ob.get("settings") or {}).get("vnext") or [{}]
+                if v[0].get("address"):
+                    current.add(str(v[0]["address"]))
+        except (OSError, ValueError):
+            pass  # нет конфига или битый — просто отбираем без предпочтений
+
+    def stability_key(item: tuple[str, dict[str, Any]]) -> tuple[int, str]:
+        ip, lane = item
+        host = str(lane["settings"]["vnext"][0]["address"])
+        return (0 if (ip in current or host in current) else 1, ip)
+
     by_net: dict[str, list] = defaultdict(list)
-    for ip, lane in sorted(best.items()):
+    for ip, lane in sorted(best.items(), key=stability_key):
         by_net[subnet(ip)].append((ip, lane))
+    if current:
+        kept = sum(1 for ip, lane in best.items()
+                   if ip in current or str(lane["settings"]["vnext"][0]["address"]) in current)
+        print(f"действующих плеч живо: {kept} из {len(current)}", file=sys.stderr, flush=True)
 
     picked = pick_round_robin(by_net, args.limit)
     print(f"узлов {len(lanes)} | забраковано WB {len(rejected)} | мёртвых {dead} | "
