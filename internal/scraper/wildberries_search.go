@@ -657,11 +657,24 @@ type wbSearchProduct struct {
 	Name           string `json:"name"`
 	Brand          string `json:"brand"`
 	FeedbackPoints int64  `json:"feedbackPoints"`
-	Sizes          []struct {
-		Price struct {
-			Basic   int64 `json:"basic"`
-			Product int64 `json:"product"`
-			Total   int64 `json:"total"`
-		} `json:"price"`
-	} `json:"sizes"`
+	// TotalQuantity/Sizes[].Stocks — НАСТОЯЩЕЕ наличие. Цена в карточке остаётся и
+	// после того, как товар кончился, поэтому «цена > 0» наличием не является
+	// (замер 01-09-2026: у OOS-товара totalQuantity=0 и stocks пустые, у живых
+	// totalQuantity совпадает с суммой qty по складам).
+	TotalQuantity int64    `json:"totalQuantity"`
+	Sizes         []wbSize `json:"sizes"`
+}
+
+// wbSize — размер/оффер товара. Тип именованный, а не анонимный: к нему
+// обращаются тесты, и каждое новое поле в анонимной структуре ломало бы их сборку.
+type wbSize struct {
+	Price struct {
+		Basic   int64 `json:"basic"`
+		Product int64 `json:"product"`
+		Total   int64 `json:"total"`
+	} `json:"price"`
+	// Stocks — остатки по складам. Пустой список = товара нет, даже если цена есть.
+	Stocks []struct {
+		Qty int64 `json:"qty"`
+	} `json:"stocks"`
 }

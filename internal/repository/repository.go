@@ -17,7 +17,8 @@ type ProductRepo interface {
 	// Upsert — создать продукт по URL или обновить name/image_url если уже есть
 	Upsert(ctx context.Context, url, name, imageURL string) (*domain.Product, error)
 	GetByID(ctx context.Context, id int64) (*domain.Product, error)
-	UpdateScrapedData(ctx context.Context, id int64, name, imageURL string, inStock bool) (wasInStock bool, err error)
+	// inStock == nil — источник наличия не знает, сохранённое значение не трогаем.
+	UpdateScrapedData(ctx context.Context, id int64, name, imageURL string, inStock *bool) (wasInStock bool, err error)
 	// GetActiveProductIDs — все уникальные product_id с активными подписками (для планировщика)
 	GetActiveProductIDs(ctx context.Context) ([]int64, error)
 }

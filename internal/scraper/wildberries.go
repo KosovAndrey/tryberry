@@ -201,6 +201,7 @@ func (s *WildberriesScraper) Scrape(ctx context.Context, url string) (*Result, e
 		// Живые цена и наличие поверх архивных имени/картинки и Истории.
 		arch.Price = live.Price
 		arch.InStock = live.InStock
+		arch.StockUnknown = false // u-card наличие ВИДИТ, архив — нет
 		if arch.Name == "" {
 			arch.Name = live.Name
 		}
@@ -295,6 +296,7 @@ func (s *WildberriesScraper) fetchFromUCard(ctx context.Context, articleID strin
 
 	p := parsed.Products[0]
 	priceKopecks := ucardPriceKopecks(p)
+	stock := ucardStockQty(p)
 	// Цена 0 при валидной карточке — это НЕ ошибка, а «нет активного оффера»:
 	// u-card видит живой buy-box (в отличие от архива, который наличия не знает в
 	// принципе и всегда давал InStock=true). Отдаём OOS честно — зовущий решает,
@@ -304,8 +306,25 @@ func (s *WildberriesScraper) fetchFromUCard(ctx context.Context, articleID strin
 		Name:     firstNonEmpty(p.Name, "Товар WB"),
 		Price:    float64(priceKopecks) / 100,
 		ImageURL: wbImageURL(id),
-		InStock:  priceKopecks > 0,
+		// Наличие — по складам, а не по «цена > 0»: WB держит цену в карточке и у
+		// кончившегося товара, и такой товар уезжал в дайджест «лучших цен».
+		InStock: stock > 0 && priceKopecks > 0,
 	}, nil
+}
+
+// ucardStockQty — сколько единиц лежит на складах по всем размерам. Пусто = товара
+// нет, сколько бы ни показывала цена.
+func ucardStockQty(p wbSearchProduct) int64 {
+	if p.TotalQuantity > 0 {
+		return p.TotalQuantity
+	}
+	var qty int64
+	for _, sz := range p.Sizes {
+		for _, st := range sz.Stocks {
+			qty += st.Qty
+		}
+	}
+	return qty
 }
 
 // wbUCardOutcome — метка исхода по статусу: 403/429 (нас режут) и 5xx (у WB
@@ -440,12 +459,14 @@ func (s *WildberriesScraper) tryBasket(ctx context.Context, id, vol, part int64,
 			metrics.WBCondGet.WithLabelValues("not_modified").Inc()
 			// History пуст: бэкфилл уже случился на полном скрейпе, который
 			// и записал этот снимок.
-			return &Result{Name: cond.Name, Price: cond.Price, ImageURL: cond.ImageURL, InStock: true}, nil
+			return &Result{Name: cond.Name, Price: cond.Price, ImageURL: cond.ImageURL,
+				InStock: true, StockUnknown: true}, nil
 		}
 		metrics.WBCondGet.WithLabelValues("modified").Inc()
 		name, imageURL := s.fetchBasketCard(ctx, base, articleID, basket, vol, part)
 		s.putCond(ctx, id, pr, name, imageURL)
-		return &Result{Name: name, Price: pr.price, ImageURL: imageURL, InStock: true, History: pr.history}, nil
+		return &Result{Name: name, Price: pr.price, ImageURL: imageURL,
+			InStock: true, StockUnknown: true, History: pr.history}, nil
 	}
 
 	var (
@@ -463,7 +484,8 @@ func (s *WildberriesScraper) tryBasket(ctx context.Context, id, vol, part int64,
 		return nil, priceErr
 	}
 	s.putCond(ctx, id, pr, name, imageURL)
-	return &Result{Name: name, Price: pr.price, ImageURL: imageURL, InStock: true, History: pr.history}, nil
+	return &Result{Name: name, Price: pr.price, ImageURL: imageURL,
+		InStock: true, StockUnknown: true, History: pr.history}, nil
 }
 
 // putCond — запомнить снимок успешного скрейпа для будущих conditional GET.

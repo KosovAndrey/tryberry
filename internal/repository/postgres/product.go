@@ -195,7 +195,10 @@ func (r *ProductRepo) ListPublicForSitemap(ctx context.Context, limit int) ([]Si
 // она безусловно перезаписывала уже сохранённое нормальное имя — товар навсегда
 // превращался в «Товар Ozon». Теперь нормальное имя сохраняем, заглушку пишем
 // только если хорошего имени ещё нет. Все заглушки имеют форму 'Товар <…>'.
-func (r *ProductRepo) UpdateScrapedData(ctx context.Context, id int64, name, imageURL string, inStock bool) (wasInStock bool, err error) {
+// inStock == nil означает «источник наличия не знает» (архив WB): сохранённое
+// значение остаётся как есть, а вернётся оно же — вызывающий берёт его как
+// действующее. Иначе архивный путь объявлял бы «в наличии» пропавший товар.
+func (r *ProductRepo) UpdateScrapedData(ctx context.Context, id int64, name, imageURL string, inStock *bool) (wasInStock bool, err error) {
 	const q = `
 		WITH prev AS (SELECT in_stock FROM products WHERE id = $1)
 		UPDATE products
@@ -205,7 +208,7 @@ func (r *ProductRepo) UpdateScrapedData(ctx context.Context, id int64, name, ima
 		             ELSE $2
 		           END,
 		    image_url = COALESCE(NULLIF($3, ''), image_url),
-		    in_stock  = $4,
+		    in_stock  = COALESCE($4, in_stock),
 		    updated_at = NOW()
 		WHERE id = $1
 		RETURNING (SELECT in_stock FROM prev)`

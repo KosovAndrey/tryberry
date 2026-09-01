@@ -52,13 +52,7 @@ func TestBasketCandidates(t *testing.T) {
 func TestUcardPriceKopecks(t *testing.T) {
 	mk := func(basic, product, total int64) wbSearchProduct {
 		p := wbSearchProduct{}
-		p.Sizes = append(p.Sizes, struct {
-			Price struct {
-				Basic   int64 `json:"basic"`
-				Product int64 `json:"product"`
-				Total   int64 `json:"total"`
-			} `json:"price"`
-		}{})
+		p.Sizes = append(p.Sizes, wbSize{})
 		p.Sizes[0].Price.Basic, p.Sizes[0].Price.Product, p.Sizes[0].Price.Total = basic, product, total
 		return p
 	}
@@ -95,5 +89,68 @@ func TestUcardResponseShape(t *testing.T) {
 	}
 	if parsed.Products[0].Name == "" {
 		t.Error("имя не распарсилось")
+	}
+}
+
+// Наличие берётся со складов, а не из «цена > 0»: WB держит цену в карточке и у
+// кончившегося товара. Инцидент 01-09-2026: такой товар попал в дайджест «лучших
+// цен» с распродажной ценой, которой нельзя воспользоваться.
+func TestUcardStockQty(t *testing.T) {
+	withStocks := func(total int64, qtys ...int64) wbSearchProduct {
+		p := wbSearchProduct{TotalQuantity: total}
+		sz := wbSize{}
+		for _, q := range qtys {
+			sz.Stocks = append(sz.Stocks, struct {
+				Qty int64 `json:"qty"`
+			}{Qty: q})
+		}
+		p.Sizes = append(p.Sizes, sz)
+		return p
+	}
+	cases := []struct {
+		name string
+		p    wbSearchProduct
+		want int64
+	}{
+		{"totalQuantity как есть", withStocks(53, 53), 53},
+		{"сумма по складам, если totalQuantity пуст", withStocks(0, 4, 7), 11},
+		{"нет остатков → 0", withStocks(0), 0},
+		{"нет размеров → 0", wbSearchProduct{}, 0},
+	}
+	for _, c := range cases {
+		if got := ucardStockQty(c.p); got != c.want {
+			t.Errorf("%s: ucardStockQty = %d, want %d", c.name, got, c.want)
+		}
+	}
+}
+
+// Реальные ответы u-card 01-09-2026: у живого товара остатки есть, у пропавшего
+// нет ни остатков, ни цены — а карточка при этом валидная.
+func TestUcardResponseStockShape(t *testing.T) {
+	const live = `{"products":[{"id":1298936262,"name":"Смартфон Galaxy S26","totalQuantity":53,
+	  "sizes":[{"price":{"basic":6008100,"product":5006800,"total":5006800},"stocks":[{"wh":1,"qty":53}]}]}]}`
+	const oos = `{"products":[{"id":1252698753,"name":"Смартфон X8 Pro, 8 256ГБ, global",
+	  "totalQuantity":0,"sizes":[{"stocks":[]}]}]}`
+
+	for _, c := range []struct {
+		name      string
+		body      string
+		wantQty   int64
+		wantPrice int64
+	}{
+		{"живой товар", live, 53, 5006800},
+		{"пропавший товар", oos, 0, 0},
+	} {
+		var parsed wbSearchResponse
+		if err := json.Unmarshal([]byte(c.body), &parsed); err != nil {
+			t.Fatalf("%s: unmarshal: %v", c.name, err)
+		}
+		p := parsed.Products[0]
+		if got := ucardStockQty(p); got != c.wantQty {
+			t.Errorf("%s: остаток = %d, want %d", c.name, got, c.wantQty)
+		}
+		if got := ucardPriceKopecks(p); got != c.wantPrice {
+			t.Errorf("%s: цена = %d, want %d", c.name, got, c.wantPrice)
+		}
 	}
 }

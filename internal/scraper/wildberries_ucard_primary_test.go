@@ -46,10 +46,25 @@ func ucardScraper(t *testing.T, archiveKopecks int64, ucardHandler func() *http.
 	return s, &calls
 }
 
-// wbUCardBody — ответ u-card (форма совпадает с поисковой выдачей).
+// wbUCardBody — ответ u-card (форма совпадает с поисковой выдачей). Живой товар
+// идёт с остатками: наличие определяется по складам, а не по «цена > 0» — WB
+// держит цену в карточке и после того, как товар кончился (инцидент 01-09-2026).
 func wbUCardBody(priceKopecks int64) string {
+	if priceKopecks == 0 {
+		return `{"products":[{"id":221501024,"name":"Живой товар","totalQuantity":0,"sizes":[{"stocks":[]}]}]}`
+	}
 	return fmt.Sprintf(
-		`{"products":[{"id":221501024,"name":"Живой товар","sizes":[{"price":{"product":%d,"total":%d,"basic":%d}}]}]}`,
+		`{"products":[{"id":221501024,"name":"Живой товар","totalQuantity":7,`+
+			`"sizes":[{"price":{"product":%d,"total":%d,"basic":%d},"stocks":[{"wh":1,"qty":7}]}]}]}`,
+		priceKopecks, priceKopecks, priceKopecks)
+}
+
+// wbUCardBodyNoStock — цена ЕСТЬ, остатков нет. Ровно тот случай, что увёл
+// пропавший товар в дайджест «лучших цен» 01-09-2026.
+func wbUCardBodyNoStock(priceKopecks int64) string {
+	return fmt.Sprintf(
+		`{"products":[{"id":221501024,"name":"Живой товар","totalQuantity":0,`+
+			`"sizes":[{"price":{"product":%d,"total":%d,"basic":%d},"stocks":[]}]}]}`,
 		priceKopecks, priceKopecks, priceKopecks)
 }
 
@@ -144,5 +159,42 @@ func TestWBUCardPrimaryOffKeepsArchiveFirst(t *testing.T) {
 	}
 	if *calls != 0 {
 		t.Errorf("обращений к u-card = %d, ждали 0 при выключенном рубильнике", *calls)
+	}
+}
+
+// Цена в карточке есть, а остатков нет: WB показывает такой товар как «нет в
+// наличии». Раньше мы считали его живым и советовали купить (инцидент 01-09-2026).
+func TestWBUCardPriceWithoutStockIsOOS(t *testing.T) {
+	s, _ := ucardScraper(t, 369602, func() *http.Response {
+		return resp(200, wbUCardBodyNoStock(504700), nil)
+	})
+	r, err := s.Scrape(context.Background(), condTestURL)
+	if err != nil {
+		t.Fatalf("scrape: %v", err)
+	}
+	if r.InStock {
+		t.Error("InStock = true при пустых остатках — это и есть баг дайджеста")
+	}
+	if r.StockUnknown {
+		t.Error("StockUnknown = true, хотя u-card наличие видит")
+	}
+}
+
+// Когда u-card недоступен (403 с забаненного IP — наш штатный случай), цена
+// приходит из архива, а он про наличие не знает. Такой ответ обязан быть помечен
+// StockUnknown, иначе пропавший товар навсегда останется «в наличии».
+func TestWBArchiveFallbackMarksStockUnknown(t *testing.T) {
+	s, _ := ucardScraper(t, 369602, func() *http.Response {
+		return resp(403, "", nil)
+	})
+	r, err := s.Scrape(context.Background(), condTestURL)
+	if err != nil {
+		t.Fatalf("scrape: %v", err)
+	}
+	if r.Price != 3696.02 {
+		t.Errorf("цена = %v, ждали архивную 3696.02", r.Price)
+	}
+	if !r.StockUnknown {
+		t.Error("StockUnknown = false: архив наличия не знает и не должен его утверждать")
 	}
 }

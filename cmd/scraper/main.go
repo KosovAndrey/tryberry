@@ -300,9 +300,23 @@ func makeHandler(
 
 		// Обновляем product (имя/картинка/наличие); получаем ПРЕДЫДУЩЕЕ наличие для
 		// детекта перехода «нет в наличии»→«появилось» (триггер back_in_stock).
-		wasInStock, err := productRepo.UpdateScrapedData(ctx, task.ProductID, result.Name, result.ImageURL, result.InStock)
+		// Наличие пишем только когда источник его действительно видит: архив WB
+		// хранит цену, но про запас не знает (result.StockUnknown). Раньше он
+		// объявлял «в наличии» кого угодно, и пропавший товар навсегда оставался с
+		// распродажной ценой — она становилась минимумом истории, а дайджест
+		// советовал купить то, чего нет (инцидент 01-09-2026).
+		var stockArg *bool
+		if !result.StockUnknown {
+			stockArg = &result.InStock
+		}
+		wasInStock, err := productRepo.UpdateScrapedData(ctx, task.ProductID, result.Name, result.ImageURL, stockArg)
 		if err != nil {
 			return fmt.Errorf("update product: %w", err)
+		}
+		// Действующее наличие: если источник его не знал, остаётся прежнее из БД.
+		inStock := result.InStock
+		if result.StockUnknown {
+			inStock = wasInStock
 		}
 
 		// Получаем предыдущую цену (из Redis или PostgreSQL)
@@ -314,7 +328,7 @@ func makeHandler(
 		// price_history/кэш обновляем ТОЛЬКО когда товар в наличии: запись нулевой
 		// цены для OOS засорила бы аналитику и дала ложный price drop. Событие шлём
 		// всегда — notifier обрабатывает и появление в наличии, и снижение цены.
-		if result.InStock {
+		if inStock {
 			// CHANGE-ONLY: пишем в историю лишь при СМЕНЕ цены. При 1-мин кадансе
 			// reseller хранить идентичные точки расточительно (~99% дублей); сегмент
 			// «цена X действует с t0» восстанавливаем на чтении (PriceHistoryRepo.Stats
@@ -357,7 +371,7 @@ func makeHandler(
 		// (страховка для старых событий), и ненулевая last-цена ложно пометила бы
 		// товар «в наличии», сломав триггер back_in_stock.
 		newPrice := result.Price
-		if !result.InStock {
+		if !inStock {
 			newPrice = 0
 		}
 		event := domain.PriceEvent{
@@ -366,14 +380,14 @@ func makeHandler(
 			OldPrice:    prevPrice,
 			NewPrice:    newPrice,
 			RecordedAt:  time.Now(),
-			InStock:     result.InStock,
+			InStock:     inStock,
 			WasInStock:  wasInStock,
 		}
 		key := strconv.FormatInt(task.ProductID, 10)
 		if err := producer.Send(ctx, key, event); err != nil {
 			return fmt.Errorf("send price event: %w", err)
 		}
-		if result.InStock && prevPrice > 0 && result.Price < prevPrice {
+		if inStock && prevPrice > 0 && result.Price < prevPrice {
 			metrics.PriceDrops.WithLabelValues(string(marketplace)).Inc()
 			log.Info("price dropped",
 				"marketplace", marketplace, "old_price", prevPrice, "new_price", result.Price)
