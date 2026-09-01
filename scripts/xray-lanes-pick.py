@@ -32,6 +32,7 @@ XRAY_SUBS в .env — добавить провайдера значит доп�
 from __future__ import annotations
 
 import argparse
+import concurrent.futures as cf
 import datetime
 import json
 import os
@@ -161,20 +162,31 @@ def main() -> None:
             if "'200'" not in verdict and "429" not in verdict:
                 rejected.add(tag)
 
-    best: dict[str, dict[str, Any]] = {}
-    dead = 0
-    for lane in lanes:
-        if lane["tag"] in rejected:
-            continue
+    # Пробим параллельно: последовательно 100 узлов с таймаутом 5с — это минуты
+    # тишины, и в cron-логе выглядит как зависание.
+    candidates = [ln for ln in lanes if ln["tag"] not in rejected]
+    print(f"пробим {len(candidates)} узлов (TCP, таймаут {args.timeout:g}с)…", file=sys.stderr, flush=True)
+
+    def probe(lane: dict[str, Any]) -> tuple[dict[str, Any], str | None]:
         ip = resolve(lane)
         if ip is None or not tcp_alive(ip, lane["settings"]["vnext"][0]["port"], args.timeout):
-            dead += 1
-            continue
-        cur = best.get(ip)
-        # tcp предпочитаем grpc: тот же пул несёт long-poll Telegram.
-        if cur is None or (lane["streamSettings"]["network"] == "tcp"
-                           and cur["streamSettings"]["network"] != "tcp"):
-            best[ip] = lane
+            return lane, None
+        return lane, ip
+
+    best: dict[str, dict[str, Any]] = {}
+    dead = 0
+    with cf.ThreadPoolExecutor(max_workers=32) as ex:
+        for done, (lane, ip) in enumerate(ex.map(probe, candidates), 1):
+            if done % 25 == 0 or done == len(candidates):
+                print(f"  пробито {done}/{len(candidates)}", file=sys.stderr, flush=True)
+            if ip is None:
+                dead += 1
+                continue
+            cur = best.get(ip)
+            # tcp предпочитаем grpc: тот же пул несёт long-poll Telegram.
+            if cur is None or (lane["streamSettings"]["network"] == "tcp"
+                               and cur["streamSettings"]["network"] != "tcp"):
+                best[ip] = lane
 
     by_net: dict[str, list] = defaultdict(list)
     for ip, lane in sorted(best.items()):

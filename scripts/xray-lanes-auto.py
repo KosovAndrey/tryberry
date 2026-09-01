@@ -85,6 +85,25 @@ def run(cmd: list[str], env: dict[str, str]) -> subprocess.CompletedProcess:
     return subprocess.run(cmd, text=True, capture_output=True, env=env)
 
 
+def run_streaming(cmd: list[str], env: dict[str, str], prefix: str = "  ") -> tuple[int, str]:
+    """Как run(), но вывод дочернего скрипта идёт наружу СРАЗУ.
+
+    Шаги отбора и пробы занимают минуты; молчание всё это время неотличимо от
+    зависания — и в терминале, и в cron-логе. Поэтому строки печатаем по мере
+    поступления, а заодно копим для разбора итоговой строки.
+    """
+    proc = subprocess.Popen(cmd, text=True, env=env, bufsize=1,
+                            stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
+    lines: list[str] = []
+    assert proc.stdout is not None
+    for line in proc.stdout:
+        line = line.rstrip()
+        lines.append(line)
+        if line:
+            print(prefix + line, flush=True)
+    return proc.wait(), "\n".join(lines)
+
+
 def summary_line(out: str, needle: str = "уникальных адресов") -> str:
     """Из болтливого вывода отбора берём одну содержательную строку для лога cron."""
     lines = [ln.strip() for ln in out.strip().splitlines() if ln.strip()]
@@ -130,26 +149,29 @@ def main() -> int:
     log(f"подписок: {len(subs)}, целевой размер пула: {args.limit}")
 
     pick_cmd = [sys.executable, PICK, "-n", str(args.limit), "-o", CANDIDATE]
-    res = run(pick_cmd, env)
-    if res.returncode != 0:
-        log("отбор плеч упал: " + (res.stderr.strip()[:300] or res.stdout.strip()[:300]))
+    log("шаг 1/3: тянем подписки и пробим узлы")
+    code, out = run_streaming(pick_cmd, env)
+    if code != 0:
+        log("отбор плеч упал: " + out.strip()[-300:])
         return 1
-    log(summary_line(res.stdout))
+    log(summary_line(out))
 
     if args.verify:
         # Проба ловит узлы, у которых порт открыт, а тоннель не встаёт: TCP-проба
         # их пропускает, а в бою каждый такой стоит таймаута.
-        res = run([sys.executable, LANE_TEST, "--lanes", CANDIDATE, "--out", VERDICTS], env)
-        if res.returncode != 0:
-            log("проба плеч упала, продолжаем без неё: " + res.stderr.strip()[:200])
+        log("шаг 2/3: бьём каждое плечо в ручку WB (по 3 запроса, одноразовый xray на плечо)")
+        code, out = run_streaming([sys.executable, LANE_TEST, "--lanes", CANDIDATE,
+                                   "--out", VERDICTS], env)
+        if code != 0:
+            log("проба плеч упала, продолжаем без неё: " + out.strip()[-200:])
         else:
-            tail = [ln for ln in res.stdout.strip().splitlines() if "чистых плеч" in ln]
-            log(tail[0] if tail else "проба выполнена")
-            res = run(pick_cmd + ["--results", VERDICTS], env)
-            if res.returncode != 0:
-                log("повторный отбор упал: " + res.stderr.strip()[:200])
+            log(summary_line(out, "чистых плеч"))
+            log("шаг 3/3: пересобираем пул без плеч с неподнявшимся тоннелем")
+            code, out = run_streaming(pick_cmd + ["--results", VERDICTS], env)
+            if code != 0:
+                log("повторный отбор упал: " + out.strip()[-200:])
                 return 1
-            log(summary_line(res.stdout))
+            log(summary_line(out))
 
     new, cur = lane_addrs(CANDIDATE), lane_addrs(args.config)
     if not new:
