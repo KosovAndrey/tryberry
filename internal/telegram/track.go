@@ -568,6 +568,10 @@ func (b *Bot) doTrack(ctx context.Context, chatID int64, rawURL string, user *do
 			msg = ozonUnavailableMsg
 		case errors.Is(err, scraper.ErrNotImplemented):
 			msg = fmt.Sprintf("⚠️ Маркетплейс <b>%s</b> пока не поддерживается.\n\n%s", s.Marketplace(), supportedMarketplacesMsg)
+		case errors.Is(err, scraper.ErrDeadURLForm):
+			// Ссылка в форме, которую площадка не обслуживает (Я.Маркет /product/).
+			// Не «ошибка» и не «попробуй позже» — сама карточка жива, нужен другой адрес.
+			msg = scraper.DeadURLFormMsg
 		case errors.Is(err, scraper.ErrMarketplaceBlocked):
 			// Площадка отказала — но если товар нам знаком, показываем последнюю
 			// известную цену из своей истории вместо глухого «не удалось».

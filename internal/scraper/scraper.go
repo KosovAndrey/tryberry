@@ -81,6 +81,13 @@ type MarketplaceScraper interface {
 	Scrape(ctx context.Context, url string) (*Result, error)
 }
 
+// DeadURLFormMsg — что сказать пользователю, приславшему ссылку в форме, которую
+// площадка больше не открывает. Текст общий для всех трёх ботов (TG/VK/MAX): у нас
+// паритет каналов, и разъехавшиеся формулировки на одном и том же отказе — баг.
+const DeadURLFormMsg = "🔗 Эта ссылка Я.Маркета в старом формате — Маркет её больше не открывает.\n\n" +
+	"Открой товар на market.yandex.ru и пришли адрес из адресной строки. " +
+	"Рабочая ссылка выглядит так: market.yandex.ru/card/…"
+
 // Доменные ошибки скрейпинга — общие для всех маркетплейсов
 var (
 	ErrInvalidURL         = errors.New("invalid product URL")
@@ -100,4 +107,14 @@ var (
 	// товара нет офферов/цены. Отдельный статус "parse_error" в метрике — чтобы на
 	// дашборде отличать «сломался парсер / нет цены» и от блокировки, и от 404.
 	ErrParseFailed = errors.New("scraped page parsed but no price found")
+	// ErrDeadURLForm — ссылка в форме, которую площадка больше не обслуживает.
+	// Не блокировка и не «нет товара»: сама карточка жива, но по ЭТОМУ адресу её
+	// не отдают. Возвращается ДО похода в сеть, поэтому такие ссылки не греют
+	// брейкер (иначе один мёртвый URL раз за разом капчился бы и глушил площадку
+	// целиком — ровно это случилось с Я.Маркетом 01-09-2026).
+	//
+	// Пока единственный случай: формы /product/<modelId> и /product--<slug>/<modelId>
+	// Я.Маркета, закрытые SmartCaptcha. Живая — /card/<slug>/<oskuId>.
+	// docs/YANDEX-CARD-MIGRATION.md.
+	ErrDeadURLForm = errors.New("marketplace no longer serves this URL form")
 )

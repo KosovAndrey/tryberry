@@ -142,6 +142,14 @@ func (s *YandexMarketScraper) Scrape(ctx context.Context, url string) (*Result, 
 	if !s.configured {
 		return nil, fmt.Errorf("%w: yandex market scraper not configured", ErrNotImplemented)
 	}
+	// Мёртвая форма — отказ ДО сети. Иначе каждый такой URL уходит в Я.Маркет,
+	// получает SmartCaptcha, считается blocked и двигает брейкер к размыканию —
+	// а брейкер один на площадку, то есть пара старых ссылок глушит скрейп живых
+	// карточек. Ровно так 01-09-2026 и легло: 14086 мёртвых ссылок держали цепь
+	// разомкнутой. docs/YANDEX-CARD-MIGRATION.md.
+	if ymDeadPathRe.MatchString(url) {
+		return nil, fmt.Errorf("%w: форма /product/ закрыта Я.Маркетом, живая — /card/<slug>/<oskuId>", ErrDeadURLForm)
+	}
 	if err := s.limiter.Wait(ctx); err != nil {
 		return nil, err
 	}
@@ -488,6 +496,12 @@ func ymStatePrice(html, sku string) float64 {
 // `/card/` — это oskuId, идентификатор ОФФЕРА, и он же единственный, по которому
 // карточка сейчас открывается. Слаг декоративен: `/card/x/<oskuId>` отдаёт ту же
 // страницу. Разбор — docs/YANDEX-CARD-MIGRATION.md.
+// ymDeadPathRe — формы, которые Я.Маркет с 01-09-2026 заворачивает на SmartCaptcha:
+// /product/<modelId> и /product--<slug>/<modelId>. Их id (modelId) в живой форме
+// /card/ не существует, а резолв modelId → oskuId возможен только через выдачу.
+// Такие ссылки отвергаем сразу, не тратя запрос и не грея брейкер.
+var ymDeadPathRe = regexp.MustCompile(`market\.yandex\.ru/product(?:--[^/?#]*)?/`)
+
 var ymProductPathRe = regexp.MustCompile(`market\.yandex\.ru/(?:product(?:--[^/?#]*)?|card/[^/?#]+)/`)
 
 // ymCardURL — канонический адрес карточки Я.Маркета по oskuId. Слаг — заглушка

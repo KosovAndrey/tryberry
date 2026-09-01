@@ -93,6 +93,11 @@ func (r *Registry) Scrape(ctx context.Context, url string) (*Result, Marketplace
 		status = "auth"
 	case errors.Is(err, ErrNotImplemented):
 		status = "disabled"
+	case errors.Is(err, ErrDeadURLForm):
+		// Ссылка в форме, которую площадка не обслуживает. Отдельный статус, а не
+		// blocked: сети не было, брейкер не трогаем, а на дашборде видно, сколько
+		// пользователей приходит со старыми ссылками (нужно ли ленивый резолв).
+		status = "dead_url"
 	case errors.Is(err, ErrParseFailed):
 		// антибот пройден (200), но цену не достали — дрейф вёрстки / нет офферов.
 		status = "parse_error"

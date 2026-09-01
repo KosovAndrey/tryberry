@@ -1,6 +1,7 @@
 package scraper
 
 import (
+	"context"
 	"errors"
 	"testing"
 )
@@ -273,5 +274,33 @@ func TestYandexProxyPrimaryRequiresProxy(t *testing.T) {
 	def := NewYandexMarketScraper(YandexMarketOptions{ProxyURL: "http://user:pass@127.0.0.1:1"})
 	if def.proxyPrimary {
 		t.Fatal("по умолчанию порядок прежний: direct первый, прокси — фолбэк на капчу")
+	}
+}
+
+// TestYandexMarket_DeadURLFormRejectedWithoutNetwork — ссылки в закрытых формах
+// отвергаются ДО похода в сеть. Это не педантизм: такой URL иначе ловит капчу,
+// считается blocked и двигает брейкер, а брейкер один на площадку — пара старых
+// ссылок глушит скрейп живых карточек (инцидент 01-09-2026).
+func TestYandexMarket_DeadURLFormRejectedWithoutNetwork(t *testing.T) {
+	s := NewYandexMarketScraper(YandexMarketOptions{RPS: 100})
+
+	dead := []string{
+		"https://market.yandex.ru/product/923133126",
+		"https://market.yandex.ru/product--smartfon-xiaomi/923133126",
+		"https://market.yandex.ru/product/923133126?sku=1",
+	}
+	for _, u := range dead {
+		_, err := s.Scrape(context.Background(), u)
+		if !errors.Is(err, ErrDeadURLForm) {
+			t.Errorf("Scrape(%q) = %v, want ErrDeadURLForm", u, err)
+		}
+	}
+
+	// Живую форму отказ не задевает: она уходит в сеть (здесь запрос не удастся,
+	// но ошибка обязана быть ЛЮБОЙ другой, не ErrDeadURLForm).
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel() // не ходим в сеть в тесте — отменённый контекст
+	if _, err := s.Scrape(ctx, "https://market.yandex.ru/card/x/5193397317"); errors.Is(err, ErrDeadURLForm) {
+		t.Error("живая форма /card/ не должна отвергаться как мёртвая")
 	}
 }
