@@ -203,6 +203,14 @@ func TestIsYandexCaptcha(t *testing.T) {
 
 func TestYandexMatches(t *testing.T) {
 	s := &YandexMarketScraper{}
+	// Живая форма /card/ — карточка, и ExtractYandexMarketID обязан её принимать:
+	// с 01-09-2026 именно она единственная открывается.
+	if id, err := ExtractYandexMarketID("https://market.yandex.ru/card/kofemashina-jura/5193397317"); err != nil || id != "5193397317" {
+		t.Errorf("ExtractYandexMarketID(/card/) = %q, %v; want 5193397317, nil", id, err)
+	}
+	if id, err := ExtractYandexMarketID("https://market.yandex.ru/card/x/5193397317"); err != nil || id != "5193397317" {
+		t.Errorf("ExtractYandexMarketID(/card/x/) = %q, %v; want 5193397317, nil", id, err)
+	}
 	if !s.Matches("https://market.yandex.ru/product--slug/123") {
 		t.Error("should match yandex market url")
 	}

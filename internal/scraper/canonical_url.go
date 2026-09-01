@@ -51,25 +51,50 @@ func CanonicalProductURL(m Marketplace, rawURL string) string {
 			return fmt.Sprintf("%s/item/%s.html", aliBaseURL, id)
 		}
 	case MarketplaceYandexMarket:
-		if id, err := ExtractYandexMarketID(rawURL); err == nil {
-			return fmt.Sprintf("https://market.yandex.ru/product/%s", id)
-		}
-		// /card/<slug>/<id> — рекламная форма из выдачи (юзеры шлют ссылки с cpc=/
-		// sponsored=). id из неё НЕ канонизируется в /product/<id>: проверено на
-		// прод-IP 2026-07-19 через тёплый бот — и 10-, и 12-значные id из /card/
-		// не резолвятся как /product/ («не удалось получить данные»). Но САМА
-		// /card/-форма рабочая (имя/цена/OOS парсятся) — рушит её только query-хвост:
-		// cpc/sponsored/do-waremd5/showOriginalKmEmptyOffer протухают, и повторный
-		// скрейп сохранённого URL теряет цену (товар гниёт — возраст 1–30 дней против
-		// 1 мин у /product/). Поэтому канон /card/ = срезать query, путь со слагом
-		// оставить (по нему ymExtractSKU берёт id для цены; slug-less /card/<id> не
-		// проверен). OOS-хвост showOriginalKmEmptyOffer scraper вернёт сам при
-		// надобности (ymOOSFullCardURL).
+		// ЖИВАЯ форма — /card/<slug>/<oskuId>, канон = она же без слага и без
+		// query. Слаг декоративен (проверено: /card/x/<oskuId> отдаёт полную
+		// карточку), но живой: он меняется при переименовании товара, а url —
+		// UNIQUE-ключ, так что слаг в каноне плодил бы дубли с новой историей.
+		//
+		// Формы /product/<modelId> и /product--<slug>/<modelId> с 01-09-2026
+		// заворачиваются на SmartCaptcha и в канон больше не годятся. Прежний
+		// канон (миграции 030/031) вёл именно в /product/<id> — из-за этого лёг
+		// весь Я.Маркет, 14086 ссылок. Резолв modelId → oskuId делается только
+		// через выдачу, здесь его нет, поэтому /product/-ссылки возвращаем как
+		// есть: пусть их честно отвергнет скрейпер, а не молча подменит канон.
+		// Разбор — docs/YANDEX-CARD-MIGRATION.md.
 		if u, err := url.Parse(rawURL); err == nil && strings.Contains(u.Path, "/card/") {
-			u.RawQuery = ""
-			u.Fragment = ""
-			return u.String()
+			if id := ymExtractSKU(rawURL); id != "" {
+				return ymCardURL(id)
+			}
 		}
 	}
 	return rawURL
+}
+
+// DisplayProductURL — «красивый» адрес карточки для показа пользователю, когда он
+// отличается от канона. Пусто = показывать канон.
+//
+// Нужен из-за Я.Маркета: канон у него намеренно без слага (/card/x/<oskuId>), а
+// слаг живой и меняется при переименовании товара — держать его в UNIQUE-ключе
+// значит плодить дубли с новой историей. Показывать голый /card/x/ тоже плохо: по
+// ссылке не видно, что за товар. Поэтому ключ и ссылка для показа разъехались.
+//
+// Query срезаем: cpc/sponsored/do-waremd5/showOriginalKmEmptyOffer протухают, а
+// протухший хвост ломает и повторный скрейп, и ссылку.
+func DisplayProductURL(m Marketplace, rawURL string) string {
+	if m != MarketplaceYandexMarket {
+		return ""
+	}
+	u, err := url.Parse(rawURL)
+	if err != nil || !strings.Contains(u.Path, "/card/") {
+		return ""
+	}
+	// Слаг-заглушка ничего не добавляет к канону — показывать нечего.
+	if strings.HasPrefix(u.Path, "/card/x/") {
+		return ""
+	}
+	u.RawQuery = ""
+	u.Fragment = ""
+	return u.String()
 }

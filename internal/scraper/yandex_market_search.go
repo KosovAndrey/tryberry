@@ -373,6 +373,23 @@ var ymProductStartRe = regexp.MustCompile(`\{"id":\d+,"entity":"product"`)
 // этих хэшей; резолвим их в полный URL по этой карте.
 var ymPictureRe = regexp.MustCompile(`\{"id":"([0-9a-f]{6,16})","entity":"avatars_picture","origUrl":"([^"]+)"`)
 
+// ymOfferStartRe — начало объекта-связки «модель ↔ оффер» в стейте marketfront:
+// {"modelId":"655680392","cskuId":"101176924154","oskuId":"103194457492","slug":…}.
+// Именно он даёт oskuId — идентификатор, которым адресуется ЖИВАЯ форма карточки
+// /card/<slug>/<oskuId>. У самой модели ({"id":…,"entity":"product"}) его нет, а
+// формы /product/<modelId> и /product--<slug>/<modelId>, которые мы строили
+// раньше, Я.Маркет с 01-09-2026 заворачивает на SmartCaptcha (docs/YANDEX-CARD-MIGRATION.md).
+var ymOfferStartRe = regexp.MustCompile(`\{"modelId":"\d+"`)
+
+// ymOfferLink — связка модели с оффером. cskuId/mskuId/marketSku в адресе НЕ
+// участвуют, не перепутать: в /card/ стоит именно oskuId (у ARAVIA cskuId
+// 103780259023 против oskuId 103710149199 в живой ссылке).
+type ymOfferLink struct {
+	ModelID string `json:"modelId"`
+	OskuID  string `json:"oskuId"`
+	Slug    string `json:"slug"`
+}
+
 // ymSearchModel — нужные поля товарной модели из стейта marketfront. Цены —
 // строки в рублях ("31990"); pictures — хэши, резолвятся через ymPictureRe.
 type ymSearchModel struct {
@@ -399,8 +416,22 @@ type ymSearchModel struct {
 //
 // Берём только модели с ценой (prices.min) и slug — это покупаемые офферы;
 // модели без оффера (offersCount=0, кнопка «сообщить о поступлении») пропускаем:
-// цены нет, трекать нечего. URL карточки собираем как /product--<slug>/<id> —
-// это и стабильный ключ дедупликации (products апсертится по URL).
+// цены нет, трекать нечего.
+//
+// URL карточки собираем как /card/x/<oskuId> — ЖИВУЮ форму. Прежняя
+// /product--<slug>/<modelId> с 01-09-2026 заворачивается на SmartCaptcha, то есть
+// товар заводился мёртвой ссылкой с первой секунды (docs/YANDEX-CARD-MIGRATION.md).
+// oskuId берём из объекта-связки по modelId — по идентификатору, а не по порядку
+// в стейте: перепутать оффер значит записать товару чужую цену, тот же класс бага,
+// что уже ловили на Ozon-OOS и на YM /cc/.
+//
+// Слаг в URL-ключе намеренно заглушка (x): он живой и меняется при переименовании
+// товара, а products.url — UNIQUE-ключ, и каждое переименование плодило бы дубль
+// со своей историей. Проверено, что форма без настоящего слага отдаёт полную
+// карточку. Настоящий адрес кладём в DisplayURL — его показываем пользователю.
+//
+// Модель без связки пропускаем: ссылку построить не из чего, а заводить заведомо
+// мёртвую — хуже, чем не заводить.
 func (s *YandexMarketSearchScraper) parseSearch(html string) *SearchResultSet {
 	out := &SearchResultSet{}
 
@@ -408,6 +439,28 @@ func (s *YandexMarketSearchScraper) parseSearch(html string) *SearchResultSet {
 	for _, m := range ymPictureRe.FindAllStringSubmatch(html, -1) {
 		if _, ok := pics[m[1]]; !ok {
 			pics[m[1]] = m[2]
+		}
+	}
+
+	// Связки modelId → oskuId. У одной модели бывает несколько офферов; берём
+	// ПЕРВЫЙ в стейте — это оффер основного сниппета, тот, чью цену показывает
+	// выдача. Брать произвольный нельзя: цена уехала бы к другому продавцу или
+	// другому объёму товара.
+	links := make(map[string]ymOfferLink)
+	for _, loc := range ymOfferStartRe.FindAllStringIndex(html, -1) {
+		obj := ymBalancedObject(html, loc[0])
+		if obj == "" {
+			continue
+		}
+		var l ymOfferLink
+		if err := json.Unmarshal([]byte(obj), &l); err != nil {
+			continue
+		}
+		if l.ModelID == "" || l.OskuID == "" {
+			continue
+		}
+		if _, ok := links[l.ModelID]; !ok {
+			links[l.ModelID] = l
 		}
 	}
 
@@ -433,15 +486,26 @@ func (s *YandexMarketSearchScraper) parseSearch(html string) *SearchResultSet {
 		if seen[id] {
 			continue // модель может встретиться в стейте повторно
 		}
+		// Связку проверяем ДО счётчика позиций: позиции должны идти подряд, без
+		// дыр — по ним сравниваются срезы выдачи в подписках.
+		link, ok := links[id]
+		if !ok {
+			continue // живую ссылку не из чего собрать
+		}
 		seen[id] = true
 		pos++
 		if pos > s.maxItems {
 			break
 		}
+		slug := link.Slug
+		if slug == "" {
+			slug = m.Slug
+		}
 		item := SearchItem{
 			ArticleID:    id,
 			Name:         m.Titles.Raw,
-			URL:          "https://market.yandex.ru/product--" + m.Slug + "/" + id,
+			URL:          ymCardURL(link.OskuID),
+			DisplayURL:   "https://market.yandex.ru/card/" + slug + "/" + link.OskuID,
 			Position:     pos,
 			PriceKopecks: int64(price * 100),
 		}

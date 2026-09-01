@@ -4,6 +4,11 @@
   (снят с прода 2026-06-18, запрос «стиральная машина с сушкой»). Оставлены две
   покупаемые модели (с prices+slug), одна notify-only модель без оффера (должна
   пропускаться) и сущности картинок. У второй модели max>min — проверка OldPrice.
+
+  Дополнено 01-09-2026: объекты-связки {"modelId":…,"oskuId":…,"slug":…} — из них
+  берётся oskuId для ЖИВОЙ формы /card/. Форма записана как в проде (снято с
+  выдачи по «кофемашина jura e8»). У первой модели ДВЕ связки — проверяем, что
+  берётся первая (оффер основного сниппета). У notify-only модели связки нет.
 -->
 <script data-apiary="chunks" nonce="x">
 {"collections":{"product":{
@@ -13,5 +18,9 @@
 },"avatars_picture":{
 "6afb225f":{"id":"6afb225f","entity":"avatars_picture","origUrl":"https://avatars.mds.yandex.net/get-mpic/20417112/2a0000019dd7fea13e77277abca0a1ab9e28/orig","width":600,"height":600},
 "52ff31dd":{"id":"52ff31dd","entity":"avatars_picture","origUrl":"https://avatars.mds.yandex.net/get-mpic/16396243/2a0000019c7a04e4f6fb3c98724f7376659f/orig","width":600,"height":600}
+},"offerLink":{
+"a":{"modelId":"7118070","cskuId":"101176924154","oskuId":"103194457492","slug":"stiralnaya-mashina-leran-wad-85148-awd3-belaya","categoryId":"90566","waremd5":"A5xTRnjL7LQHGQz8dcgJCQ","businessId":"77175808","isAdult":false,"offerId":"A5xTRnjL7LQHGQz8dcgJCQ","cskuIdStr":"101176924154","oskuIdStr":"103194457492"},
+"b":{"modelId":"7118070","cskuId":"101176924155","oskuId":"103194457493","slug":"stiralnaya-mashina-leran-wad-85148-awd3-vtoroy-offer","categoryId":"90566","waremd5":"ZZZZbpkgPkE_EiDiHzhQTA","businessId":"119485579","isAdult":false,"offerId":"ZZZZbpkgPkE_EiDiHzhQTA","cskuIdStr":"101176924155","oskuIdStr":"103194457493"},
+"c":{"modelId":"683611777","cskuId":"5189354170","oskuId":"5193397317","slug":"stiralnaya-mashina-gressel-ugs704-s-sushkoy-85-kg","categoryId":"90566","waremd5":"EvrIbpkgPkE_EiDiHzhQTA","businessId":"119485579","isAdult":false,"offerId":"EvrIbpkgPkE_EiDiHzhQTA","cskuIdStr":"5189354170","oskuIdStr":"5193397317"}
 }}}
 </script>
