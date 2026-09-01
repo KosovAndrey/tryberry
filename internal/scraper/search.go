@@ -24,9 +24,14 @@ type SearchItem struct {
 	ArticleID string // nm/id товара
 	Name      string
 	Brand     string
-	URL       string // канонический URL карточки
-	ImageURL  string
-	Position  int // сквозная позиция в выдаче (1-based, через все страницы)
+	URL       string // канонический URL карточки (ключ товара, products.url)
+	// DisplayURL — «красивый» адрес для показа пользователю, когда он отличается
+	// от канона. У Я.Маркета канон намеренно без слага (/card/x/<oskuId>): слаг
+	// меняется при переименовании товара, а products.url — UNIQUE-ключ. Пусто =
+	// показываем URL. См. docs/YANDEX-CARD-MIGRATION.md.
+	DisplayURL string
+	ImageURL   string
+	Position   int // сквозная позиция в выдаче (1-based, через все страницы)
 
 	PriceKopecks    int64 // финальная цена (WB price.product)
 	OldPriceKopecks int64 // цена до скидки (WB price.basic), 0 если нет

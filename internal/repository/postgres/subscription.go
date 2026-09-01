@@ -134,7 +134,7 @@ func (r *SubscriptionRepo) GetActiveByUserID(ctx context.Context, userID int64) 
 		SELECT s.id, s.user_id, s.product_id, s.baseline_price, s.first_seen_price,
 		       s.trigger_type, s.target_price, s.discount_pct, s.notified,
 		       s.active, s.created_at, s.updated_at,
-		       p.name, p.url,
+		       p.name, COALESCE(p.display_url, p.url),
 		       COALESCE(p.image_url, ''),
 		       p.public_id,
 		       p.marketplace,
@@ -183,7 +183,7 @@ func (r *SubscriptionRepo) GetActiveByProductIDWithTelegramID(ctx context.Contex
 		SELECT s.id, s.user_id, s.product_id, s.baseline_price, s.first_seen_price,
 		       s.trigger_type, s.target_price, s.discount_pct, s.notified,
 		       s.active, s.created_at, s.updated_at, s.last_evaluated_at,
-		       p.name, p.url, COALESCE(p.image_url, ''), p.public_id, p.marketplace,
+		       p.name, COALESCE(p.display_url, p.url), COALESCE(p.image_url, ''), p.public_id, p.marketplace,
 		       COALESCE(u.telegram_id, 0), u.plan, u.plan_expires_at
 		FROM subscriptions s
 		JOIN products p ON p.id = s.product_id
@@ -225,7 +225,7 @@ func (r *SubscriptionRepo) GetActiveByProductID(ctx context.Context, productID i
 		SELECT s.id, s.user_id, s.product_id, s.baseline_price, s.first_seen_price,
 		       s.trigger_type, s.target_price, s.discount_pct, s.notified,
 		       s.active, s.created_at, s.updated_at,
-		       p.name, p.url, COALESCE(p.image_url, '')
+		       p.name, COALESCE(p.display_url, p.url), COALESCE(p.image_url, '')
 		FROM subscriptions s
 		JOIN products p ON p.id = s.product_id
 		WHERE s.product_id = $1 AND s.active = TRUE`

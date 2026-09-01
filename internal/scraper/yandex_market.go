@@ -481,7 +481,22 @@ func ymStatePrice(html, sku string) float64 {
 // пробе цены не дал. Проверить не удалось: YM закрыл пробника SmartCaptcha.
 // Пока не проверено на живых карточках — не трогаем: на кону 4 товара с
 // подписками и историей (у PS5 96 точек). Дубль дешевле сломанной ссылки.
-var ymProductPathRe = regexp.MustCompile(`market\.yandex\.ru/product(?:--[^/?#]*)?/`)
+//
+// ОБНОВЛЕНО 01-09-2026: `/card/` теперь включена, а обе `/product`-формы мертвы —
+// Я.Маркет заворачивает их на SmartCaptcha (доказано на четырёх id, с прогревом
+// кук и с российского адреса). Загадка из комментария выше разгадана: id у
+// `/card/` — это oskuId, идентификатор ОФФЕРА, и он же единственный, по которому
+// карточка сейчас открывается. Слаг декоративен: `/card/x/<oskuId>` отдаёт ту же
+// страницу. Разбор — docs/YANDEX-CARD-MIGRATION.md.
+var ymProductPathRe = regexp.MustCompile(`market\.yandex\.ru/(?:product(?:--[^/?#]*)?|card/[^/?#]+)/`)
+
+// ymCardURL — канонический адрес карточки Я.Маркета по oskuId. Слаг — заглушка
+// `x`: настоящий меняется при переименовании товара, а products.url это UNIQUE-
+// ключ, то есть каждое переименование заводило бы дубль со своей историей.
+// Проверено, что форма без настоящего слага отдаёт полную карточку (2,2 МБ).
+func ymCardURL(oskuID string) string {
+	return "https://market.yandex.ru/card/x/" + oskuID
+}
 
 // ExtractYandexMarketID — id товара из URL карточки Я.Маркета (для канона URL,
 // см. CanonicalProductURL).

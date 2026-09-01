@@ -38,13 +38,17 @@ func TestCanonicalProductURL(t *testing.T) {
 		{
 			// Слаг у YM гуляет (у одного товара нашлось 12 копий) — он декоративный,
 			// товар резолвится по id. Проверено живым скрейпером: cmd/ym-canon-probe.
-			name: "Я.Маркет: слаг и query-хвост сворачиваются",
+			// /product-формы с 01-09-2026 мертвы (302 на SmartCaptcha), а resolve
+			// modelId → oskuId возможен только через выдачу — здесь его нет.
+			// Поэтому канон их НЕ трогает: пусть ссылку честно отвергнет скрейпер,
+			// а не подменит канон. docs/YANDEX-CARD-MIGRATION.md.
+			name: "Я.Маркет: мёртвая /product--форма остаётся как есть",
 			m:    MarketplaceYandexMarket,
 			in:   "https://market.yandex.ru/product--smartfon-xiaomi/123456789?sku=101&do-waremd5=z",
-			want: "https://market.yandex.ru/product/123456789",
+			want: "https://market.yandex.ru/product--smartfon-xiaomi/123456789?sku=101&do-waremd5=z",
 		},
 		{
-			name: "Я.Маркет: та же карточка уже без слага — тот же канон",
+			name: "Я.Маркет: мёртвая /product/-форма тоже не трогается",
 			m:    MarketplaceYandexMarket,
 			in:   "https://market.yandex.ru/product/123456789",
 			want: "https://market.yandex.ru/product/123456789",
@@ -53,10 +57,19 @@ func TestCanonicalProductURL(t *testing.T) {
 			// /card/ id НЕ сводится к /product/<id> (проверено 2026-07-19: не резолвится),
 			// но query-хвост (cpc/OOS) протухает и рушит повторный скрейп — срезаем его,
 			// путь со слагом оставляем.
-			name: "Я.Маркет /card/: query-хвост срезается, путь остаётся",
+			// Живая форма. Канон = /card/x/<oskuId>: query срезаем (cpc/sponsored/
+			// do-waremd5 протухают), слаг заменяем заглушкой — он меняется при
+			// переименовании товара, а url это UNIQUE-ключ.
+			name: "Я.Маркет /card/: канон = /card/x/<oskuId>, слаг и query долой",
 			m:    MarketplaceYandexMarket,
 			in:   "https://market.yandex.ru/card/kofemashina-jura-e8-15584/5193397317?showOriginalKmEmptyOffer=1&ogV=-12",
-			want: "https://market.yandex.ru/card/kofemashina-jura-e8-15584/5193397317",
+			want: "https://market.yandex.ru/card/x/5193397317",
+		},
+		{
+			name: "Я.Маркет /card/: другой слаг той же карточки — тот же канон",
+			m:    MarketplaceYandexMarket,
+			in:   "https://market.yandex.ru/card/kofemashina-avtomaticheskaya-jura-e8-piano-black-15584/5193397317",
+			want: "https://market.yandex.ru/card/x/5193397317",
 		},
 		{
 			name: "id не достаётся → отдаём как есть, дубль лучше потери ссылки",
@@ -84,10 +97,10 @@ func TestCanonicalProductURL(t *testing.T) {
 // — свернём не туда, и товар молча перестанет скрейпиться либо начнёт отдавать
 // чужую цену.
 //
-// /card/ сюда БОЛЬШЕ НЕ входит: с 2026-07-19 канон срезает у него query-хвост
-// (см. TestCanonicalProductURL). Его id по-прежнему НЕ сводится к /product/<id>
-// (проверено тёплым ботом — не резолвится), но сам путь /card/<slug>/<id>
-// сохраняется, поэтому «нетронутость пути» проверяется там же.
+// /card/ сюда не входит: это ЖИВАЯ форма, и канон сводит её к /card/x/<oskuId>
+// (см. TestCanonicalProductURL). Нетронутыми обязаны оставаться /product-формы —
+// они мертвы с 01-09-2026, но подменять их канон нечем: resolve modelId → oskuId
+// живёт только в выдаче.
 func TestCanonicalYMLeavesUnverifiedForms(t *testing.T) {
 	cases := map[string]string{
 		// Неразвёрнутая короткая ссылка: id в ней нет вовсе, разворачивать должен резолвер.
@@ -175,4 +188,47 @@ func TestCanonicalProductURLStaysScrapeable(t *testing.T) {
 			t.Fatalf("канон /card/ увёл sku: было %q, стало %q", want, got)
 		}
 	})
+}
+
+// TestDisplayProductURL — ссылка для показа отделена от ключа только у Я.Маркета
+// и только для живой формы /card/. Везде ещё канон и есть ссылка (пусто).
+func TestDisplayProductURL(t *testing.T) {
+	cases := []struct {
+		name string
+		m    Marketplace
+		in   string
+		want string
+	}{
+		{
+			name: "YM /card/ со слагом — показываем его, query срезан",
+			m:    MarketplaceYandexMarket,
+			in:   "https://market.yandex.ru/card/kofemashina-jura-e8-15584/5193397317?cpc=abc",
+			want: "https://market.yandex.ru/card/kofemashina-jura-e8-15584/5193397317",
+		},
+		{
+			name: "YM канон-заглушка — показывать нечего",
+			m:    MarketplaceYandexMarket,
+			in:   "https://market.yandex.ru/card/x/5193397317",
+			want: "",
+		},
+		{
+			name: "YM мёртвая /product-форма — не ссылка для показа",
+			m:    MarketplaceYandexMarket,
+			in:   "https://market.yandex.ru/product/5193397317",
+			want: "",
+		},
+		{
+			name: "другая площадка — канон и есть ссылка",
+			m:    MarketplaceOzon,
+			in:   "https://www.ozon.ru/product/nabor-987654321/?asb=abc",
+			want: "",
+		},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			if got := DisplayProductURL(c.m, c.in); got != c.want {
+				t.Errorf("DisplayProductURL(%q) = %q, want %q", c.in, got, c.want)
+			}
+		})
+	}
 }

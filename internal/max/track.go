@@ -89,7 +89,8 @@ func (b *Bot) handleTrack(ctx context.Context, maxID int64, user *domain.User, r
 		return
 	}
 
-	product, err := b.prodRepo.Upsert(ctx, scraper.CanonicalProductURL(s.Marketplace(), rawURL), result.Name, result.ImageURL, string(s.Marketplace()))
+	product, err := b.prodRepo.Upsert(ctx, scraper.CanonicalProductURL(s.Marketplace(), rawURL), result.Name, result.ImageURL, string(s.Marketplace()),
+		scraper.DisplayProductURL(s.Marketplace(), rawURL))
 	if err != nil {
 		b.log.Error("max: upsert product", "err", err)
 		b.send(ctx, maxID, "Произошла ошибка, попробуй позже.", nil)

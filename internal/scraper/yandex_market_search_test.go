@@ -131,8 +131,14 @@ func TestYandexSearch_parseSearch(t *testing.T) {
 	if a.ArticleID != "7118070" {
 		t.Errorf("art = %q, want 7118070", a.ArticleID)
 	}
-	if a.URL != "https://market.yandex.ru/product--stiralnaya-mashina-leran-wad-85148-awd3/7118070" {
+	// URL — ЖИВАЯ форма /card/x/<oskuId>, слаг-заглушка (канон и UNIQUE-ключ).
+	// Взят oskuId ПЕРВОЙ связки: у модели их две, вторая — оффер другого продавца.
+	if a.URL != "https://market.yandex.ru/card/x/103194457492" {
 		t.Errorf("url = %q", a.URL)
+	}
+	// DisplayURL — настоящий адрес со слагом, его показываем пользователю.
+	if a.DisplayURL != "https://market.yandex.ru/card/stiralnaya-mashina-leran-wad-85148-awd3-belaya/103194457492" {
+		t.Errorf("display url = %q", a.DisplayURL)
 	}
 	if a.PriceKopecks != 3199000 {
 		t.Errorf("price = %d, want 3199000", a.PriceKopecks)
@@ -156,6 +162,37 @@ func TestYandexSearch_parseSearch(t *testing.T) {
 	}
 	if b2.OldPriceKopecks != 4100000 {
 		t.Errorf("old = %d, want 4100000 (max>min)", b2.OldPriceKopecks)
+	}
+	if b2.URL != "https://market.yandex.ru/card/x/5193397317" {
+		t.Errorf("url = %q", b2.URL)
+	}
+}
+
+// TestYandexSearch_parseSearchSkipsModelWithoutOffer — модель с ценой, но без
+// объекта-связки, пропускается: oskuId взять неоткуда, а /product/<modelId>
+// с 01-09-2026 мёртв. Заводить заведомо мёртвую ссылку хуже, чем не заводить.
+func TestYandexSearch_parseSearchSkipsModelWithoutOffer(t *testing.T) {
+	const state = `{"collections":{"product":{
+"111":{"id":111,"entity":"product","type":"model","offersCount":2,"prices":{"min":"1000","max":"1000","currency":"RUR"},"slug":"tovar-bez-svyazki","titles":{"raw":"Товар без связки"},"pictures":[]},
+"222":{"id":222,"entity":"product","type":"model","offersCount":2,"prices":{"min":"2000","max":"2000","currency":"RUR"},"slug":"tovar-so-svyazkoy","titles":{"raw":"Товар со связкой"},"pictures":[]}
+},"offerLink":{
+"a":{"modelId":"222","cskuId":"999","oskuId":"777","slug":"tovar-so-svyazkoy-real"}
+}}}`
+
+	out := newYMSearch().parseSearch(state)
+	if len(out.Items) != 1 {
+		t.Fatalf("items = %d, want 1 (модель без связки пропускается)", len(out.Items))
+	}
+	it := out.Items[0]
+	if it.ArticleID != "222" {
+		t.Errorf("art = %q, want 222", it.ArticleID)
+	}
+	if it.URL != "https://market.yandex.ru/card/x/777" {
+		t.Errorf("url = %q", it.URL)
+	}
+	// Позиции идут подряд: пропущенная модель не оставляет дыру.
+	if it.Position != 1 {
+		t.Errorf("position = %d, want 1", it.Position)
 	}
 }
 

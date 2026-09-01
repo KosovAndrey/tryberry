@@ -132,11 +132,22 @@ func TestScrapeQueryMarketplaceAndCanon(t *testing.T) {
 			wantCanon: "https://www.ozon.ru/product/987654321/",
 		},
 		{
-			name:      "yandex_market: /product--slug/<id>?utm → канон /product/<id>",
+			// Живая форма карточки YM с 01-09-2026 — /card/<slug>/<oskuId>; канон
+			// сворачивает слаг в заглушку и срезает query.
+			name:      "yandex_market: /card/<slug>/<id>?utm → канон /card/x/<id>",
+			mp:        scraper.MarketplaceYandexMarket,
+			itemURL:   "https://market.yandex.ru/card/smartfon/5193397317?utm_source=x",
+			wantMP:    "yandex_market",
+			wantCanon: "https://market.yandex.ru/card/x/5193397317",
+		},
+		{
+			// Мёртвая /product-форма канон не трогает: resolve modelId → oskuId
+			// живёт только в выдаче. docs/YANDEX-CARD-MIGRATION.md.
+			name:      "yandex_market: мёртвая /product--форма остаётся как есть",
 			mp:        scraper.MarketplaceYandexMarket,
 			itemURL:   "https://market.yandex.ru/product--smartfon/5193397317?utm_source=x",
 			wantMP:    "yandex_market",
-			wantCanon: "https://market.yandex.ru/product/5193397317",
+			wantCanon: "https://market.yandex.ru/product--smartfon/5193397317?utm_source=x",
 		},
 	}
 

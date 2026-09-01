@@ -70,7 +70,8 @@ func (b *Bot) trackOne(ctx context.Context, user *domain.User, rawURL string, tr
 		b.log.Warn("bulk: scrape failed", "url", rawURL, "marketplace", s.Marketplace(), "err", err)
 		return bulkItemResult{outcome: bulkFailed}
 	}
-	product, err := b.prodRepo.Upsert(ctx, scraper.CanonicalProductURL(s.Marketplace(), rawURL), result.Name, result.ImageURL, string(s.Marketplace()))
+	product, err := b.prodRepo.Upsert(ctx, scraper.CanonicalProductURL(s.Marketplace(), rawURL), result.Name, result.ImageURL, string(s.Marketplace()),
+		scraper.DisplayProductURL(s.Marketplace(), rawURL))
 	if err != nil {
 		b.log.Warn("bulk: upsert product failed", "url", rawURL, "err", err)
 		return bulkItemResult{outcome: bulkFailed}

@@ -100,7 +100,7 @@ func (r *SearchResultRepo) UpsertBatch(ctx context.Context, queryID int64, rows 
 // Сортировка по цене: самые дешёвые первыми (они же самые интересные юзеру).
 func (r *SearchResultRepo) ListHitItemsBelow(ctx context.Context, queryID int64, maxPrice float64) ([]domain.SearchHitItem, error) {
 	const q = `
-		SELECT sr.product_id, p.name, p.url, COALESCE(p.image_url, ''), sr.last_price
+		SELECT sr.product_id, p.name, COALESCE(p.display_url, p.url), COALESCE(p.image_url, ''), sr.last_price
 		FROM search_results sr
 		JOIN products p ON p.id = sr.product_id
 		WHERE sr.search_query_id = $1 AND sr.last_price > 0 AND sr.last_price <= $2

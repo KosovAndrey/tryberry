@@ -199,8 +199,12 @@ func (w *searchWorker) scrapeQuery(ctx context.Context, q *domain.SearchQuery) e
 	prodUpserts := make([]postgres.ProductUpsert, 0, len(set.Items))
 	for i, it := range set.Items {
 		canon[i] = scraper.CanonicalProductURL(mp, it.URL)
+		// DisplayURL — «красивая» ссылка со слагом, когда она отличается от
+		// канона (Я.Маркет: канон намеренно без слага). Скрейпер выдачи кладёт
+		// её в SearchItem; для остальных площадок пусто.
 		prodUpserts = append(prodUpserts, postgres.ProductUpsert{
 			URL: canon[i], Name: it.Name, ImageURL: it.ImageURL, Marketplace: string(mp),
+			DisplayURL: it.DisplayURL,
 		})
 	}
 	idByURL, err := w.products.UpsertBatch(ctx, prodUpserts)

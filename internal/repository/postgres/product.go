@@ -22,6 +22,9 @@ func NewProductRepo(db *pgxpool.Pool) *ProductRepo {
 // ProductUpsert — одна строка для батч-апсерта товаров.
 type ProductUpsert struct {
 	URL, Name, ImageURL, Marketplace string
+	// DisplayURL — ссылка для показа, когда она отличается от канона URL
+	// (Я.Маркет: канон без слага, показываем со слагом). Пусто = показываем URL.
+	DisplayURL string
 }
 
 // UpsertBatch апсертит много товаров за ОДИН round-trip (pgx.Batch) и возвращает
@@ -42,20 +45,23 @@ func (r *ProductRepo) UpsertBatch(ctx context.Context, items []ProductUpsert) (m
 		uniq[it.URL] = it
 	}
 
+	// display_url обновляем только непустым: скрейпер карточки его не знает, и
+	// пустое значение не должно затирать адрес, добытый из выдачи.
 	const q = `
-		INSERT INTO products (url, name, image_url, marketplace)
-		VALUES ($1, $2, $3, $4)
+		INSERT INTO products (url, name, image_url, marketplace, display_url)
+		VALUES ($1, $2, $3, $4, NULLIF($5, ''))
 		ON CONFLICT (url) DO UPDATE
 			SET name        = EXCLUDED.name,
 			    image_url   = EXCLUDED.image_url,
 			    marketplace = EXCLUDED.marketplace,
+			    display_url = COALESCE(EXCLUDED.display_url, products.display_url),
 			    updated_at  = NOW()
 		RETURNING id, url`
 
 	b := &pgx.Batch{}
 	for _, u := range order {
 		it := uniq[u]
-		b.Queue(q, it.URL, it.Name, it.ImageURL, it.Marketplace)
+		b.Queue(q, it.URL, it.Name, it.ImageURL, it.Marketplace, it.DisplayURL)
 	}
 	br := r.db.SendBatch(ctx, b)
 	defer br.Close()
@@ -70,20 +76,26 @@ func (r *ProductRepo) UpsertBatch(ctx context.Context, items []ProductUpsert) (m
 	return out, nil
 }
 
-func (r *ProductRepo) Upsert(ctx context.Context, url, name, imageURL, marketplace string) (*domain.Product, error) {
+// Upsert — апсерт одного товара. displayURL — ссылка для показа, когда она
+// отличается от канона url (Я.Маркет: канон без слага); пусто не затирает уже
+// сохранённое значение. Возвращённый Product.URL — ссылка ДЛЯ ПОКАЗА
+// (display_url, если есть), а не канон: вызывающие показывают её пользователю
+// сразу после /track.
+func (r *ProductRepo) Upsert(ctx context.Context, url, name, imageURL, marketplace, displayURL string) (*domain.Product, error) {
 	const q = `
-		INSERT INTO products (url, name, image_url, marketplace)
-		VALUES ($1, $2, $3, $4)
+		INSERT INTO products (url, name, image_url, marketplace, display_url)
+		VALUES ($1, $2, $3, $4, NULLIF($5, ''))
 		ON CONFLICT (url) DO UPDATE
 			SET name        = EXCLUDED.name,
 			    image_url   = EXCLUDED.image_url,
 			    marketplace = EXCLUDED.marketplace,
+			    display_url = COALESCE(EXCLUDED.display_url, products.display_url),
 			    updated_at  = NOW()
-		RETURNING id, public_id, url, name, image_url, marketplace, created_at, updated_at`
+		RETURNING id, public_id, COALESCE(display_url, url), name, image_url, marketplace, created_at, updated_at`
 
 	p := &domain.Product{}
 	err := withSpan(ctx, "upsert_product", func(ctx context.Context) error {
-		return r.db.QueryRow(ctx, q, url, name, imageURL, marketplace).
+		return r.db.QueryRow(ctx, q, url, name, imageURL, marketplace, displayURL).
 			Scan(&p.ID, &p.PublicID, &p.URL, &p.Name, &p.ImageURL, &p.Marketplace, &p.CreatedAt, &p.UpdatedAt)
 	})
 	if err != nil {
@@ -93,8 +105,10 @@ func (r *ProductRepo) Upsert(ctx context.Context, url, name, imageURL, marketpla
 }
 
 func (r *ProductRepo) GetByID(ctx context.Context, id int64) (*domain.Product, error) {
+	// URL отдаём для ПОКАЗА (display_url, если есть). Скрейп-путь берёт канон
+	// отдельным запросом (см. очередь в GetDueForScrape).
 	const q = `
-		SELECT id, public_id, url, name, image_url, marketplace, in_stock, created_at, updated_at
+		SELECT id, public_id, COALESCE(display_url, url), name, image_url, marketplace, in_stock, created_at, updated_at
 		FROM products WHERE id = $1`
 
 	p := &domain.Product{}
