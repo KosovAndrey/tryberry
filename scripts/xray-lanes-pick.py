@@ -100,7 +100,8 @@ def main() -> None:
     ap.add_argument("-n", "--limit", type=int, default=24,
                     help="сколько плеч оставить (по умолчанию 24: observatory пробит каждое раз в 30с)")
     ap.add_argument("-o", "--out", default="xray/config.json", help="куда писать конфиг")
-    ap.add_argument("--results", help="JSON от wb-lane-test.py: выкинуть плечи без единой двухсотки")
+    ap.add_argument("--results", help="JSON от wb-lane-test.py: выкинуть плечи, не давшие НИ ОДНОГО "
+                                       "HTTP-ответа (не встал тоннель). 429 = плечо живое, не бракуем")
     ap.add_argument("--timeout", type=float, default=5.0, help="таймаут TCP-пробы, сек")
     ap.add_argument("--dry-run", action="store_true", help="показать отбор, ничего не записывать")
     args = ap.parse_args()
@@ -151,7 +152,13 @@ def main() -> None:
     rejected: set[str] = set()
     if args.results:
         for tag, row in json.load(open(args.results)).items():
-            if "'200'" not in row.get("verdict", ""):
+            # Бракуем ТОЛЬКО плечи без HTTP-ответа вообще: у них не встаёт тоннель
+            # (TCP-проба это пропускает — порт открыт, а VLESS/Reality не поднялся).
+            # 429 — признак ЗДОРОВОГО плеча: запрос дошёл до WB и та его увидела,
+            # просто лимитирует; отбраковывать по нему нельзя, иначе ночной cron
+            # будет тасовать исправный пул по настроению маркетплейса.
+            verdict = row.get("verdict", "")
+            if "'200'" not in verdict and "429" not in verdict:
                 rejected.add(tag)
 
     best: dict[str, dict[str, Any]] = {}
