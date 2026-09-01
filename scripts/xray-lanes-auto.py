@@ -127,7 +127,11 @@ def main() -> int:
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--config", default=os.path.join(ROOT, "xray", "config.json"))
     ap.add_argument("--env-file", default=os.path.join(ROOT, ".env"))
-    ap.add_argument("--limit", type=int, default=24, help="сколько плеч держать")
+    ap.add_argument("--limit", type=int, default=40,
+                    help="сколько плеч держать. Больше плеч = шире ротация: random на :8889 "
+                         "выбирает плечо НА СОЕДИНЕНИЕ, а keep-alive выключен, так что каждый "
+                         "запрос к WB уходит с нового адреса. Цена — observatory пробит каждое "
+                         "плечо раз в 30с ради телеграмного leastPing")
     ap.add_argument("--verify", action="store_true",
                     help="проверить кандидатов против ручки WB и выкинуть безответные "
                          "(дольше: поднимает одноразовый xray на каждое плечо)")
