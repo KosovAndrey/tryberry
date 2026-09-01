@@ -3,7 +3,9 @@
 // SmartCaptcha), и пишет сырой HTML в файл. Нужна, когда scraper начинает
 // сыпать parse_error и требуется живой дамп страницы под фикс парсера:
 //
-//	go run ./cmd/ym-dump -url 'https://market.yandex.ru/product--…/123' -out page.html
+//	go run ./cmd/ym-dump -url 'https://market.yandex.ru/card/x/123' -out page.html
+//
+// С 01-09-2026 нужен RU-выход: флаг -proxy или переменная YM_PROXY.
 package main
 
 import (
@@ -20,17 +22,25 @@ import (
 func main() {
 	urlFlag := flag.String("url", "", "URL карточки Я.Маркета")
 	out := flag.String("out", "page.html", "куда писать HTML")
+	// С 01-09-2026 Я.Маркет не отдаёт страницы датацентровому IP — дамп снимается
+	// только через RU-выход (тот же, что в YANDEX_PROXY_URL). Пусто → direct,
+	// прежнее поведение. Схема http:// или socks5://.
+	proxy := flag.String("proxy", os.Getenv("YM_PROXY"), "RU-прокси (по умолчанию из YM_PROXY)")
 	flag.Parse()
 	if *urlFlag == "" {
 		fmt.Fprintln(os.Stderr, "usage: ym-dump -url <карточка> [-out page.html]")
 		os.Exit(2)
 	}
 
-	client, err := tls_client.NewHttpClient(tls_client.NewNoopLogger(),
+	opts := []tls_client.HttpClientOption{
 		tls_client.WithTimeoutSeconds(25),
 		tls_client.WithClientProfile(profiles.Chrome_146),
 		tls_client.WithCookieJar(tls_client.NewCookieJar()),
-	)
+	}
+	if *proxy != "" {
+		opts = append(opts, tls_client.WithProxyUrl(*proxy))
+	}
+	client, err := tls_client.NewHttpClient(tls_client.NewNoopLogger(), opts...)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "tls-client:", err)
 		os.Exit(1)
