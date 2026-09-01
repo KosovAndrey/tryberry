@@ -143,6 +143,8 @@ func run(log *slog.Logger) error {
 		ProxyURL: getEnv("YANDEX_PROXY_URL", getEnv("OZON_PROXY_URL", "")),
 		RPS:      2,
 		Logger:   log,
+		// Прокси СРАЗУ, без пробного direct: включать, когда датацентр-IP забанен.
+		ProxyPrimary: getEnv("YANDEX_PROXY_PRIMARY", "false") == "true",
 	})
 	// AliExpress: только карточка (поиска нет) — добавляем как обычный скрейпер.
 	// Ходит direct; ALI_PROXY_URL — опциональный фолбэк на рефреш cookie, если

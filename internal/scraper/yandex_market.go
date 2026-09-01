@@ -42,6 +42,10 @@ type YandexMarketScraper struct {
 	limiter    *rate.Limiter
 	log        *slog.Logger
 	configured bool
+	// proxyPrimary переворачивает порядок: сначала прокси, direct — страховка.
+	// Нужен, когда датацентр-IP забанен целиком (01-09-2026): иначе на КАЖДУЮ
+	// карточку тратится заведомо дохлый direct-запрос ради капчи.
+	proxyPrimary bool
 }
 
 // YandexMarketOptions — конфигурация скрейпера. Нулевое значение даёт «облегчённый»
@@ -53,6 +57,11 @@ type YandexMarketOptions struct {
 	ProxyURL string  // http://user:pass@host:port RU-прокси (fallback на капчу; опционален)
 	RPS      float64 // лимит запросов к Я.Маркету (один IP → держим низким), 0 → 1
 	Logger   *slog.Logger
+	// ProxyPrimary — ходить через прокси СРАЗУ, не пробуя direct. Включать, когда
+	// датацентр-IP забанен: пробный direct всё равно вернёт капчу, а стоит он
+	// лишнего запроса и лишней задержки на каждой карточке. Без прокси не значит
+	// ничего. Рубильник YANDEX_PROXY_PRIMARY.
+	ProxyPrimary bool
 }
 
 func NewYandexMarketScraper(opts YandexMarketOptions) *YandexMarketScraper {
@@ -78,7 +87,12 @@ func NewYandexMarketScraper(opts YandexMarketOptions) *YandexMarketScraper {
 	s.direct = direct
 	s.proxy = proxy
 	s.configured = true
-	log.Info("yandex market scraper configured", "transport", "direct+proxy-fallback", "proxy", proxy != nil)
+	s.proxyPrimary = opts.ProxyPrimary && proxy != nil
+	transport := "direct+proxy-fallback"
+	if s.proxyPrimary {
+		transport = "proxy-first+direct-fallback"
+	}
+	log.Info("yandex market scraper configured", "transport", transport, "proxy", proxy != nil)
 	return s
 }
 
@@ -205,6 +219,24 @@ func (s *YandexMarketScraper) Scrape(ctx context.Context, url string) (*Result, 
 // общем jar и отдаёт страницу. Возвращает источник ("direct"/"proxy") для метрики.
 // Без прокси остаёмся на direct-ответе (выше распознаётся как blocked).
 func (s *YandexMarketScraper) getWithFallback(ctx context.Context, url string, header fhttp.Header, bodyCap int64) (int, []byte, string, error) {
+	if s.proxyPrimary {
+		status, body, err := s.do(ctx, s.proxy, url, header, bodyCap)
+		if err == nil && (status == 404 || !isYandexCaptcha(body)) {
+			return status, body, "proxy", nil
+		}
+		// Прокси не смог (упал или тоже словил капчу) — пробуем direct: вдруг
+		// датацентр-IP уже отпустили. Если и он не сможет, наверх уйдёт его
+		// ответ и выше распознается как blocked.
+		s.log.Info("yandex market: proxy-first не прошёл, пробуем direct", "url", url, "err", err)
+		if st2, body2, err2 := s.do(ctx, s.direct, url, header, bodyCap); err2 == nil {
+			return st2, body2, "direct", nil
+		}
+		if err != nil {
+			return 0, nil, "", err
+		}
+		return status, body, "proxy", nil
+	}
+
 	status, body, err := s.do(ctx, s.direct, url, header, bodyCap)
 	if err != nil {
 		return 0, nil, "", err

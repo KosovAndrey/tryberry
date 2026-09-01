@@ -243,3 +243,27 @@ func TestYMOOSFullCardURL(t *testing.T) {
 		t.Error("рекурсивный ретрай запрещён")
 	}
 }
+
+// Рубильник proxy-first включается ТОЛЬКО при заданном прокси: без него
+// переворачивать нечего, и скрейпер должен остаться на direct-пути.
+func TestYandexProxyPrimaryRequiresProxy(t *testing.T) {
+	withProxy := NewYandexMarketScraper(YandexMarketOptions{
+		ProxyURL:     "http://user:pass@127.0.0.1:1",
+		ProxyPrimary: true,
+	})
+	if withProxy.proxy == nil || !withProxy.proxyPrimary {
+		t.Fatalf("с прокси и ProxyPrimary=true ждём proxy-first, got proxy=%v primary=%v",
+			withProxy.proxy != nil, withProxy.proxyPrimary)
+	}
+
+	noProxy := NewYandexMarketScraper(YandexMarketOptions{ProxyPrimary: true})
+	if noProxy.proxy != nil || noProxy.proxyPrimary {
+		t.Fatalf("без прокси ProxyPrimary должен игнорироваться, got proxy=%v primary=%v",
+			noProxy.proxy != nil, noProxy.proxyPrimary)
+	}
+
+	def := NewYandexMarketScraper(YandexMarketOptions{ProxyURL: "http://user:pass@127.0.0.1:1"})
+	if def.proxyPrimary {
+		t.Fatal("по умолчанию порядок прежний: direct первый, прокси — фолбэк на капчу")
+	}
+}

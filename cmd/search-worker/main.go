@@ -147,6 +147,8 @@ func run(log *slog.Logger) error {
 			ProxyURL: getEnv("YANDEX_PROXY_URL", getEnv("OZON_PROXY_URL", "")),
 			RPS:      2,
 			Logger:   log,
+			// Прокси СРАЗУ, без пробного direct: включать, когда датацентр-IP забанен.
+			ProxyPrimary: getEnv("YANDEX_PROXY_PRIMARY", "false") == "true",
 		}),
 		getEnvInt("SEARCH_MAX_ITEMS_YANDEX", 100),
 		getEnvInt("YANDEX_MAX_PAGES", 12),

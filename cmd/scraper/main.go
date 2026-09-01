@@ -229,6 +229,10 @@ func run(log *slog.Logger) error {
 			ProxyURL: getEnv("YANDEX_PROXY_URL", getEnv("OZON_PROXY_URL", "")),
 			RPS:      rpsYandex,
 			Logger:   log,
+			// Прокси СРАЗУ, без пробного direct: включать, когда датацентр-IP
+			// забанен целиком (тогда direct — гарантированная капча и лишний
+			// запрос на каждую карточку). Рубильник YANDEX_PROXY_PRIMARY.
+			ProxyPrimary: getEnv("YANDEX_PROXY_PRIMARY", "false") == "true",
 		}),
 		scraper.NewAliexpressScraper(scraper.AliexpressOptions{
 			// aliexpress.ru: внутренний JSON-API (aer-jsonapi productData), без
