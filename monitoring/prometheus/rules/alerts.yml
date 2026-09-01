@@ -69,7 +69,12 @@ groups:
   - name: tryberrybot_scraping
     interval: 30s
     rules:
-      # Высокий процент ошибок скрейпинга
+      # Высокий процент ошибок скрейпинга.
+      # Порог объёма (>0.05 rps ≈ 15 запросов за 5 минут) отсекает шум редких
+      # запросов. Без него разомкнутая брейкером цепь держала бы алерт вечно: там
+      # к площадке уходит одна проба в 5–60 минут, и она по определению падает —
+      # доля ошибок 100% при копеечном объёме. Про остановленный скрейп говорит
+      # ScrapeCircuitOpen, а этот алерт — про качество живого потока.
       - alert: HighScrapeErrorRate
         expr: |
           (
@@ -77,6 +82,8 @@ groups:
             /
             sum(rate(tryberrybot_scrape_requests_total[5m])) by (marketplace)
           ) > 0.5
+          and
+          sum(rate(tryberrybot_scrape_requests_total[5m])) by (marketplace) > 0.05
         for: 5m
         labels:
           severity: warning
@@ -94,6 +101,19 @@ groups:
         annotations:
           summary: "Маркетплейс {{ $labels.marketplace }} блокирует запросы"
           description: "5+ блокировок за 5 минут. Возможно нужен новый IP/VPN/User-Agent."
+
+      # Брейкер разомкнул цепь: мы САМИ перестали стучаться к площадке, потому что
+      # она режет по IP. Это главный сигнал «скрейпинг площадки стоит» — сам
+      # MarketplaceBlocked после размыкания затихает (настоящих запросов больше нет).
+      - alert: ScrapeCircuitOpen
+        expr: |
+          max by (marketplace) (tryberrybot_scrape_circuit_open) == 1
+        for: 10m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Скрейпинг {{ $labels.marketplace }} приостановлен брейкером"
+          description: "Площадка блокировала запросы подряд — цепь разомкнута, запросы давятся без обращения к сети. Пробы идут раз в 5–60 минут; цепь закроется сама, когда площадка ответит. Если висит часами — нужен другой IP/прокси."
 
       # Прокси отвергает/недоступен (407/502) — это НЕ антибот, а истёкший/сломанный прокси
       - alert: ScrapeProxyFailing

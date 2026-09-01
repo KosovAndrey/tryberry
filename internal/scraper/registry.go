@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"strings"
 	"time"
 
@@ -18,10 +19,22 @@ import (
 // Автоматически выбирает нужный по URL товара.
 type Registry struct {
 	scrapers []MarketplaceScraper
+	breaker  *breaker // предохранитель против долбёжки в бан, см. breaker.go
 }
 
 func NewRegistry(scrapers ...MarketplaceScraper) *Registry {
-	return &Registry{scrapers: scrapers}
+	return &Registry{
+		scrapers: scrapers,
+		breaker:  newBreaker(BreakerConfigFromEnv(), nil),
+	}
+}
+
+// SetLogger направляет сообщения брейкера (размыкание/проба/замыкание цепи) в
+// логгер сервиса. Без вызова используется slog.Default().
+func (r *Registry) SetLogger(log *slog.Logger) {
+	if log != nil && r.breaker != nil {
+		r.breaker.log = log
+	}
 }
 
 // FindByURL возвращает скрейпер для данного URL или ошибку если ни один не подошёл
@@ -53,7 +66,18 @@ func (r *Registry) Scrape(ctx context.Context, url string) (*Result, Marketplace
 	mp := string(s.Marketplace())
 	start := time.Now()
 
+	// Цепь разомкнута — площадка нас режет, и следующий запрос из этого процесса
+	// срежется тоже. Не ходим в сеть: так флаг на IP остывает, а не подогревается.
+	if ok, until := r.breaker.allow(mp, start); !ok {
+		metrics.ScrapeSuppressed.WithLabelValues(mp).Inc()
+		err := errCircuitOpen(mp, until)
+		span.RecordError(err)
+		span.SetStatus(codes.Error, "circuit_open")
+		return nil, s.Marketplace(), err
+	}
+
 	result, err := s.Scrape(ctx, url)
+	r.breaker.record(mp, errors.Is(err, ErrMarketplaceBlocked), time.Now())
 
 	metrics.ScrapeDuration.WithLabelValues(mp).Observe(time.Since(start).Seconds())
 

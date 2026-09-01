@@ -291,6 +291,32 @@ var (
 		[]string{"marketplace", "status"}, // success | not_found | blocked | proxy | auth | disabled | parse_error | error
 	)
 
+	// ScrapeCircuitOpen — 1, пока брейкер держит цепь площадки разомкнутой (мы
+	// намеренно не стучимся: площадка режет по IP). Основной сигнал «скрейпинг
+	// площадки стоит»: сам MarketplaceBlocked после размыкания затихает, потому
+	// что настоящих запросов больше нет.
+	ScrapeCircuitOpen = promauto.NewGaugeVec(
+		prometheus.GaugeOpts{
+			Namespace: namespace,
+			Name:      "scrape_circuit_open",
+			Help:      "1 while the blocked-breaker keeps the marketplace circuit open (requests suppressed)",
+		},
+		[]string{"marketplace"},
+	)
+
+	// ScrapeSuppressed — сколько запросов брейкер задавил, не сходив в сеть.
+	// Намеренно НЕ идёт в scrape_requests_total: тот счётчик означает «сходили к
+	// площадке», и подмешивание в него давленых запросов испортило бы и success
+	// rate, и алерт по блокировкам.
+	ScrapeSuppressed = promauto.NewCounterVec(
+		prometheus.CounterOpts{
+			Namespace: namespace,
+			Name:      "scrape_suppressed_total",
+			Help:      "Scrape requests suppressed by the blocked-breaker (no network call made)",
+		},
+		[]string{"marketplace"},
+	)
+
 	// OzonAgeGateRetries считает ретраи age-gate (anon→authed) у Ozon:
 	// outcome = success | failed. Сумма по outcome = объём 18+ товаров.
 	OzonAgeGateRetries = promauto.NewCounterVec(

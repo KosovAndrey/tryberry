@@ -177,6 +177,7 @@ func run(log *slog.Logger) error {
 	// выдачи X5SEC режет с датацентр-IP, хотя карточный productData проходит.
 	aliSearch.SetBrowserSidecar(getEnv("ALI_BROWSER_URL", ""), getEnvInt("ALI_SEARCH_BROWSER_MAX_PAGES", 1))
 	registry := scraper.NewRegistry(wbSearch, wbSeller, yandexSearch, ozonSearch, ozonSeller, aliSearch)
+	registry.SetLogger(log)
 
 	// ── Kafka ─────────────────────────────────────────────────────────────────
 	consumer := kafka.NewConsumer(kafkaBrokers, tasksTopic, kafkaGroupID)

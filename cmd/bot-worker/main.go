@@ -166,6 +166,7 @@ func run(log *slog.Logger) error {
 		scraper.NewYandexMarketSearchScraper(yandexCard, 100, 12),
 		aliSearch,
 	)
+	registry.SetLogger(log)
 
 	// getMe ходит наружу (через HTTPS_PROXY). Ретраим старт.
 	bot, err := telegram.InitWithRetry(ctx, log, func() (*telegram.Bot, error) {

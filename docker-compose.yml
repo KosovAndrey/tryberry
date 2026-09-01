@@ -183,6 +183,13 @@ services:
       # код фолбэчит на OZON_PROXY_URL (тот же мобильный IP). Дележ IP ускоряет
       # его выгорание (см. OZON-STATUS) — при росте нагрузки задать отдельный.
       YANDEX_PROXY_URL: "${YANDEX_PROXY_URL:-}"
+      # Брейкер по блокировкам (internal/scraper/breaker.go): N блокировок подряд
+      # размыкают цепь площадки, дальше запросы давятся без обращения к сети, а
+      # раз в COOLDOWN уходит одна проба. Так флаг на IP остывает, а не греется.
+      # SCRAPE_BREAKER_BLOCKS=0 выключает предохранитель целиком.
+      SCRAPE_BREAKER_BLOCKS: "${SCRAPE_BREAKER_BLOCKS:-10}"
+      SCRAPE_BREAKER_COOLDOWN: "${SCRAPE_BREAKER_COOLDOWN:-5m}"
+      SCRAPE_BREAKER_MAX_COOLDOWN: "${SCRAPE_BREAKER_MAX_COOLDOWN:-60m}"
       # AliExpress: бот при /track скрейпит сразу. Прокси нужен для рефреша cookie
       # (с датацентра cold-сессия = капча), дальше запросы напрямую. Пусто → фолбэк
       # на OZON_PROXY_URL (дележ IP жжёт его — при нагрузке задать отдельный).
@@ -267,6 +274,13 @@ services:
       # Я.Маркет: без аккаунта, хороший TLS + RU-прокси. Пусто → код фолбэчит на
       # OZON_PROXY_URL. При росте нагрузки задать отдельный (дележ IP жжёт его).
       YANDEX_PROXY_URL: "${YANDEX_PROXY_URL:-}"
+      # Брейкер по блокировкам (internal/scraper/breaker.go): N блокировок подряд
+      # размыкают цепь площадки, дальше запросы давятся без обращения к сети, а
+      # раз в COOLDOWN уходит одна проба. Так флаг на IP остывает, а не греется.
+      # SCRAPE_BREAKER_BLOCKS=0 выключает предохранитель целиком.
+      SCRAPE_BREAKER_BLOCKS: "${SCRAPE_BREAKER_BLOCKS:-10}"
+      SCRAPE_BREAKER_COOLDOWN: "${SCRAPE_BREAKER_COOLDOWN:-5m}"
+      SCRAPE_BREAKER_MAX_COOLDOWN: "${SCRAPE_BREAKER_MAX_COOLDOWN:-60m}"
       SCRAPER_RATE_LIMIT_RPS_ALI: "${SCRAPER_RATE_LIMIT_RPS_ALI:-1}"
       # AliExpress: внутренний JSON-API (aer-jsonapi), без браузера. X5SEC решает
       # репутация IP → нужен RU-резидентский/мобильный прокси (датацентр = капча).
@@ -342,6 +356,13 @@ services:
       # код фолбэчит на OZON_PROXY_URL (см. cmd/search-worker/main.go).
       OZON_PROXY_URL: "${OZON_PROXY_URL:-}"
       YANDEX_PROXY_URL: "${YANDEX_PROXY_URL:-}"
+      # Брейкер по блокировкам (internal/scraper/breaker.go): N блокировок подряд
+      # размыкают цепь площадки, дальше запросы давятся без обращения к сети, а
+      # раз в COOLDOWN уходит одна проба. Так флаг на IP остывает, а не греется.
+      # SCRAPE_BREAKER_BLOCKS=0 выключает предохранитель целиком.
+      SCRAPE_BREAKER_BLOCKS: "${SCRAPE_BREAKER_BLOCKS:-10}"
+      SCRAPE_BREAKER_COOLDOWN: "${SCRAPE_BREAKER_COOLDOWN:-5m}"
+      SCRAPE_BREAKER_MAX_COOLDOWN: "${SCRAPE_BREAKER_MAX_COOLDOWN:-60m}"
       # Ozon-поиск идёт ТОЛЬКО через сайдкар ozon-miner (browser-пул): прямой API
       # за FAB. /search дёргает выдачу из прогретой дорожки (searchResultsV2).
       OZON_BROWSER_URL: "${OZON_BROWSER_URL:-http://ozon-miner:8080}"
@@ -406,6 +427,13 @@ services:
       # SmartCaptcha. Пусто → фолбэк на OZON_PROXY_URL (cmd/search-worker/main.go).
       OZON_PROXY_URL: "${OZON_PROXY_URL:-}"
       YANDEX_PROXY_URL: "${YANDEX_PROXY_URL:-}"
+      # Брейкер по блокировкам (internal/scraper/breaker.go): N блокировок подряд
+      # размыкают цепь площадки, дальше запросы давятся без обращения к сети, а
+      # раз в COOLDOWN уходит одна проба. Так флаг на IP остывает, а не греется.
+      # SCRAPE_BREAKER_BLOCKS=0 выключает предохранитель целиком.
+      SCRAPE_BREAKER_BLOCKS: "${SCRAPE_BREAKER_BLOCKS:-10}"
+      SCRAPE_BREAKER_COOLDOWN: "${SCRAPE_BREAKER_COOLDOWN:-5m}"
+      SCRAPE_BREAKER_MAX_COOLDOWN: "${SCRAPE_BREAKER_MAX_COOLDOWN:-60m}"
       # Ozon-поиск на быстрых тарифах идёт ТОЖЕ сюда → нужен сайдкар ozon-miner
       # (browser-пул), как у search-worker. ВНИМАНИЕ: перекуп-каданс (≤1 мин) для
       # Ozon агрессивен для одной прогретой дорожки — следить за блокировками.

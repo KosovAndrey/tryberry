@@ -240,6 +240,7 @@ func run(log *slog.Logger) error {
 			Logger:   log,
 		}),
 	)
+	registry.SetLogger(log)
 
 	// ── Обработчик сообщений (цены) — блокирующий основной цикл ────────────────
 	handler := makeHandler(log, registry, productRepo, priceHistoryRepo, priceCache, producer, pm, handlerTimeout)
