@@ -168,7 +168,7 @@ func (b *breaker) record(mp string, blocked bool, now time.Time) {
 		s.cooldown = min(s.cooldown*2, b.cfg.MaxCooldown)
 		s.openUntil = now.Add(s.cooldown)
 		b.log.Warn("scrape breaker: проба снова заблокирована, пауза удвоена",
-			"marketplace", mp, "cooldown", s.cooldown, "open_until", s.openUntil.Format(time.RFC3339))
+			"marketplace", mp, "cooldown", s.cooldown.String(), "open_until", s.openUntil.Format(time.RFC3339))
 	case s.openUntil.IsZero() && s.consecutive >= b.cfg.Threshold:
 		if s.cooldown <= 0 {
 			s.cooldown = b.cfg.Cooldown
@@ -177,7 +177,7 @@ func (b *breaker) record(mp string, blocked bool, now time.Time) {
 		metrics.ScrapeCircuitOpen.WithLabelValues(mp).Set(1)
 		b.log.Warn("scrape breaker: цепь разомкнута — площадка блокирует, перестаём стучаться",
 			"marketplace", mp, "blocks_in_row", s.consecutive,
-			"cooldown", s.cooldown, "open_until", s.openUntil.Format(time.RFC3339))
+			"cooldown", s.cooldown.String(), "open_until", s.openUntil.Format(time.RFC3339))
 	}
 }
 
