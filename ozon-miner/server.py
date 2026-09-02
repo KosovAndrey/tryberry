@@ -70,6 +70,20 @@ LANE_JITTER = float(os.getenv("OZON_LANE_JITTER", "0.4"))  # ±40%
 MAINT_INTERVAL_S = float(os.getenv("OZON_HEALTH_INTERVAL_SECONDS", "30"))
 # Периодический re-warm живой дорожки (рефреш сессии/токена). 0 → выкл.
 WARM_KEEPALIVE_S = float(os.getenv("OZON_WARM_KEEPALIVE_MINUTES", "45")) * 60.0
+
+# Плановое пересоздание браузера по ВОЗРАСТУ. Раньше здесь его сознательно НЕ
+# было: считалось, что пере-прохождение FAB дороже пользы, а память перекрывает
+# mem_limit. Инцидент 02-09-2026 это опроверг — цена не в памяти. Контейнер
+# простоял 5 суток, и ЗАЖИВШИЙСЯ браузер перестаёт проходить FAB: пять из шести
+# дорожек не могли прогреться («прогрев не дал 200»), за неделю каждая анонимная
+# была здорова лишь 16% времени, весь поток сериализовался на выжившей
+# authed-дорожке и p95 скрейпа уехал на 26-29с. Пересоздание вернуло 6/6 разом.
+# То есть FAB мы всё равно теряем, только не осознанно раз в N часов, а исподволь
+# и без предупреждения. 0 = выключить.
+LANE_MAX_AGE_S = float(os.getenv("OZON_LANE_MAX_AGE_SECONDS", "21600"))
+# Разброс порога по дорожкам, чтобы пул не пересоздавался разом и запросы не
+# упирались в 502 на время общего прогрева.
+LANE_MAX_AGE_JITTER = float(os.getenv("OZON_LANE_MAX_AGE_JITTER", "0.2"))
 # Потолок backoff при неудачных прогревах (не долбить FAB).
 WARM_BACKOFF_MAX_S = float(os.getenv("OZON_WARM_BACKOFF_MAX_SECONDS", "600"))
 
@@ -319,6 +333,9 @@ class Lane:
         self._warm_fails = 0
         self._next_warm = 0.0        # monotonic — раньше не перепрогревать (backoff)
         self._launched_at = 0.0      # monotonic создания браузера (метрика возраста)
+        # Свой порог recycle у каждой дорожки (база ± джиттер) — чтобы пул не
+        # пересоздавался разом. Считается один раз, при создании браузера.
+        self._age_limit = 0.0
         self._cam = None
         self._browser = None
         self._page = None
@@ -346,11 +363,13 @@ class Lane:
         # camoufox через фингерпринт, viewport от playwright тут лишний и вредный.
         self._page = await self._browser.new_page(no_viewport=True)
         await _add_cookies_safe(self._page.context, _cookie_jar(self.cookie))
-        # Возраст браузера: память camoufox растёт по аптайму (плато ~5 ГиБ).
-        # Плановый recycle здесь НЕ делаем — пере-прохождение FAB дороже пользы,
-        # а mem_limit 6g плато перекрывает. Но следить надо: если плато поедет,
-        # это увидим по ozon_miner_lane_age_seconds раньше, чем по OOM.
+        # Возраст браузера: память camoufox растёт по аптайму (плато ~5 ГиБ), а
+        # СПОСОБНОСТЬ ПРОХОДИТЬ FAB с возрастом падает (см. LANE_MAX_AGE_S) —
+        # поэтому браузер планово пересоздаётся, не дожидаясь ни OOM, ни тихой
+        # деградации пула. Сдвиг плато по памяти по-прежнему видно по
+        # ozon_miner_lane_age_seconds раньше, чем по OOM.
         self._launched_at = time.monotonic()
+        self._age_limit = LANE_MAX_AGE_S * (1.0 + random.uniform(0.0, LANE_MAX_AGE_JITTER))
 
     async def start(self):
         await self._launch()
@@ -580,6 +599,14 @@ class Lane:
         """Сколько секунд живёт текущий браузер (0 = ещё не создан)."""
         return (now - self._launched_at) if self._launched_at else 0.0
 
+    def due_recycle(self, now: float) -> bool:
+        """Пора планово пересоздать браузер: он зажился и перестаёт проходить FAB.
+        Только для ЗДОРОВОЙ дорожки — нездоровую и так чинит due_rewarm, и там
+        пересоздание уже своё (_needs_relaunch)."""
+        return (LANE_MAX_AGE_S > 0 and self.healthy
+                and self._launched_at > 0 and self._age_limit > 0
+                and self.age(now) >= self._age_limit)
+
     def stuck_for(self, now: float) -> float:
         """Сколько секунд лок дорожки держат сверх LANE_STUCK_S (0 = не залипла)."""
         if not self.lock.locked() or not self._lock_since:
@@ -662,8 +689,19 @@ class Pool:
                     continue
                 if lane.lock.locked() or lane._servicing:
                     continue
-                if not (lane.due_rotate(now) or lane.due_rewarm(now)
-                        or lane.due_keepalive(now)):
+                if lane.due_recycle(now):
+                    # healthy снимаем ЧЕСТНО: браузер сейчас исчезнет, отдавать
+                    # на него запросы нельзя. Дальше идёт штатный путь
+                    # _service_lane: _needs_relaunch → _relaunch() → due_rewarm →
+                    # warm(). _next_warm обнуляем, чтобы прогрев пошёл сразу, а
+                    # не после backoff, оставшегося от прошлых неудач.
+                    log.info("дорожка %d: плановый recycle — браузер живёт %.1fч",
+                             lane.idx, lane.age(now) / 3600.0)
+                    lane.healthy = False
+                    lane._needs_relaunch = True
+                    lane._next_warm = 0.0
+                elif not (lane.due_rotate(now) or lane.due_rewarm(now)
+                          or lane.due_keepalive(now)):
                     continue
                 # Флаг ставим ЗДЕСЬ, а не в задаче: между ensure_future и первой
                 # строкой задачи цикл мог бы успеть завести вторую такую же.

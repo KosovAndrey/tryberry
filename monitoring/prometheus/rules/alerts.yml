@@ -162,6 +162,23 @@ groups:
           summary: "Ozon-сайдкар: нет живых дорожек"
           description: "ozon-miner отвечает, но 0 прогретых дорожек 10+ минут — camoufox не проходит FAB (протух refresh-token/FAB-пропуск). Снять свежий OZON_COOKIE (HTTP Toolkit через мобильный прокси) и пересоздать ozon-miner: docker compose up -d --force-recreate ozon-miner."
 
+      # Пул жив, но наполовину пуст. Строгий ноль выше не ловит САМЫЙ частый
+      # сценарий: анонимные дорожки перестают проходить FAB, а авторизованная
+      # держится — пул числится живым, при этом весь поток сериализуется на
+      # остатке и p95 уезжает в десятки секунд (02-09: 1 живая из 6 неделю,
+      # узнали кружным путём по HighScrapeLatency). Порог по ДОЛЕ, а не по
+      # числу: он не врёт при смене OZON_POOL_SIZE.
+      - alert: OzonMinerDegradedPool
+        expr: |
+          ozon_miner_healthy_lanes / ozon_miner_total_lanes < 0.5
+          and ozon_miner_total_lanes > 1
+        for: 15m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Ozon-сайдкар: пул наполовину мёртв"
+          description: "Живых дорожек меньше половины ({{ $value | humanizePercentage }} от пула) 15+ минут. Весь поток Ozon идёт через остаток — очередь на локе дорожки даёт p95 в десятки секунд, а если выжила только authed-дорожка, массовый поток идёт под аккаунтом (риск бана). Смотреть 'прогрев не дал 200' в логах pt_ozon_miner: это FAB не пускает анонимные дорожки с нашего IP — лечится не рестартом, а egress'ом либо снижением спроса (OZON_INTERVAL_MULTIPLIER)."
+
       # ГЛАВНЫЙ алерт по Ozon-сайдкару: healthy_lanes ВРЁТ при залипании драйвера.
       # Инцидент 29-07: подвисший драйвер держал лок дорожки, обслуживание встало,
       # пул 11ч отдавал нули при healthy_lanes=4 — NoHealthyLanes промолчал, пришли
