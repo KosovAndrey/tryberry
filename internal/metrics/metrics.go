@@ -202,6 +202,22 @@ var (
 		[]string{"status"}, // success | empty | error
 	)
 
+	// SearchTasksStale — задачи поиска, отброшенные как устаревшие (продюсер
+	// быстрее консьюмера). Ноль = дорожка успевает. Устойчивый рост = каданс
+	// обещает больше, чем дорожка отдаёт: разбирать хвост бессмысленно (задача
+	// «сходи за выдачей» переотправляется каждый каданс), но и молчать нельзя —
+	// подписчик получает свежесть реже обещанной тарифом. Инцидент 02-09-2026:
+	// reseller-tasks копил 4 задачи/мин при пропускной способности ~1/мин, лаг
+	// рос сутки и упёрся в алерт, хотя ни одна задача не «застряла».
+	SearchTasksStale = promauto.NewCounterVec(
+		prometheus.CounterOpts{
+			Namespace: namespace,
+			Name:      "search_tasks_stale_total",
+			Help:      "Search tasks skipped because they were older than the freshness window",
+		},
+		[]string{"topic"},
+	)
+
 	// WBSearchFetch — исходы запросов страниц WB-поиска по транспорту и результату.
 	// transport: direct | browser; result: ok | forbidden | 429 | other | error.
 	// direct+error = запрос не дошёл вовсе (мёртвый egress/прокси), а не ответ WB.

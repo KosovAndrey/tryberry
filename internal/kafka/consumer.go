@@ -18,6 +18,12 @@ import (
 type Message struct {
 	Key   []byte
 	Value []byte
+	// Time — момент записи сообщения в Kafka. Нужен обработчикам, которые умеют
+	// отбрасывать УСТАРЕВШИЕ задачи: если продюсер быстрее консьюмера, очередь
+	// копит поручения, потерявшие смысл (см. cmd/search-worker — там задача
+	// «сходи за выдачей» переотправляется каждый каданс, и разбирать хвост
+	// многочасовой давности бессмысленно).
+	Time time.Time
 }
 
 // HandlerFunc — функция обработки одного сообщения.
@@ -205,7 +211,7 @@ func (c *Consumer) Run(ctx context.Context, handler HandlerFunc) error {
 func (c *Consumer) runWithRetry(ctx context.Context, topic string, handler HandlerFunc, msg kafka.Message) error {
 	var err error
 	for attempt := 1; attempt <= handlerRetries; attempt++ {
-		if err = handler(ctx, Message{Key: msg.Key, Value: msg.Value}); err == nil {
+		if err = handler(ctx, Message{Key: msg.Key, Value: msg.Value, Time: msg.Time}); err == nil {
 			return nil
 		}
 		metrics.KafkaMessagesConsumed.WithLabelValues(topic, "error").Inc()
@@ -315,7 +321,7 @@ func (c *Consumer) RunConcurrent(ctx context.Context, handler HandlerFunc, concu
 			)
 
 			start := time.Now()
-			handlerErr := handler(msgCtx, Message{Key: msg.Key, Value: msg.Value})
+			handlerErr := handler(msgCtx, Message{Key: msg.Key, Value: msg.Value, Time: msg.Time})
 			metrics.KafkaProcessingDuration.WithLabelValues(topic).Observe(time.Since(start).Seconds())
 
 			if handlerErr != nil {
