@@ -63,3 +63,42 @@ func TestScaleDuration(t *testing.T) {
 		t.Fatalf("10м × 1.4 = %v, ждали 14м", got)
 	}
 }
+
+// Пол WB-поиска и его связь с выбором дорожки (инцидент 02-09-2026).
+// Проверяем не арифметику (она тривиальна), а инвариант, ради которого выбрано
+// значение 2 минуты: прижатый полом запрос ОСТАЁТСЯ на быстрой дорожке.
+// Значение больше resellerLaneCutoff молча увело бы его на общую, где отброс
+// устаревших выключен, — то есть перенесло бы затык, а не убрало.
+func TestWBSearchFloorKeepsFastLane(t *testing.T) {
+	const floor = 2 * time.Minute
+	if floor > resellerLaneCutoff {
+		t.Fatalf("дефолтный пол WB (%s) больше порога быстрой дорожки (%s) — "+
+			"перекупские WB-запросы уедут на общую дорожку", floor, resellerLaneCutoff)
+	}
+
+	cases := []struct {
+		name     string
+		mp       string
+		eff      time.Duration
+		wantEff  time.Duration
+		wantFast bool
+	}{
+		{"перекуп WB прижимается полом и остаётся быстрым", "wildberries", time.Minute, floor, true},
+		{"обычный тариф WB полом не трогается", "wildberries", 30 * time.Minute, 30 * time.Minute, false},
+		{"Ozon этот пол не касается", "ozon", time.Minute, time.Minute, true},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			eff := c.eff
+			if c.mp == "wildberries" && eff < floor {
+				eff = floor
+			}
+			if eff != c.wantEff {
+				t.Fatalf("eff=%s, ожидалось %s", eff, c.wantEff)
+			}
+			if fast := eff <= resellerLaneCutoff; fast != c.wantFast {
+				t.Fatalf("fast=%v, ожидалось %v (eff=%s)", fast, c.wantFast, eff)
+			}
+		})
+	}
+}
