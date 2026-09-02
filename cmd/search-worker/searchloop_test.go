@@ -194,3 +194,37 @@ func TestScrapeQueryMarketplaceAndCanon(t *testing.T) {
 		})
 	}
 }
+
+// Отброс устаревших задач (инцидент 02-09-2026: reseller-дорожка копила
+// 4 задачи/мин при пропускной способности ~1/мин). Проверяем не только сам
+// отброс, но и три случая, где он ОБЯЗАН молчать: рычаг выключен, у сообщения
+// нет метки времени, задача ещё свежая.
+func TestStaleAge(t *testing.T) {
+	now := time.Date(2026, 9, 2, 12, 0, 0, 0, time.UTC)
+	cases := []struct {
+		name      string
+		maxAge    time.Duration
+		msgTime   time.Time
+		wantStale bool
+	}{
+		{"выключено нулём", 0, now.Add(-10 * time.Hour), false},
+		{"выключено отрицательным", -time.Minute, now.Add(-10 * time.Hour), false},
+		{"нет метки времени", 2 * time.Minute, time.Time{}, false},
+		{"свежая", 2 * time.Minute, now.Add(-30 * time.Second), false},
+		{"ровно на границе", 2 * time.Minute, now.Add(-2 * time.Minute), false},
+		{"протухла", 2 * time.Minute, now.Add(-3 * time.Minute), true},
+		{"хвост многочасовой давности", 2 * time.Minute, now.Add(-6 * time.Hour), true},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			w := &searchWorker{taskMaxAge: c.maxAge}
+			age, stale := w.staleAge(c.msgTime, now)
+			if stale != c.wantStale {
+				t.Fatalf("stale=%v, ожидалось %v (age=%s)", stale, c.wantStale, age)
+			}
+			if !stale && age != 0 && c.msgTime.IsZero() {
+				t.Fatalf("для сообщения без метки возраст обязан быть нулевым, получено %s", age)
+			}
+		})
+	}
+}

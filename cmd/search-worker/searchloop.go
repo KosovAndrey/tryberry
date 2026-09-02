@@ -86,6 +86,22 @@ type searchWorker struct {
 	// чаще этого окна. Широкая выдача (особ. Ozon, ~8 ротирующихся позиций) иначе
 	// сыплет новыми дешёвыми SKU каждый скрейп. 0 — троттлинг выключен.
 	belowTargetCooldown time.Duration
+
+	// taskMaxAge — окно свежести задачи. Задача старше отбрасывается БЕЗ скрейпа.
+	// Смысл: планировщик кладёт «сходи за выдачей N» каждый каданс независимо от
+	// того, разобрал ли воркер прошлую. Если продюсер быстрее консьюмера, очередь
+	// растёт вечно, и воркер начинает разбирать хвост многочасовой давности —
+	// работа та же, а свежести не прибавляет, потому что скрейп всё равно берёт
+	// ТЕКУЩУЮ выдачу. Дешевле пропустить протухшее и работать с головы.
+	//
+	// ВКЛЮЧАТЬ ТОЛЬКО ТАМ, ГДЕ ЗАДАЧА ЧАСТО ПЕРЕОТПРАВЛЯЕТСЯ (reseller-дорожка,
+	// каданс 1 мин). На медленных дорожках (free — 6ч) отброс УХУДШИЛ бы дело:
+	// следующая задача по тому же запросу придёт только через интервал, то есть
+	// пропуск = потеря целого цикла. 0 — выключено (дефолт).
+	taskMaxAge time.Duration
+
+	// topic — для метки метрики отброшенных задач (search-tasks / reseller-tasks).
+	topic string
 }
 
 // makeHandler — обработчик одной задачи из топика поисковых задач.
@@ -100,6 +116,15 @@ func (w *searchWorker) makeHandler() kafka.HandlerFunc {
 			w.log.Error("decode search task", "err", err)
 			return nil
 		}
+		// Протухшая задача: пропускаем без похода в сеть. Свежая по тому же
+		// запросу либо уже в очереди, либо придёт следующим тиком планировщика.
+		if age, stale := w.staleAge(msg.Time, time.Now()); stale {
+			metrics.SearchTasksStale.WithLabelValues(w.topic).Inc()
+			w.log.Warn("skip stale search task",
+				"query_id", task.QueryID, "text", task.QueryText,
+				"age", age.Round(time.Second), "max_age", w.taskMaxAge)
+			return nil
+		}
 		// scrapeQuery нужны только ID/URL/QueryText — собираем частичный SearchQuery.
 		q := &domain.SearchQuery{
 			ID:            task.QueryID,
@@ -111,6 +136,17 @@ func (w *searchWorker) makeHandler() kafka.HandlerFunc {
 		}
 		return nil
 	}
+}
+
+// staleAge — возраст задачи и решение «протухла ли». Отдельной функцией, чтобы
+// правило было проверяемо тестом: выключено при taskMaxAge<=0, не срабатывает на
+// нулевом времени (сообщение без метки — не повод молча выкидывать работу).
+func (w *searchWorker) staleAge(msgTime, now time.Time) (time.Duration, bool) {
+	if w.taskMaxAge <= 0 || msgTime.IsZero() {
+		return 0, false
+	}
+	age := now.Sub(msgTime)
+	return age, age > w.taskMaxAge
 }
 
 // shouldEvaluate — пора ли оценивать подписку: ещё ни разу (lastEval==nil) или с

@@ -202,10 +202,17 @@ func run(log *slog.Logger) error {
 		// ФОЛБЭК: основной зазор задаёт план владельца (Plan.SearchCooldown),
 		// сюда падаем только для планов без своего значения (legacy basic).
 		belowTargetCooldown: time.Duration(getEnvInt("SEARCH_BELOW_TARGET_COOLDOWN_MINUTES", 360)) * time.Minute,
+		// Окно свежести задачи. 0 (дефолт) — отброс выключен: на медленных
+		// дорожках пропуск = потеря целого цикла. Включать там, где задача
+		// переотправляется часто, — reseller-дорожка с кадансом в минуту.
+		// См. searchWorker.taskMaxAge.
+		taskMaxAge: time.Duration(getEnvInt("SEARCH_TASK_MAX_AGE_SECONDS", 0)) * time.Second,
+		topic:      tasksTopic,
 	}
 
 	log.Info("search-worker started",
 		"topic", tasksTopic, "group", kafkaGroupID,
+		"task_max_age", sw.taskMaxAge.String(),
 		"pool_prefix", poolPrefix, "pool_size", poolSize,
 		"default_interval", defaultInterval.String())
 	return consumer.Run(ctx, sw.makeHandler())
