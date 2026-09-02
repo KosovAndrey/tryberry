@@ -5,11 +5,14 @@
 пропускал залоченные дорожки, и пул 11 часов отдавал ошибки при healthy_lanes=4.
 
 Тест не поднимает браузер: подменяет страницу заглушкой, которая ВИСНЕТ. Проверяем
-четыре свойства, которых у старого кода не было:
+свойства, которых у старого кода не было:
   A. fetch_path на висящем драйвере возвращается по дедлайну (504), лок отпущен;
   B. вотчдог снимает healthy с дорожки, чей лок держат дольше порога;
   C. зависшее обслуживание одной дорожки не мешает обслуживать остальные;
-  D. возраст последнего успеха растёт (метрика, на которой висит алерт).
+  D. возраст последнего успеха растёт (метрика, на которой висит алерт);
+  E. зажившийся браузер планово пересоздаётся — инцидент 02-09-2026: за 5 суток
+     аптайма camoufox перестаёт проходить FAB, пул тихо деградировал до одной
+     дорожки из шести и p95 скрейпа уехал на 26-29с.
 
 Запуск: python3 ozon-miner/test_lane_deadlock.py
 Зависимостей нет — aiohttp/camoufox замоканы (в контейнере они есть, но тесту
@@ -167,6 +170,53 @@ async def test_stuck_lane_does_not_freeze_pool():
     check(healthy.healthy is True, "дорожка 1 успешно прогрелась")
 
 
+async def test_planned_recycle():
+    """E. Зажившийся браузер планово пересоздаётся (инцидент 02-09-2026)."""
+    lane = make_lane()
+    lane._launched_at = server.time.monotonic()
+    lane._age_limit = 0.3
+    lane._next_warm = server.time.monotonic() + 9999  # backoff от прошлых неудач
+    pool = server.Pool([lane])
+
+    now = server.time.monotonic()
+    check(not lane.due_recycle(now), "молодой браузер не трогаем")
+
+    warmed = []
+    orig_warm = server.Lane.warm
+
+    async def fake_warm(self):
+        # Повторяем то, что делает настоящий путь warm() → _relaunch() → _launch():
+        # новый браузер обнуляет возраст и снимает пометку на пересоздание. Без
+        # этого дорожка вечно «старая» и уходит на recycle каждый тик.
+        warmed.append(self.idx)
+        self._needs_relaunch = False
+        self._launched_at = server.time.monotonic()
+        self.healthy = True
+
+    server.Lane.warm = fake_warm
+    try:
+        loop_task = asyncio.ensure_future(pool.maintenance_loop())
+        await asyncio.sleep(0.8)
+        loop_task.cancel()
+    finally:
+        server.Lane.warm = orig_warm
+
+    check(warmed == [0], f"дорожка ушла на recycle РОВНО раз и прогрелась: {warmed}")
+    check(lane.healthy and not lane._needs_relaunch,
+          "после recycle дорожка снова здорова и не висит в ожидании")
+
+    # Нездоровую дорожку recycle не трогает — её чинит due_rewarm своим путём.
+    lane.healthy = False
+    check(not lane.due_recycle(server.time.monotonic()),
+          "нездоровую дорожку recycle не перехватывает")
+
+    # LANE_MAX_AGE_S=0 — рычаг выключен целиком.
+    saved, server.LANE_MAX_AGE_S = server.LANE_MAX_AGE_S, 0
+    lane.healthy = True
+    check(not lane.due_recycle(server.time.monotonic()), "нулём recycle выключается")
+    server.LANE_MAX_AGE_S = saved
+
+
 async def test_last_success_age():
     """D. Метрика возраста последнего успеха — на ней висит алерт OzonMinerStale."""
     server._mark_success()
@@ -177,7 +227,8 @@ async def test_last_success_age():
 
 async def main():
     for t in (test_fetch_deadline, test_watchdog_frees_stuck_lane,
-              test_stuck_lane_does_not_freeze_pool, test_last_success_age):
+              test_stuck_lane_does_not_freeze_pool, test_planned_recycle,
+              test_last_success_age):
         print(f"\n{t.__doc__.splitlines()[0]}")
         await t()
     print("\nПРОВАЛЫ ЕСТЬ" if check.failed else "\nвсе проверки прошли")
