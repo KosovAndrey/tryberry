@@ -75,6 +75,20 @@ func run(log *slog.Logger) error {
 	// Джиттер пола Ozon-поиска: доля от ozonSearchMin, на которую интервал гуляет
 	// вверх/вниз (0.4 → ±40%). 0 — ровная сетка, как было.
 	ozonSearchJitter := getEnvFloat("OZON_SEARCH_JITTER", 0)
+	// Пол интервала для WB-ПОИСКА. Введён 02-09-2026: после перевода WB-поиска на
+	// u-search через xray с ОТКЛЮЧЁННЫМ keep-alive (размен на проходимость под
+	// массовыми 429) одна задача стала занимать 30-90с, то есть дорожка отдаёт
+	// ~1 задачу/мин. Перекупский каданс в минуту клал по задаче на КАЖДЫЙ запрос,
+	// очередь reseller-tasks росла ~140/час и за сутки набрала 2900. Пол
+	// выравнивает приток с пропускной способностью.
+	//
+	// ДВЕ МИНУТЫ НЕ СЛУЧАЙНЫ: это ровно resellerLaneCutoff, а дорожка выбирается
+	// по эффективному интервалу (fast := eff <= resellerLaneCutoff). Значение
+	// БОЛЬШЕ двух минут уводит WB-запросы перекупа с быстрой дорожки на общую —
+	// где та же пропускная способность, но отброс устаревших выключен (там каданс
+	// 15м-6ч, и пропуск = потеря целого цикла). Так проблема не решится, а
+	// переедет. Джиттера здесь нет намеренно: он бы гонял запрос между дорожками.
+	wbSearchMin := time.Duration(getEnvInt("WB_SEARCH_MIN_INTERVAL_MINUTES", 2)) * time.Minute
 	if ozonMult < 1 {
 		ozonMult = 1
 	}
@@ -121,14 +135,21 @@ func run(log *slog.Logger) error {
 	resellerProducer := kafka.NewProducer(brokers, "reseller-tasks")
 	defer resellerProducer.Close()
 
+	if wbSearchMin > resellerLaneCutoff {
+		log.Warn("WB_SEARCH_MIN_INTERVAL_MINUTES больше порога быстрой дорожки — "+
+			"WB-запросы перекупа уедут с reseller-tasks на общий search-tasks",
+			"wb_search_min", wbSearchMin.String(), "reseller_lane_cutoff", resellerLaneCutoff.String())
+	}
+
 	log.Info("scheduler started",
 		"default_interval", defaultInterval.String(),
+		"wb_search_min", wbSearchMin.String(),
 		"ozon_min_interval", ozonMinInterval.String(),
 		"ozon_mult", ozonMult,
 		"tick", tick.String())
 
 	go runProductScheduler(ctx, log, productRepo, productProducer, ozonProducer, tick, defaultInterval, ozonMinInterval, ozonMult)
-	go runSearchScheduler(ctx, log, searchQueryRepo, searchProducer, resellerProducer, tick, defaultInterval, ozonSearchMin, ozonSearchJitter)
+	go runSearchScheduler(ctx, log, searchQueryRepo, searchProducer, resellerProducer, tick, defaultInterval, ozonSearchMin, ozonSearchJitter, wbSearchMin)
 
 	<-ctx.Done()
 	return nil
@@ -319,9 +340,10 @@ func runSearchScheduler(
 	searchProducer, resellerProducer *kafka.Producer,
 	tickInterval, defaultInterval, ozonSearchMin time.Duration,
 	ozonSearchJitter float64,
+	wbSearchMin time.Duration,
 ) {
 	tick := func() {
-		if err := searchSchedulerTick(ctx, log, queryRepo, searchProducer, resellerProducer, defaultInterval, ozonSearchMin, ozonSearchJitter); err != nil {
+		if err := searchSchedulerTick(ctx, log, queryRepo, searchProducer, resellerProducer, defaultInterval, ozonSearchMin, ozonSearchJitter, wbSearchMin); err != nil {
 			log.Error("search scheduler tick failed", "err", err)
 		}
 	}
@@ -389,6 +411,7 @@ func searchSchedulerTick(
 	searchProducer, resellerProducer *kafka.Producer,
 	defaultInterval, ozonSearchMin time.Duration,
 	ozonSearchJitter float64,
+	wbSearchMin time.Duration,
 ) error {
 	rows, err := queryRepo.GetSchedulable(ctx)
 	if err != nil {
@@ -446,6 +469,17 @@ func searchSchedulerTick(
 			if a.mp == "ozon" && a.eff < ozonSearchMin {
 				a.eff = scaleDuration(ozonSearchMin,
 					jitterFactor(id, a.lastEn, ozonSearchJitter))
+			}
+		}
+	}
+
+	// Пол интервала для WB-поиска (см. wbSearchMin в run): выравнивает приток
+	// задач с тем, что дорожка реально успевает. Без джиттера и всегда ПОСЛЕ
+	// Ozon-пола — площадки не пересекаются, порядок не важен, но так читается.
+	if wbSearchMin > 0 {
+		for _, a := range byQuery {
+			if a.mp == "wildberries" && a.eff < wbSearchMin {
+				a.eff = wbSearchMin
 			}
 		}
 	}
