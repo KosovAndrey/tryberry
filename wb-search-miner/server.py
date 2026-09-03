@@ -223,6 +223,24 @@ def _parse_proxy(url: str):
     return proxy
 
 
+# ── Память своего контейнера (cgroup v2 виден изнутри) ───────────────────────
+# Метрик уровня контейнера в Prometheus нет: cAdvisor не подключён, и вопрос
+# «расход вышел на плато или ползёт» приходилось решать самодельными скриптами
+# по ssh (02-09-2026 так и ловили рост ali). Сайдкар видит свой cgroup сам —
+# дешевле отдать два числа в /metrics и получить историю с алертом.
+_CGROUP_CURRENT = "/sys/fs/cgroup/memory.current"
+_CGROUP_MAX = "/sys/fs/cgroup/memory.max"
+
+
+def _cgroup_bytes(path: str):
+    """Число из файла cgroup или None (нет cgroup v2 / "max" / нет доступа)."""
+    try:
+        with open(path) as f:
+            return int(f.read().strip())
+    except Exception:  # noqa: BLE001
+        return None
+
+
 # ── Дорожка ───────────────────────────────────────────────────────────────────
 class Lane:
     def __init__(self, idx: int, proxy: str):
@@ -680,6 +698,25 @@ async def handle_health(request: web.Request) -> web.Response:
         status=200 if healthy > 0 else 503)
 
 
+def _memory_metric_lines():
+    """Расход и лимит cgroup. Имя ОБЩЕЕ для всех сайдкаров (не с префиксом
+    площадки): различает их лейбл service из scrape-конфига, и тогда одного
+    правила алерта хватает на все три. Нет cgroup v2 или лимита — строку не
+    отдаём вовсе, чтобы не врать нулём."""
+    out = []
+    cur = _cgroup_bytes(_CGROUP_CURRENT)
+    lim = _cgroup_bytes(_CGROUP_MAX)
+    if cur is not None:
+        out += ["# HELP sidecar_memory_bytes Текущий расход памяти контейнера (cgroup v2)",
+                "# TYPE sidecar_memory_bytes gauge",
+                f"sidecar_memory_bytes {cur}"]
+    if lim is not None:
+        out += ["# HELP sidecar_memory_limit_bytes Потолок памяти контейнера (mem_limit)",
+                "# TYPE sidecar_memory_limit_bytes gauge",
+                f"sidecar_memory_limit_bytes {lim}"]
+    return out
+
+
 async def handle_metrics(request: web.Request) -> web.Response:
     pool: Pool = request.app["pool"]
     lines = [
@@ -712,6 +749,7 @@ async def handle_metrics(request: web.Request) -> web.Response:
         "# TYPE wb_search_miner_stuck_lanes gauge",
         f"wb_search_miner_stuck_lanes {pool.stuck_lanes(now)}",
     ]
+    lines.extend(_memory_metric_lines())
     return web.Response(text="\n".join(lines) + "\n", content_type="text/plain")
 
 

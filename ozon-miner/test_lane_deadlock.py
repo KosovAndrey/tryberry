@@ -173,21 +173,38 @@ async def test_stuck_lane_does_not_freeze_pool():
 async def test_planned_recycle():
     """E. Зажившийся браузер планово пересоздаётся (инцидент 02-09-2026)."""
     lane = make_lane()
-    lane._launched_at = server.time.monotonic()
-    lane._age_limit = 0.3
-    lane._next_warm = server.time.monotonic() + 9999  # backoff от прошлых неудач
-    pool = server.Pool([lane])
-
     now = server.time.monotonic()
+    lane._launched_at = now
+    lane._age_limit = 0.3
+
+    # ── Чистая логика, без сна: именно она задаёт поведение, и проверять её
+    # таймингами нельзя (первая версия теста ловила «ровно один recycle» за
+    # окно, в которое дорожка успевала состариться дважды, и проходила лишь
+    # по удачному совпадению).
     check(not lane.due_recycle(now), "молодой браузер не трогаем")
+    check(lane.due_recycle(now + 0.4), "зажившийся просится на recycle")
+
+    lane._launched_at = now + 0.4          # так делает _launch() после пересоздания
+    check(not lane.due_recycle(now + 0.5), "после пересоздания снова молодой — цикла нет")
+
+    lane.healthy = False
+    check(not lane.due_recycle(now + 10), "нездоровую дорожку recycle не перехватывает")
+    lane.healthy = True
+
+    saved, server.LANE_MAX_AGE_S = server.LANE_MAX_AGE_S, 0
+    check(not lane.due_recycle(now + 10), "нулём recycle выключается")
+    server.LANE_MAX_AGE_S = saved
+
+    # ── И через обслуживающий цикл: дорожка реально уходит на пересоздание,
+    # прогревается и остаётся здоровой (сколько раз за окно — не наше дело).
+    lane._launched_at = server.time.monotonic() - 10
+    lane._next_warm = server.time.monotonic() + 9999   # backoff от прошлых неудач
+    pool = server.Pool([lane])
 
     warmed = []
     orig_warm = server.Lane.warm
 
     async def fake_warm(self):
-        # Повторяем то, что делает настоящий путь warm() → _relaunch() → _launch():
-        # новый браузер обнуляет возраст и снимает пометку на пересоздание. Без
-        # этого дорожка вечно «старая» и уходит на recycle каждый тик.
         warmed.append(self.idx)
         self._needs_relaunch = False
         self._launched_at = server.time.monotonic()
@@ -196,25 +213,14 @@ async def test_planned_recycle():
     server.Lane.warm = fake_warm
     try:
         loop_task = asyncio.ensure_future(pool.maintenance_loop())
-        await asyncio.sleep(0.8)
+        await asyncio.sleep(0.5)
         loop_task.cancel()
     finally:
         server.Lane.warm = orig_warm
 
-    check(warmed == [0], f"дорожка ушла на recycle РОВНО раз и прогрелась: {warmed}")
+    check(len(warmed) >= 1, f"дорожка ушла на recycle и прогрелась заново: {warmed}")
     check(lane.healthy and not lane._needs_relaunch,
           "после recycle дорожка снова здорова и не висит в ожидании")
-
-    # Нездоровую дорожку recycle не трогает — её чинит due_rewarm своим путём.
-    lane.healthy = False
-    check(not lane.due_recycle(server.time.monotonic()),
-          "нездоровую дорожку recycle не перехватывает")
-
-    # LANE_MAX_AGE_S=0 — рычаг выключен целиком.
-    saved, server.LANE_MAX_AGE_S = server.LANE_MAX_AGE_S, 0
-    lane.healthy = True
-    check(not lane.due_recycle(server.time.monotonic()), "нулём recycle выключается")
-    server.LANE_MAX_AGE_S = saved
 
 
 async def test_last_success_age():
