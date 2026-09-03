@@ -705,6 +705,25 @@ async def handle_health(request: web.Request) -> web.Response:
         status=200 if healthy > 0 else 503)
 
 
+def _memory_metric_lines():
+    """Расход и лимит cgroup. Имя ОБЩЕЕ для всех сайдкаров (не с префиксом
+    площадки): различает их лейбл service из scrape-конфига, и тогда одного
+    правила алерта хватает на все три. Нет cgroup v2 или лимита — строку не
+    отдаём вовсе, чтобы не врать нулём."""
+    out = []
+    cur = _cgroup_bytes(_CGROUP_CURRENT)
+    lim = _cgroup_bytes(_CGROUP_MAX)
+    if cur is not None:
+        out += ["# HELP sidecar_memory_bytes Текущий расход памяти контейнера (cgroup v2)",
+                "# TYPE sidecar_memory_bytes gauge",
+                f"sidecar_memory_bytes {cur}"]
+    if lim is not None:
+        out += ["# HELP sidecar_memory_limit_bytes Потолок памяти контейнера (mem_limit)",
+                "# TYPE sidecar_memory_limit_bytes gauge",
+                f"sidecar_memory_limit_bytes {lim}"]
+    return out
+
+
 async def handle_metrics(request: web.Request) -> web.Response:
     pool: Pool = request.app["pool"]
     lines = [
@@ -738,6 +757,7 @@ async def handle_metrics(request: web.Request) -> web.Response:
         "# TYPE ali_miner_stuck_lanes gauge",
         f"ali_miner_stuck_lanes {pool.stuck_lanes(now)}",
     ]
+    lines.extend(_memory_metric_lines())
     return web.Response(text="\n".join(lines) + "\n", content_type="text/plain")
 
 
