@@ -230,6 +230,7 @@ def _parse_proxy(url: str):
 # дешевле отдать два числа в /metrics и получить историю с алертом.
 _CGROUP_CURRENT = "/sys/fs/cgroup/memory.current"
 _CGROUP_MAX = "/sys/fs/cgroup/memory.max"
+_CGROUP_STAT = "/sys/fs/cgroup/memory.stat"
 
 
 def _cgroup_bytes(path: str):
@@ -698,18 +699,44 @@ async def handle_health(request: web.Request) -> web.Response:
         status=200 if healthy > 0 else 503)
 
 
+def _cgroup_stat(field: str):
+    """Поле из memory.stat (anon/file/...) или None."""
+    try:
+        with open(_CGROUP_STAT) as f:
+            for line in f:
+                k, _, v = line.partition(" ")
+                if k == field:
+                    return int(v)
+    except Exception:  # noqa: BLE001
+        return None
+    return None
+
+
 def _memory_metric_lines():
-    """Расход и лимит cgroup. Имя ОБЩЕЕ для всех сайдкаров (не с префиксом
-    площадки): различает их лейбл service из scrape-конфига, и тогда одного
-    правила алерта хватает на все три. Нет cgroup v2 или лимита — строку не
-    отдаём вовсе, чтобы не врать нулём."""
+    """Расход, АНОНИМНАЯ часть и лимит cgroup. Имя ОБЩЕЕ для всех сайдкаров (не
+    с префиксом площадки): различает их лейбл service из scrape-конфига, и тогда
+    одного правила алерта хватает на все три. Нет cgroup v2 или лимита — строку
+    не отдаём вовсе, чтобы не врать нулём.
+
+    ЗАЧЕМ ОТДЕЛЬНО anon. memory.current включает страничный кэш, а он
+    вытесняемый: контейнер спокойно стоит у самого потолка, ядро сбрасывает кэш,
+    расход откатывается — и так по кругу, без всякой беды. У ozon-miner 03-09
+    максимум за сутки был 5.99 ГиБ из 6 при полном здравии, и алерт на
+    memory.current звенел впустую. Сколько осталось до OOM показывает ТОЛЬКО
+    anon: убить процесс ядро может, лишь когда не влезает невытесняемое.
+    Поэтому SidecarMemoryHigh считает по anon, а current остаётся для картины."""
     out = []
     cur = _cgroup_bytes(_CGROUP_CURRENT)
+    anon = _cgroup_stat("anon")
     lim = _cgroup_bytes(_CGROUP_MAX)
     if cur is not None:
-        out += ["# HELP sidecar_memory_bytes Текущий расход памяти контейнера (cgroup v2)",
+        out += ["# HELP sidecar_memory_bytes Расход памяти контейнера ВКЛЮЧАЯ вытесняемый кэш (cgroup v2)",
                 "# TYPE sidecar_memory_bytes gauge",
                 f"sidecar_memory_bytes {cur}"]
+    if anon is not None:
+        out += ["# HELP sidecar_memory_anon_bytes Анонимная (невытесняемая) память — она упирается в лимит и вызывает OOM",
+                "# TYPE sidecar_memory_anon_bytes gauge",
+                f"sidecar_memory_anon_bytes {anon}"]
     if lim is not None:
         out += ["# HELP sidecar_memory_limit_bytes Потолок памяти контейнера (mem_limit)",
                 "# TYPE sidecar_memory_limit_bytes gauge",
