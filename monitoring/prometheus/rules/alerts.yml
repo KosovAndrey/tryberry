@@ -536,13 +536,21 @@ groups:
           summary: "api: апдейты Telegram не пишутся в Kafka — бот не отвечает"
           description: "Продюс в topic telegram-updates падает 5+ минут подряд, успешных записей нет. Апдейты не потеряны (оффсет getUpdates не подтверждается и Telegram отдаст их снова), но обработки нет. Смотреть брокер: docker logs pt_kafka --tail 100; логи приёмника: docker logs pt_api | grep -E 'publish update|ingest update failed'."
 
-      # Все отправки канала падают (а не «нет трафика»): error>0 БЕЗ ok за 15м.
+      # Все отправки канала падают (а не «нет трафика»): error>2 БЕЗ ok за 15м.
       # unless вместо and — если ok-серия за окно пуста, and не сматчился бы и
       # алерт молчал бы ровно тогда, когда всё лежит. Ловит и per-channel отказ
       # (отозвали только VK-токен), TG/VK/MAX — отдельными алертами.
+      #
+      # Правку 04-09-2026 диктует ложная тревога: в тихое окно ЕДИНСТВЕННОЙ
+      # отправкой был алерт юзеру, который заблокировал бота, — error=1, ok=0,
+      # critical при полностью живом канале (xray качал, токен целый). Закрыто с
+      # двух сторон: отказ получателя теперь считается status="rejected" и сюда
+      # не попадает (см. statusLabel в cmd/notifier/delivery.go), плюс порог >2 —
+      # реальный отказ канала даёт ошибки пачкой (кафка ретраит транзиентные),
+      # одиночная сетевая осечка больше не будит.
       - alert: NotificationChannelFailing
         expr: |
-          sum by (channel) (increase(tryberrybot_notifications_delivered_total{status="error"}[15m])) > 0
+          sum by (channel) (increase(tryberrybot_notifications_delivered_total{status="error"}[15m])) > 2
           unless
           sum by (channel) (increase(tryberrybot_notifications_delivered_total{status="ok"}[15m])) > 0
         for: 5m
@@ -550,7 +558,7 @@ groups:
           severity: critical
         annotations:
           summary: "Доставка в {{ $labels.channel }} полностью падает"
-          description: "За 15 мин все отправки в {{ $labels.channel }} с ошибкой, ни одной успешной. 401 = битый токен канала (.env/ЛК); иначе egress. Логи: docker logs pt_notifier --since 30m | grep -iE 'error|unauthorized'."
+          description: "За 15 мин все отправки в {{ $labels.channel }} с ошибкой, ни одной успешной (отказы получателей status=rejected сюда не входят). 401 = битый токен канала (.env/ЛК); иначе egress. Логи: docker logs pt_notifier --since 30m | grep -iE 'error|unauthorized'."
   # ── Ресурсы хоста ──────────────────────────────────────────────────────────
   # Заведено 20-08-2026 после первой глобальной OOM-аварии: ali-miner дорос по
   # аптайму до 6.7 ГиБ, хост (15 ГиБ, своп забит на 92%) исчерпал память,

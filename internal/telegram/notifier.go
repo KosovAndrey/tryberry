@@ -21,6 +21,44 @@ import (
 // (403), чат не найден и т.п. Ретрай не поможет — звать на нём кафку-петлю нельзя.
 var ErrTelegramPermanent = errors.New("telegram permanent error")
 
+// ErrTelegramRecipientGone — частный случай перманентной ошибки: недоставляем
+// КОНКРЕТНЫЙ получатель (заблокировал бота, удалил аккаунт, чат не найден), а не
+// сломан канал. Оборачивает ErrTelegramPermanent, поэтому старые проверки
+// errors.Is(err, ErrTelegramPermanent) продолжают ловить и его.
+//
+// Заведён 04-09-2026: без этого различия отказ одного получателя считался
+// метрикой как отказ отправки (status="error"), и на нашем объёме (десятки
+// юзеров) ОДИН заблокировавший бота юзер в тихие 15 минут поднимал critical
+// NotificationChannelFailing «доставка в tg полностью падает» при полностью
+// здоровом канале.
+var ErrTelegramRecipientGone = errors.New("telegram recipient gone")
+
+// classifyError — ошибка из отказа Telegram (вызывается только при ok:false).
+// 4xx кроме 429 перманентны: ретрай не поможет, звать на нём кафку-петлю нельзя.
+// Среди них отдельно помечаем отказ ПОЛУЧАТЕЛЯ: 403 Telegram отдаёт только по
+// нему (блокировка, кик, деактивация), из 400-х по получателю бьёт «chat not
+// found». Остальные 400 — НАШ баг (кривая разметка, битая картинка, длинное
+// сообщение) и обязаны остаться обычной ошибкой канала.
+func classifyError(status int, description string) error {
+	if status < 400 || status >= 500 || status == http.StatusTooManyRequests {
+		return fmt.Errorf("telegram error: %s", description)
+	}
+	if recipientGone(status, description) {
+		return fmt.Errorf("%w: %w: telegram error: %s", ErrTelegramPermanent, ErrTelegramRecipientGone, description)
+	}
+	return fmt.Errorf("%w: telegram error: %s", ErrTelegramPermanent, description)
+}
+
+func recipientGone(status int, description string) bool {
+	if status == http.StatusForbidden {
+		return true
+	}
+	d := strings.ToLower(description)
+	return strings.Contains(d, "chat not found") ||
+		strings.Contains(d, "user is deactivated") ||
+		strings.Contains(d, "peer_id_invalid")
+}
+
 type Notifier struct {
 	token        string
 	client       *http.Client
@@ -119,7 +157,9 @@ func (n *Notifier) SendPriceAlert(ctx context.Context, a PriceAlert) error {
 		// трансграничных товаров без basket-картинки, «wrong type of the web page
 		// content») → шлём текстом, чтобы алерт всё равно дошёл. Логируем: иначе
 		// потеря фото невидима («было фото или нет?» не ответить по логам).
-		if errors.Is(err, ErrTelegramPermanent) {
+		// Получатель недоставляем (заблокировал бота) — текстом тоже не пройдёт,
+		// вторая попытка только жжёт лимит; отдаём ошибку сразу.
+		if errors.Is(err, ErrTelegramPermanent) && !errors.Is(err, ErrTelegramRecipientGone) {
 			n.log.Warn("price alert photo rejected, falling back to text", "image_url", a.ImageURL, "err", err)
 			return n.sendMessage(ctx, a.ChatID, caption, keyboard)
 		}
@@ -241,7 +281,7 @@ func (n *Notifier) SendSearchAlert(ctx context.Context, a SearchAlert) error {
 	if hero := a.Items[0].ImageURL; hero != "" {
 		caption := renderSearchAlert(a, searchCaptionBudget)
 		err := n.sendPhoto(ctx, a.ChatID, hero, caption, keyboard)
-		if errors.Is(err, ErrTelegramPermanent) {
+		if errors.Is(err, ErrTelegramPermanent) && !errors.Is(err, ErrTelegramRecipientGone) {
 			n.log.Warn("search alert hero photo rejected, falling back to text", "image_url", hero, "err", err)
 			return n.sendMessage(ctx, a.ChatID, renderSearchAlert(a, 0), keyboard)
 		}
@@ -431,12 +471,7 @@ func (n *Notifier) call(ctx context.Context, method string, payload any) error {
 		return fmt.Errorf("decode response: %w", err)
 	}
 	if !tgResp.OK {
-		// 4xx (кроме 429) — перманентно: запрос некорректен / недоставляем. Ретрай
-		// бесполезен, помечаем sentinel'ом, чтобы выше не зациклить кафку.
-		if resp.StatusCode >= 400 && resp.StatusCode < 500 && resp.StatusCode != http.StatusTooManyRequests {
-			return fmt.Errorf("%w: telegram error: %s", ErrTelegramPermanent, tgResp.Description)
-		}
-		return fmt.Errorf("telegram error: %s", tgResp.Description)
+		return classifyError(resp.StatusCode, tgResp.Description)
 	}
 	return nil
 }

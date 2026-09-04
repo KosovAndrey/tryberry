@@ -69,13 +69,15 @@ var (
 	// NotificationsDelivered — попытки доставки уведомлений по каналам
 	// (notifier, deliverer). channel=none/status=skipped — доставлять
 	// было некуда (например, VK-only юзер при выключенном VK).
+	// status=rejected — получатель недоставляем (заблокировал бота, удалил
+	// аккаунт): канал жив, алерт NotificationChannelFailing это не считает.
 	NotificationsDelivered = promauto.NewCounterVec(
 		prometheus.CounterOpts{
 			Namespace: namespace,
 			Name:      "notifications_delivered_total",
 			Help:      "Notification delivery attempts by channel",
 		},
-		[]string{"channel", "status"}, // tg|vk|none × ok|error|skipped
+		[]string{"channel", "status"}, // tg|vk|max|none|synth × ok|error|rejected|skipped
 	)
 
 	// VKMessages — входящие личные сообщения VK-бота по распознанному
