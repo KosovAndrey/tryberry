@@ -220,8 +220,9 @@ func (d *deliverer) deliver(ctx context.Context, userID, telegramID int64, sendT
 	// НЕ ретраим — иначе одно сообщение зацикливает kafka-консьюмер и копит лаг.
 	// Транзиентные (429/сеть, любые VK) — отдаём наверх для ретрая.
 	if errors.Is(tgErr, telegram.ErrTelegramPermanent) && vkErr == nil && mxErr == nil {
+		// Исход уже посчитан выше (statusLabel: rejected или error) — второй раз
+		// не инкрементим, иначе одна отправка даёт две записи в метрике.
 		d.log.Error("deliver: tg permanent, skipping (no kafka retry)", "user_id", userID, "err", tgErr)
-		metrics.NotificationsDelivered.WithLabelValues("tg", "skipped").Inc()
 		return nil
 	}
 	if tgErr != nil {
@@ -233,11 +234,20 @@ func (d *deliverer) deliver(ctx context.Context, userID, telegramID int64, sendT
 	return mxErr
 }
 
+// statusLabel — исход одной отправки для метрики. Отдельная метка rejected у
+// «получатель недоставляем» (заблокировал бота, удалил аккаунт) принципиальна:
+// это НЕ отказ канала, и алерт NotificationChannelFailing её не считает. Иначе
+// один заблокировавший юзер в тихое окно даёт critical при живом канале
+// (ложная тревога 04-09-2026).
 func statusLabel(err error) string {
-	if err != nil {
+	switch {
+	case err == nil:
+		return "ok"
+	case errors.Is(err, telegram.ErrTelegramRecipientGone):
+		return "rejected"
+	default:
 		return "error"
 	}
-	return "ok"
 }
 
 func (d *deliverer) SendPriceAlert(ctx context.Context, a telegram.PriceAlert) error {
