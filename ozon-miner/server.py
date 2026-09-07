@@ -33,6 +33,7 @@ import logging
 import os
 import random
 import re
+import shutil
 import time
 from urllib.parse import unquote, urlparse
 
@@ -155,6 +156,30 @@ _last_success_at = time.monotonic()
 def _mark_success():
     global _last_success_at
     _last_success_at = time.monotonic()
+
+
+def _sanitize_addons() -> None:
+    """Снести каталоги дефолтных аддонов camoufox, оставшиеся БЕЗ manifest.json.
+
+    Инцидент 07-09-2026: при сборке образа не скачался uBO (camoufox печатает
+    "Failed to download and extract", но пустой каталог addons/UBO оставляет).
+    При запуске camoufox видит существующий каталог, считает аддон готовым и
+    падает на confirm_paths — не поднялась НИ ОДНА дорожка, Ozon встал целиком.
+    Пустой каталог — единственное, что мешает camoufox докачать аддон самому,
+    поэтому убираем его перед каждым стартом браузера: следующая попытка качает
+    заново. Сборка такое теперь ловит (fetch_addons.py), но рантайм не должен
+    зависеть от того, чем собран образ.
+    """
+    try:
+        from camoufox.addons import DefaultAddons, get_addon_path
+    except Exception:  # noqa: BLE001 — камуфокса нет (тесты) → чинить нечего
+        return
+    for addon in DefaultAddons:
+        path = get_addon_path(addon.name)
+        if os.path.isdir(path) and not os.path.exists(os.path.join(path, "manifest.json")):
+            log.warning("аддон %s распакован не полностью (%s) — сношу, camoufox докачает",
+                        addon.name, path)
+            shutil.rmtree(path, ignore_errors=True)
 
 
 # Сколько раз массовый поток (товары/выдача/витрина) не нашёл ЖИВОЙ АНОНИМНОЙ
@@ -375,6 +400,7 @@ class Lane:
     async def _launch(self):
         """Поднять camoufox + страницу + куки (без прогрева). Общий код для
         первого старта и для пересоздания после смерти драйвера."""
+        _sanitize_addons()
         kw = {"headless": HEADLESS}
         proxy = _parse_proxy(self.proxy)
         if proxy:
