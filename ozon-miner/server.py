@@ -157,6 +157,19 @@ def _mark_success():
     _last_success_at = time.monotonic()
 
 
+# Сколько раз массовый поток (товары/выдача/витрина) не нашёл ЖИВОЙ АНОНИМНОЙ
+# дорожки. Раньше в этот момент был тихий фолбэк на authed — 07-09-2026 он десять
+# часов гнал ~250 запросов/час под аккаунтом, пока FAB держал анонимные дорожки
+# в отказе. Теперь отдаём 502 (Go зажигает брейкер, площадка деградирует ЯВНО),
+# а счётчик показывает, что именно это и происходит.
+_anon_starved_total = 0
+
+
+def _mark_anon_starved():
+    global _anon_starved_total
+    _anon_starved_total += 1
+
+
 async def _quiet_call(coro, timeout: float, what: str, idx: int):
     """Вызов драйвера с дедлайном: тайм-аут/ошибка → False, без исключения наверх.
     Для необязательных операций (нудж, egress-IP, закрытие браузера), где важно
@@ -647,13 +660,13 @@ class Pool:
         self.lanes = lanes
 
     def pick(self, product_id: str):
-        """Дорожка под обычный товар. Предпочитаем АНОНИМНЫЕ живые (аккаунт бережём
-        от бана — он нужен только под 18+), шардируя по product_id для липкости
-        товар→дорожка. Если анонимных нет — фолбэк на любую живую (в т.ч. authed)."""
+        """Дорожка под обычный товар: ТОЛЬКО анонимная живая, с шардированием по
+        product_id для липкости товар→дорожка. Нет анонимных → None (502), а НЕ
+        фолбэк на authed: аккаунт нужен под 18+, и гонять по нему массовый поток
+        значит менять обратимую потерю площадки на необратимый бан аккаунта."""
         pool = [l for l in self.lanes if l.healthy and not l.authed]
         if not pool:
-            pool = [l for l in self.lanes if l.healthy]
-        if not pool:
+            _mark_anon_starved()
             return None
         try:
             i = int(product_id) % len(pool)
@@ -668,18 +681,22 @@ class Pool:
         return random.choice(alive) if alive else None
 
     def pick_any(self):
-        """Любая живая дорожка (поиск/витрина — нет product_id для шардирования).
-        Предпочитаем анонимные, чтобы не гонять аккаунт по массовому потоку."""
+        """Любая живая АНОНИМНАЯ дорожка (поиск/витрина — нет product_id для
+        шардирования). Как и pick(), на authed не фолбэчит."""
         pool = [l for l in self.lanes if l.healthy and not l.authed]
         if not pool:
-            pool = [l for l in self.lanes if l.healthy]
-        return random.choice(pool) if pool else None
+            _mark_anon_starved()
+            return None
+        return random.choice(pool)
 
     def healthy_count(self) -> int:
         return sum(1 for l in self.lanes if l.healthy)
 
     def authed_healthy_count(self) -> int:
         return sum(1 for l in self.lanes if l.healthy and l.authed)
+
+    def anon_healthy_count(self) -> int:
+        return sum(1 for l in self.lanes if l.healthy and not l.authed)
 
     def stuck_lanes(self, now: float) -> int:
         return sum(1 for l in self.lanes if l.stuck_for(now) > 0)
@@ -768,7 +785,8 @@ async def handle_scrape(request: web.Request) -> web.Response:
     lane = pool.pick_authed() if authed else pool.pick(product_id)
     if lane is None:
         return web.Response(status=502,
-                            text="no healthy authed lanes" if authed else "no healthy lanes")
+                            text="no healthy authed lanes" if authed
+                            else "no healthy anonymous lanes")
     status, body = await lane.fetch_path(_product_path(product_id), f"product:{product_id}")
     if status == 0:
         return web.Response(status=502, text="lane fetch failed")
@@ -787,7 +805,7 @@ async def handle_search(request: web.Request) -> web.Response:
         return web.json_response({"error": "text required"}, status=400)
     lane = pool.pick_any()
     if lane is None:
-        return web.Response(status=502, text="no healthy lanes")
+        return web.Response(status=502, text="no healthy anonymous lanes")
     status, body = await lane.fetch_path(_search_path(text), f"search:{text[:40]}")
     if status == 0:
         return web.Response(status=502, text="lane fetch failed")
@@ -806,7 +824,7 @@ async def handle_seller(request: web.Request) -> web.Response:
         return web.json_response({"error": "path required"}, status=400)
     lane = pool.pick_any()
     if lane is None:
-        return web.Response(status=502, text="no healthy lanes")
+        return web.Response(status=502, text="no healthy anonymous lanes")
     status, body = await lane.fetch_path(_seller_path(seg), f"seller:{seg[:40]}")
     if status == 0:
         return web.Response(status=502, text="lane fetch failed")
@@ -825,7 +843,7 @@ async def handle_page(request: web.Request) -> web.Response:
         return web.json_response({"error": "path required (must start with /)"}, status=400)
     lane = pool.pick_any()
     if lane is None:
-        return web.Response(status=502, text="no healthy lanes")
+        return web.Response(status=502, text="no healthy anonymous lanes")
     status, body = await lane.fetch_path(path, f"page:{path[:60]}")
     if status == 0:
         return web.Response(status=502, text="lane fetch failed")
@@ -906,6 +924,15 @@ async def handle_metrics(request: web.Request) -> web.Response:
         "# HELP ozon_miner_authed_lanes Число живых АВТОРИЗОВАННЫХ дорожек (0 = 18+ товары недоступны)",
         "# TYPE ozon_miner_authed_lanes gauge",
         f"ozon_miner_authed_lanes {pool.authed_healthy_count()}",
+        # Массовый поток обслуживают ТОЛЬКО анонимные дорожки, поэтому 0 здесь =
+        # Ozon не скрейпится вовсе, даже когда healthy_lanes>0 (жива одна authed).
+        # На этом висит алерт: healthy_lanes==0 такую ситуацию не ловит.
+        "# HELP ozon_miner_anon_lanes Число живых АНОНИМНЫХ дорожек (0 = массовый поток не обслуживается)",
+        "# TYPE ozon_miner_anon_lanes gauge",
+        f"ozon_miner_anon_lanes {pool.anon_healthy_count()}",
+        "# HELP ozon_miner_anon_starved_total Отказов массовому потоку из-за отсутствия живой анонимной дорожки",
+        "# TYPE ozon_miner_anon_starved_total counter",
+        f"ozon_miner_anon_starved_total {_anon_starved_total}",
         "# HELP ozon_miner_stuck_lanes Дорожки с локом, занятым дольше порога (залипший драйвер)",
         "# TYPE ozon_miner_stuck_lanes gauge",
         f"ozon_miner_stuck_lanes {pool.stuck_lanes(time.monotonic())}",
