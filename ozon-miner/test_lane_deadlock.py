@@ -13,10 +13,13 @@
   E. зажившийся браузер планово пересоздаётся — инцидент 02-09-2026: за 5 суток
      аптайма camoufox перестаёт проходить FAB, пул тихо деградировал до одной
      дорожки из шести и p95 скрейпа уехал на 26-29с.
-  F. дорожка, которая не может прогреться, получает НОВЫЙ браузер — инцидент
-     08-09-2026: recycle из E берёт только здоровые дорожки, а warm() браузер не
-     пересоздаёт; анонимные дорожки шесть часов перепрогревались на том же
-     зажившемся профиле (35 попыток, один успех) и поднялись только руками.
+  F. дорожка, которая не может прогреться, получает НОВЫЙ браузер — recycle из E
+     берёт только здоровые дорожки, а warm() браузер не пересоздаёт: без этого
+     мёртвая дорожка вечно ре-навигирует один и тот же профиль.
+  G. ПОСЛЕДНЮЮ живую дорожку своего типа recycle по возрасту не трогает —
+     инцидент 08-09-2026: пересоздание в 02:15 и 02:45 UTC выбросило две
+     работавшие анонимные сессии, новых FAB с нашего IP не выдал, и пул шесть
+     часов стоял с нулём анонимных дорожек (1109 отказов массовому потоку).
 
 Запуск: python3 ozon-miner/test_lane_deadlock.py
 Зависимостей нет — aiohttp/camoufox замоканы (в контейнере они есть, но тесту
@@ -279,6 +282,59 @@ async def test_relaunch_after_failed_warms():
     check(relaunched == [lane.idx], f"warm() пересоздал браузер: {relaunched}")
 
 
+async def test_recycle_keeps_last_lane():
+    """G. Последнюю живую АНОНИМНУЮ дорожку recycle по возрасту не забирает."""
+    anon_a, anon_b = make_lane(0), make_lane(2)
+    authed = make_lane(1)
+    authed.authed = True
+    pool = server.Pool([anon_a, authed, anon_b])
+
+    check(not pool._only_live_anon(authed), "на authed правило не распространяется")
+    check(not pool._only_live_anon(anon_a), "пока живы обе анонимные — не последняя")
+    anon_b.healthy = False
+    check(pool._only_live_anon(anon_a), "напарница легла — anon_a стала последней")
+    check(not server.Pool([anon_a])._only_live_anon(anon_a),
+          "в пуле с одной анонимной улик нет — правило молчит")
+
+    # Состарим единственную живую анонимную и прокрутим обслуживающий цикл.
+    now = server.time.monotonic()
+    anon_a._launched_at = now - 100
+    anon_a._age_limit = 0.3
+    check(anon_a.due_recycle(server.time.monotonic()), "по возрасту она просится на recycle")
+
+    async def noop_service(self, lane):
+        lane._servicing = False
+
+    orig = server.Pool._service_lane
+    server.Pool._service_lane = noop_service
+    try:
+        loop_task = asyncio.ensure_future(pool.maintenance_loop())
+        await asyncio.sleep(0.5)
+        loop_task.cancel()
+    finally:
+        server.Pool._service_lane = orig
+
+    check(anon_a.healthy and not anon_a._needs_relaunch,
+          "живую последнюю анонимную дорожку не выбросили")
+    check(anon_a._recycle_deferred and pool.deferred_recycles() == 1,
+          "отложенный recycle виден в метрике")
+
+    # Напарница вернулась — запрет снимается, recycle идёт штатно.
+    anon_b.healthy = True
+    server.Pool._service_lane = noop_service
+    try:
+        loop_task = asyncio.ensure_future(pool.maintenance_loop())
+        await asyncio.sleep(0.5)
+        loop_task.cancel()
+    finally:
+        server.Pool._service_lane = orig
+
+    check(not anon_a.healthy and anon_a._needs_relaunch,
+          "есть кем заменить — recycle отработал")
+    check(not anon_a._recycle_deferred and pool.deferred_recycles() == 0,
+          "флаг отложенности снят")
+
+
 async def test_last_success_age():
     """D. Метрика возраста последнего успеха — на ней висит алерт OzonMinerStale."""
     server._mark_success()
@@ -290,7 +346,8 @@ async def test_last_success_age():
 async def main():
     for t in (test_fetch_deadline, test_watchdog_frees_stuck_lane,
               test_stuck_lane_does_not_freeze_pool, test_planned_recycle,
-              test_relaunch_after_failed_warms, test_last_success_age):
+              test_relaunch_after_failed_warms, test_recycle_keeps_last_lane,
+              test_last_success_age):
         print(f"\n{t.__doc__.splitlines()[0]}")
         await t()
     print("\nПРОВАЛЫ ЕСТЬ" if check.failed else "\nвсе проверки прошли")
