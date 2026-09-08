@@ -14,15 +14,20 @@ ENV PYTHONUNBUFFERED=1 \
 
 WORKDIR /app
 
-COPY requirements.txt .
+COPY requirements.txt fetch_addons.py ./
 # pip + браузеры + их OS-зависимости. (Этот слой кэшируется.)
 #  - patchright install chromium — запасной Chromium-движок (+ его deps).
 #  - camoufox fetch — скачивает анти-детект Firefox-сборку (основной движок).
+#  - fetch_addons.py — ДОкачивает дефолтные аддоны camoufox с проверкой и роняет
+#    сборку, если не вышло: сам `camoufox fetch` неудачу закачки только печатает
+#    и оставляет пустой addons/UBO, из-за чего браузер потом не стартует вовсе
+#    (инцидент 07-09-2026 — пул умер целиком на "manifest.json is missing").
 #  - playwright install-deps firefox — системные либы для Firefox/camoufox
 #    (camoufox тянет playwright, поэтому CLI доступен; ставит GTK/X11/звук и пр.).
 RUN pip install -r requirements.txt \
  && patchright install --with-deps chromium \
  && python -m camoufox fetch \
+ && python fetch_addons.py \
  && playwright install-deps firefox \
  && apt-get clean \
  && rm -rf /var/lib/apt/lists/* /root/.cache/pip

@@ -33,6 +33,7 @@ import logging
 import os
 import random
 import re
+import shutil
 import time
 from urllib.parse import unquote, urlparse
 
@@ -86,6 +87,15 @@ LANE_MAX_AGE_S = float(os.getenv("OZON_LANE_MAX_AGE_SECONDS", "21600"))
 LANE_MAX_AGE_JITTER = float(os.getenv("OZON_LANE_MAX_AGE_JITTER", "0.2"))
 # Потолок backoff при неудачных прогревах (не долбить FAB).
 WARM_BACKOFF_MAX_S = float(os.getenv("OZON_WARM_BACKOFF_MAX_SECONDS", "600"))
+# Сколько неудачных прогревов подряд до ПЕРЕСОЗДАНИЯ браузера. Инцидент
+# 08-09-2026: плановый recycle по возрасту (LANE_MAX_AGE_S) берёт только ЗДОРОВЫЕ
+# дорожки, а warm() сам по себе браузер не пересоздаёт — лишь ре-навигирует
+# существующий. Дорожка, потерявшая доверие FAB, выпадала из обоих механизмов:
+# recycle её не трогал (не healthy), а перепрогрев шесть часов подряд ходил на
+# том же зажившемся профиле — 35 попыток на дорожку, один успех. Лечил только
+# ручной --force-recreate, то есть свежий браузер. Теперь свежий браузер даёт
+# сама дорожка. 0 = выключить.
+WARM_RELAUNCH_AFTER_FAILS = int(os.getenv("OZON_WARM_RELAUNCH_AFTER_FAILS", "3"))
 
 # Ротация IP по switch-ссылке провайдера. Пусто → ротация выкл.
 ROTATE_URL = os.getenv("OZON_PROXY_ROTATE_URL", "").strip()
@@ -155,6 +165,43 @@ _last_success_at = time.monotonic()
 def _mark_success():
     global _last_success_at
     _last_success_at = time.monotonic()
+
+
+def _sanitize_addons() -> None:
+    """Снести каталоги дефолтных аддонов camoufox, оставшиеся БЕЗ manifest.json.
+
+    Инцидент 07-09-2026: при сборке образа не скачался uBO (camoufox печатает
+    "Failed to download and extract", но пустой каталог addons/UBO оставляет).
+    При запуске camoufox видит существующий каталог, считает аддон готовым и
+    падает на confirm_paths — не поднялась НИ ОДНА дорожка, Ozon встал целиком.
+    Пустой каталог — единственное, что мешает camoufox докачать аддон самому,
+    поэтому убираем его перед каждым стартом браузера: следующая попытка качает
+    заново. Сборка такое теперь ловит (fetch_addons.py), но рантайм не должен
+    зависеть от того, чем собран образ.
+    """
+    try:
+        from camoufox.addons import DefaultAddons, get_addon_path
+    except Exception:  # noqa: BLE001 — камуфокса нет (тесты) → чинить нечего
+        return
+    for addon in DefaultAddons:
+        path = get_addon_path(addon.name)
+        if os.path.isdir(path) and not os.path.exists(os.path.join(path, "manifest.json")):
+            log.warning("аддон %s распакован не полностью (%s) — сношу, camoufox докачает",
+                        addon.name, path)
+            shutil.rmtree(path, ignore_errors=True)
+
+
+# Сколько раз массовый поток (товары/выдача/витрина) не нашёл ЖИВОЙ АНОНИМНОЙ
+# дорожки. Раньше в этот момент был тихий фолбэк на authed — 07-09-2026 он десять
+# часов гнал ~250 запросов/час под аккаунтом, пока FAB держал анонимные дорожки
+# в отказе. Теперь отдаём 502 (Go зажигает брейкер, площадка деградирует ЯВНО),
+# а счётчик показывает, что именно это и происходит.
+_anon_starved_total = 0
+
+
+def _mark_anon_starved():
+    global _anon_starved_total
+    _anon_starved_total += 1
 
 
 async def _quiet_call(coro, timeout: float, what: str, idx: int):
@@ -362,6 +409,7 @@ class Lane:
     async def _launch(self):
         """Поднять camoufox + страницу + куки (без прогрева). Общий код для
         первого старта и для пересоздания после смерти драйвера."""
+        _sanitize_addons()
         kw = {"headless": HEADLESS}
         proxy = _parse_proxy(self.proxy)
         if proxy:
@@ -425,6 +473,16 @@ class Lane:
         self._next_warm = time.monotonic() + backoff
         log.warning("дорожка %d: %s (попыток подряд %d) — backoff %.0fс",
                     self.idx, reason, self._warm_fails, backoff)
+        # Каждые N неудач — свежий браузер (см. WARM_RELAUNCH_AFTER_FAILS): FAB
+        # держит доверие на профиле, и ре-навигация зажившегося профиля его не
+        # возвращает. Не на КАЖДОЙ неудаче: пересоздание стоит ~минуту и память,
+        # а первые отказы бывают транзиентными.
+        if (WARM_RELAUNCH_AFTER_FAILS > 0
+                and self._warm_fails % WARM_RELAUNCH_AFTER_FAILS == 0):
+            self._needs_relaunch = True
+            log.warning("дорожка %d: %d неудач подряд — следующий прогрев с НОВОГО "
+                        "браузера (возраст профиля %.1fч)",
+                        self.idx, self._warm_fails, self.age(time.monotonic()) / 3600.0)
 
     async def warm(self):
         """Навигация на карточку + ожидание, что FAB пройден (тестовый fetch=200).
@@ -620,8 +678,9 @@ class Lane:
 
     def due_recycle(self, now: float) -> bool:
         """Пора планово пересоздать браузер: он зажился и перестаёт проходить FAB.
-        Только для ЗДОРОВОЙ дорожки — нездоровую и так чинит due_rewarm, и там
-        пересоздание уже своё (_needs_relaunch)."""
+        Только для ЗДОРОВОЙ дорожки. Нездоровую ведёт due_rewarm, и свежий браузер
+        ей даёт _warm_backoff по счётчику неудач (WARM_RELAUNCH_AFTER_FAILS) — до
+        08-09-2026 этой ветки не было и мёртвая дорожка не пересоздавалась вовсе."""
         return (LANE_MAX_AGE_S > 0 and self.healthy
                 and self._launched_at > 0 and self._age_limit > 0
                 and self.age(now) >= self._age_limit)
@@ -647,13 +706,13 @@ class Pool:
         self.lanes = lanes
 
     def pick(self, product_id: str):
-        """Дорожка под обычный товар. Предпочитаем АНОНИМНЫЕ живые (аккаунт бережём
-        от бана — он нужен только под 18+), шардируя по product_id для липкости
-        товар→дорожка. Если анонимных нет — фолбэк на любую живую (в т.ч. authed)."""
+        """Дорожка под обычный товар: ТОЛЬКО анонимная живая, с шардированием по
+        product_id для липкости товар→дорожка. Нет анонимных → None (502), а НЕ
+        фолбэк на authed: аккаунт нужен под 18+, и гонять по нему массовый поток
+        значит менять обратимую потерю площадки на необратимый бан аккаунта."""
         pool = [l for l in self.lanes if l.healthy and not l.authed]
         if not pool:
-            pool = [l for l in self.lanes if l.healthy]
-        if not pool:
+            _mark_anon_starved()
             return None
         try:
             i = int(product_id) % len(pool)
@@ -668,18 +727,22 @@ class Pool:
         return random.choice(alive) if alive else None
 
     def pick_any(self):
-        """Любая живая дорожка (поиск/витрина — нет product_id для шардирования).
-        Предпочитаем анонимные, чтобы не гонять аккаунт по массовому потоку."""
+        """Любая живая АНОНИМНАЯ дорожка (поиск/витрина — нет product_id для
+        шардирования). Как и pick(), на authed не фолбэчит."""
         pool = [l for l in self.lanes if l.healthy and not l.authed]
         if not pool:
-            pool = [l for l in self.lanes if l.healthy]
-        return random.choice(pool) if pool else None
+            _mark_anon_starved()
+            return None
+        return random.choice(pool)
 
     def healthy_count(self) -> int:
         return sum(1 for l in self.lanes if l.healthy)
 
     def authed_healthy_count(self) -> int:
         return sum(1 for l in self.lanes if l.healthy and l.authed)
+
+    def anon_healthy_count(self) -> int:
+        return sum(1 for l in self.lanes if l.healthy and not l.authed)
 
     def stuck_lanes(self, now: float) -> int:
         return sum(1 for l in self.lanes if l.stuck_for(now) > 0)
@@ -768,7 +831,8 @@ async def handle_scrape(request: web.Request) -> web.Response:
     lane = pool.pick_authed() if authed else pool.pick(product_id)
     if lane is None:
         return web.Response(status=502,
-                            text="no healthy authed lanes" if authed else "no healthy lanes")
+                            text="no healthy authed lanes" if authed
+                            else "no healthy anonymous lanes")
     status, body = await lane.fetch_path(_product_path(product_id), f"product:{product_id}")
     if status == 0:
         return web.Response(status=502, text="lane fetch failed")
@@ -787,7 +851,7 @@ async def handle_search(request: web.Request) -> web.Response:
         return web.json_response({"error": "text required"}, status=400)
     lane = pool.pick_any()
     if lane is None:
-        return web.Response(status=502, text="no healthy lanes")
+        return web.Response(status=502, text="no healthy anonymous lanes")
     status, body = await lane.fetch_path(_search_path(text), f"search:{text[:40]}")
     if status == 0:
         return web.Response(status=502, text="lane fetch failed")
@@ -806,7 +870,7 @@ async def handle_seller(request: web.Request) -> web.Response:
         return web.json_response({"error": "path required"}, status=400)
     lane = pool.pick_any()
     if lane is None:
-        return web.Response(status=502, text="no healthy lanes")
+        return web.Response(status=502, text="no healthy anonymous lanes")
     status, body = await lane.fetch_path(_seller_path(seg), f"seller:{seg[:40]}")
     if status == 0:
         return web.Response(status=502, text="lane fetch failed")
@@ -825,7 +889,7 @@ async def handle_page(request: web.Request) -> web.Response:
         return web.json_response({"error": "path required (must start with /)"}, status=400)
     lane = pool.pick_any()
     if lane is None:
-        return web.Response(status=502, text="no healthy lanes")
+        return web.Response(status=502, text="no healthy anonymous lanes")
     status, body = await lane.fetch_path(path, f"page:{path[:60]}")
     if status == 0:
         return web.Response(status=502, text="lane fetch failed")
@@ -906,6 +970,15 @@ async def handle_metrics(request: web.Request) -> web.Response:
         "# HELP ozon_miner_authed_lanes Число живых АВТОРИЗОВАННЫХ дорожек (0 = 18+ товары недоступны)",
         "# TYPE ozon_miner_authed_lanes gauge",
         f"ozon_miner_authed_lanes {pool.authed_healthy_count()}",
+        # Массовый поток обслуживают ТОЛЬКО анонимные дорожки, поэтому 0 здесь =
+        # Ozon не скрейпится вовсе, даже когда healthy_lanes>0 (жива одна authed).
+        # На этом висит алерт: healthy_lanes==0 такую ситуацию не ловит.
+        "# HELP ozon_miner_anon_lanes Число живых АНОНИМНЫХ дорожек (0 = массовый поток не обслуживается)",
+        "# TYPE ozon_miner_anon_lanes gauge",
+        f"ozon_miner_anon_lanes {pool.anon_healthy_count()}",
+        "# HELP ozon_miner_anon_starved_total Отказов массовому потоку из-за отсутствия живой анонимной дорожки",
+        "# TYPE ozon_miner_anon_starved_total counter",
+        f"ozon_miner_anon_starved_total {_anon_starved_total}",
         "# HELP ozon_miner_stuck_lanes Дорожки с локом, занятым дольше порога (залипший драйвер)",
         "# TYPE ozon_miner_stuck_lanes gauge",
         f"ozon_miner_stuck_lanes {pool.stuck_lanes(time.monotonic())}",

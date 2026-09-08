@@ -13,6 +13,10 @@
   E. зажившийся браузер планово пересоздаётся — инцидент 02-09-2026: за 5 суток
      аптайма camoufox перестаёт проходить FAB, пул тихо деградировал до одной
      дорожки из шести и p95 скрейпа уехал на 26-29с.
+  F. дорожка, которая не может прогреться, получает НОВЫЙ браузер — инцидент
+     08-09-2026: recycle из E берёт только здоровые дорожки, а warm() браузер не
+     пересоздаёт; анонимные дорожки шесть часов перепрогревались на том же
+     зажившемся профиле (35 попыток, один успех) и поднялись только руками.
 
 Запуск: python3 ozon-miner/test_lane_deadlock.py
 Зависимостей нет — aiohttp/camoufox замоканы (в контейнере они есть, но тесту
@@ -35,6 +39,7 @@ os.environ.update({
     "OZON_LANE_STUCK_SECONDS": "1",
     "OZON_DRIVER_CALL_TIMEOUT_SECONDS": "1",
     "OZON_HEALTH_INTERVAL_SECONDS": "0.2",
+    "OZON_WARM_RELAUNCH_AFTER_FAILS": "3",
     "OZON_LANE_MIN_INTERVAL_MS": "0",
     "LOG_LEVEL": "CRITICAL",
 })
@@ -223,6 +228,57 @@ async def test_planned_recycle():
           "после recycle дорожка снова здорова и не висит в ожидании")
 
 
+async def test_relaunch_after_failed_warms():
+    """F. Дорожка, которая не может прогреться, обязана получить НОВЫЙ браузер."""
+    lane = make_lane()
+    lane._launched_at = server.time.monotonic() - 40000   # зажившийся профиль
+
+    lane._warm_backoff("прогрев не дал 200")
+    check(not lane._needs_relaunch, "после первой неудачи браузер не трогаем")
+    lane._warm_backoff("прогрев не дал 200")
+    check(not lane._needs_relaunch, "после второй — тоже (транзиент)")
+    lane._warm_backoff("прогрев не дал 200")
+    check(lane._needs_relaunch,
+          f"после {server.WARM_RELAUNCH_AFTER_FAILS}-й неудачи подряд — новый браузер")
+
+    # Успешный прогрев обнуляет счётчик: следующая серия считается заново, а не
+    # добивает пересоздание с первой же неудачи.
+    lane._needs_relaunch = False
+    lane._warm_fails = 0
+    lane._warm_backoff("прогрев не дал 200")
+    check(not lane._needs_relaunch, "счётчик обнулён успехом — отсчёт заново")
+
+    # Рубильник: 0 выключает пересоздание целиком.
+    saved, server.WARM_RELAUNCH_AFTER_FAILS = server.WARM_RELAUNCH_AFTER_FAILS, 0
+    try:
+        lane._warm_fails = 0
+        lane._needs_relaunch = False
+        for _ in range(10):
+            lane._warm_backoff("прогрев не дал 200")
+        check(not lane._needs_relaunch, "нулём пересоздание выключается")
+    finally:
+        server.WARM_RELAUNCH_AFTER_FAILS = saved
+
+    # И через warm(): _needs_relaunch обязан привести к _relaunch(), а не к
+    # ре-навигации по старой странице (ровно этого не хватало 08-09).
+    lane._warm_fails = 0
+    lane._needs_relaunch = True
+    relaunched = []
+
+    async def fake_relaunch(self):
+        relaunched.append(self.idx)
+        self._needs_relaunch = False
+        return False          # браузер не поднялся → warm() выходит на backoff
+
+    orig = server.Lane._relaunch
+    server.Lane._relaunch = fake_relaunch
+    try:
+        await lane.warm()
+    finally:
+        server.Lane._relaunch = orig
+    check(relaunched == [lane.idx], f"warm() пересоздал браузер: {relaunched}")
+
+
 async def test_last_success_age():
     """D. Метрика возраста последнего успеха — на ней висит алерт OzonMinerStale."""
     server._mark_success()
@@ -234,7 +290,7 @@ async def test_last_success_age():
 async def main():
     for t in (test_fetch_deadline, test_watchdog_frees_stuck_lane,
               test_stuck_lane_does_not_freeze_pool, test_planned_recycle,
-              test_last_success_age):
+              test_relaunch_after_failed_warms, test_last_success_age):
         print(f"\n{t.__doc__.splitlines()[0]}")
         await t()
     print("\nПРОВАЛЫ ЕСТЬ" if check.failed else "\nвсе проверки прошли")
