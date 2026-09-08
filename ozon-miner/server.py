@@ -402,6 +402,8 @@ class Lane:
         # Свой порог recycle у каждой дорожки (база ± джиттер) — чтобы пул не
         # пересоздавался разом. Считается один раз, при создании браузера.
         self._age_limit = 0.0
+        # recycle отложен: дорожка последняя живая своего типа (см. maintenance_loop)
+        self._recycle_deferred = False
         self._cam = None
         self._browser = None
         self._page = None
@@ -735,6 +737,28 @@ class Pool:
             return None
         return random.choice(pool)
 
+    def _only_live_anon(self, lane) -> bool:
+        """Дорожка — последняя живая анонимная, и при этом СОСЕДКИ ЛЕЖАТ.
+
+        Мёртвая соседка — прямая улика, что FAB прямо сейчас не выдаёт новых
+        анонимных сессий с нашего адреса: она свежая и прогреться не может.
+        Отдавать в таких условиях единственную работающую сессию нельзя.
+
+        На authed правило не распространяется: аккаунт-сессия живёт в cookie, а
+        не в профиле браузера, и проходит FAB на свежем профиле за 2-3 секунды
+        (замер 08-09-2026) — там страшнее старение, чем пересоздание. Пул с одной
+        анонимной дорожкой тоже под правило не попадает: улик нет, а стареть
+        дорожке без замены хуже.
+        """
+        if lane.authed:
+            return False
+        anon = [l for l in self.lanes if not l.authed]
+        return len(anon) > 1 and sum(1 for l in anon if l.healthy) <= 1
+
+    def deferred_recycles(self) -> int:
+        """Сколько дорожек живут сверх возраста, потому что заменить их некем."""
+        return sum(1 for l in self.lanes if l._recycle_deferred)
+
     def healthy_count(self) -> int:
         return sum(1 for l in self.lanes if l.healthy)
 
@@ -771,7 +795,27 @@ class Pool:
                     continue
                 if lane.lock.locked() or lane._servicing:
                     continue
-                if lane.due_recycle(now):
+                if lane.due_recycle(now) and self._only_live_anon(lane):
+                    # ПОСЛЕДНЮЮ живую анонимную дорожку по возрасту не трогаем.
+                    # Инцидент 08-09-2026: recycle в 02:15 и 02:45 UTC выбросил
+                    # две работавшие анонимные сессии, а FAB новых с нашего IP уже
+                    # не выдавал — шесть часов ноль анонимных дорожек и 1109
+                    # отказов массовому потоку. Рабочая сессия дефицитнее свежего
+                    # профиля: пока она жива, её не отдаём. Когда доверие потеряет
+                    # сама — это штатный путь через _warm_backoff, там и свежий
+                    # браузер (WARM_RELAUNCH_AFTER_FAILS).
+                    if not lane._recycle_deferred:
+                        lane._recycle_deferred = True
+                        log.warning("дорожка %d: recycle отложен — она последняя живая "
+                                    "анонимная, соседки не прогреваются (возраст %.1fч)",
+                                    lane.idx, lane.age(now) / 3600.0)
+                    # Из цикла НЕ выходим: отложенной дорожке тем более нужен
+                    # keepalive — на живой сессии он и подновляет доверие FAB.
+                    # (due_rewarm тут невозможен: дорожка здорова по условию.)
+                    if not (lane.due_rotate(now) or lane.due_keepalive(now)):
+                        continue
+                elif lane.due_recycle(now):
+                    lane._recycle_deferred = False
                     # healthy снимаем ЧЕСТНО: браузер сейчас исчезнет, отдавать
                     # на него запросы нельзя. Дальше идёт штатный путь
                     # _service_lane: _needs_relaunch → _relaunch() → due_rewarm →
@@ -979,6 +1023,9 @@ async def handle_metrics(request: web.Request) -> web.Response:
         "# HELP ozon_miner_anon_starved_total Отказов массовому потоку из-за отсутствия живой анонимной дорожки",
         "# TYPE ozon_miner_anon_starved_total counter",
         f"ozon_miner_anon_starved_total {_anon_starved_total}",
+        "# HELP ozon_miner_deferred_recycles Дорожек, живущих сверх возраста (заменить некем)",
+        "# TYPE ozon_miner_deferred_recycles gauge",
+        f"ozon_miner_deferred_recycles {pool.deferred_recycles()}",
         "# HELP ozon_miner_stuck_lanes Дорожки с локом, занятым дольше порога (залипший драйвер)",
         "# TYPE ozon_miner_stuck_lanes gauge",
         f"ozon_miner_stuck_lanes {pool.stuck_lanes(time.monotonic())}",
