@@ -87,6 +87,15 @@ LANE_MAX_AGE_S = float(os.getenv("OZON_LANE_MAX_AGE_SECONDS", "21600"))
 LANE_MAX_AGE_JITTER = float(os.getenv("OZON_LANE_MAX_AGE_JITTER", "0.2"))
 # Потолок backoff при неудачных прогревах (не долбить FAB).
 WARM_BACKOFF_MAX_S = float(os.getenv("OZON_WARM_BACKOFF_MAX_SECONDS", "600"))
+# Сколько неудачных прогревов подряд до ПЕРЕСОЗДАНИЯ браузера. Инцидент
+# 08-09-2026: плановый recycle по возрасту (LANE_MAX_AGE_S) берёт только ЗДОРОВЫЕ
+# дорожки, а warm() сам по себе браузер не пересоздаёт — лишь ре-навигирует
+# существующий. Дорожка, потерявшая доверие FAB, выпадала из обоих механизмов:
+# recycle её не трогал (не healthy), а перепрогрев шесть часов подряд ходил на
+# том же зажившемся профиле — 35 попыток на дорожку, один успех. Лечил только
+# ручной --force-recreate, то есть свежий браузер. Теперь свежий браузер даёт
+# сама дорожка. 0 = выключить.
+WARM_RELAUNCH_AFTER_FAILS = int(os.getenv("OZON_WARM_RELAUNCH_AFTER_FAILS", "3"))
 
 # Ротация IP по switch-ссылке провайдера. Пусто → ротация выкл.
 ROTATE_URL = os.getenv("OZON_PROXY_ROTATE_URL", "").strip()
@@ -464,6 +473,16 @@ class Lane:
         self._next_warm = time.monotonic() + backoff
         log.warning("дорожка %d: %s (попыток подряд %d) — backoff %.0fс",
                     self.idx, reason, self._warm_fails, backoff)
+        # Каждые N неудач — свежий браузер (см. WARM_RELAUNCH_AFTER_FAILS): FAB
+        # держит доверие на профиле, и ре-навигация зажившегося профиля его не
+        # возвращает. Не на КАЖДОЙ неудаче: пересоздание стоит ~минуту и память,
+        # а первые отказы бывают транзиентными.
+        if (WARM_RELAUNCH_AFTER_FAILS > 0
+                and self._warm_fails % WARM_RELAUNCH_AFTER_FAILS == 0):
+            self._needs_relaunch = True
+            log.warning("дорожка %d: %d неудач подряд — следующий прогрев с НОВОГО "
+                        "браузера (возраст профиля %.1fч)",
+                        self.idx, self._warm_fails, self.age(time.monotonic()) / 3600.0)
 
     async def warm(self):
         """Навигация на карточку + ожидание, что FAB пройден (тестовый fetch=200).
@@ -659,8 +678,9 @@ class Lane:
 
     def due_recycle(self, now: float) -> bool:
         """Пора планово пересоздать браузер: он зажился и перестаёт проходить FAB.
-        Только для ЗДОРОВОЙ дорожки — нездоровую и так чинит due_rewarm, и там
-        пересоздание уже своё (_needs_relaunch)."""
+        Только для ЗДОРОВОЙ дорожки. Нездоровую ведёт due_rewarm, и свежий браузер
+        ей даёт _warm_backoff по счётчику неудач (WARM_RELAUNCH_AFTER_FAILS) — до
+        08-09-2026 этой ветки не было и мёртвая дорожка не пересоздавалась вовсе."""
         return (LANE_MAX_AGE_S > 0 and self.healthy
                 and self._launched_at > 0 and self._age_limit > 0
                 and self.age(now) >= self._age_limit)

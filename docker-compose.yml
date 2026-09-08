@@ -703,6 +703,11 @@ services:
         # сюда НЕ выносим: его дефолт вычисляется из таймаутов операций, и
         # фиксация числом заморозила бы связь между ними.
         OZON_WARM_BACKOFF_MAX_SECONDS: "${OZON_WARM_BACKOFF_MAX_SECONDS:-600}"
+        # Неудачных прогревов подряд до пересоздания браузера. Инцидент 08-09-2026:
+        # recycle по возрасту берёт только ЗДОРОВЫЕ дорожки, а перепрогрев ходит
+        # по тому же профилю — потерявшая доверие FAB дорожка не чинилась ничем,
+        # кроме ручного --force-recreate. 0 — выключить.
+        OZON_WARM_RELAUNCH_AFTER_FAILS: "${OZON_WARM_RELAUNCH_AFTER_FAILS:-3}"
         OZON_WARM_WAIT_SECONDS: "${OZON_WARM_WAIT_SECONDS:-45}"
         OZON_SCRAPE_RETRIES: "${OZON_SCRAPE_RETRIES:-2}"
         OZON_SCRAPE_TIMEOUT_SECONDS: "${OZON_SCRAPE_TIMEOUT_SECONDS:-12}"
