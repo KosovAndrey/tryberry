@@ -127,9 +127,17 @@ def main() -> None:
             gen = subprocess.run([sys.executable, GENERATOR, sub, "-n", "0", "-o", path],
                                  capture_output=True, text=True)
             if gen.returncode != 0:
-                sys.exit(f"подписка №{i}: генератор упал: {gen.stderr.strip()[:200]}")
+                # Сломанная подписка НЕ валит прогон: 14–17.09 одна такая каждую ночь
+                # глушила отбор целиком, вторая подписка простаивала, а плечи в
+                # конфиге тем временем вымерли. Хвост stderr, а не голова: в голове
+                # traceback'а только «Traceback (most recent call last)».
+                print(f"подписка №{i}: генератор упал, пропускаем: {gen.stderr.strip()[-600:]}",
+                      file=sys.stderr, flush=True)
+                continue
             sys.stderr.write(gen.stderr)
             src_paths.append(path)
+        if not src_paths:
+            sys.exit(f"ни одна из {len(subs)} подписок не развернулась — см. ошибки выше")
     elif args.src_paths:
         src_paths = args.src_paths
     else:
