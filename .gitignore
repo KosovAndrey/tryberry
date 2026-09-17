@@ -93,3 +93,7 @@ promo/remotion/build/
 .claude/skills/pick-ui-library/
 .claude/skills/prototype/
 .claude/skills/review-animations/
+
+# Метрики хостовых cron-скриптов для node-exporter
+monitoring/textfile/*
+!monitoring/textfile/.gitkeep

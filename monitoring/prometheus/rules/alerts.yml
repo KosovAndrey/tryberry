@@ -643,3 +643,26 @@ groups:
         annotations:
           summary: "Своп забит"
           description: "Занято больше 85% свопа 15+ минут. Дальше расти некуда: следующая нехватка памяти закончится OOM-killer'ом."
+
+      # Ночной автоперекат плеч xray (cron 04:00) давно не завершался успешно.
+      # 14–17.09 он трое суток падал молча (кавычки в XRAY_SUBS), провайдер тем
+      # временем сменил узлы, поисковый пул :8889 вымер — узнали по WbSearchDirectDown
+      # через сутки. 36ч = пропущен один ночной прогон плюс запас.
+      - alert: XrayLanesAutoStale
+        expr: time() - xray_lanes_auto_last_success_timestamp_seconds > 36 * 3600
+        labels:
+          severity: warning
+        annotations:
+          summary: "Автоперекат плеч xray не отрабатывает"
+          description: "Последний успешный прогон scripts/xray-lanes-auto.py больше 36ч назад (код последнего выхода — xray_lanes_auto_last_exit_code). Смотреть tail -40 /tmp/xray-lanes-auto.log; руками: python3 scripts/xray-lanes-auto.py --dry-run из корня репо на ветке main. Пока скрипт стоит, мёртвые плечи копятся в пуле — проверить xray: docker logs --since 30m pt_xray | grep -c 'is dead'."
+
+      # Метрики нет вовсе: cron снят, textfile-коллектор не подключён (node-exporter
+      # пересоздан без prod-оверрайда) или скрипт ни разу не отработал.
+      - alert: XrayLanesAutoMetricMissing
+        expr: absent(xray_lanes_auto_last_run_timestamp_seconds)
+        for: 26h
+        labels:
+          severity: warning
+        annotations:
+          summary: "Нет метрик автопереката плеч xray"
+          description: "node-exporter не отдаёт xray_lanes_auto_*. Проверить: crontab -l | grep xray-lanes; ls -l monitoring/textfile/; docker inspect pt_node_exporter | grep textfile (коллектор подключается в docker-compose.prod.yml)."

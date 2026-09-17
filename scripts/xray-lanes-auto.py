@@ -45,6 +45,11 @@ LANE_TEST = os.path.join(HERE, "wb-lane-test.py")
 CANDIDATE = "/tmp/xray-lanes-candidate.json"
 VERDICTS = "/tmp/xray-lanes-auto-verdicts.json"
 KEEP_BACKUPS = 5
+# Textfile-коллектор node-exporter (монтируется в docker-compose.prod.yml). 14–17.09
+# ночной прогон трое суток падал молча, и узнали мы об этом по вымершему пулу, а не
+# по алерту: теперь время последнего успеха уходит в метрику, XrayLanesAutoStale
+# ловит застой.
+TEXTFILE = os.path.join(ROOT, "monitoring", "textfile", "xray_lanes_auto.prom")
 
 
 def log(msg: str) -> None:
@@ -125,6 +130,47 @@ def rotate_backups(cfg_path: str) -> None:
             pass
 
 
+def read_metric(path: str, name: str) -> float | None:
+    try:
+        for line in open(path, encoding="utf-8"):
+            if line.startswith(name + " "):
+                return float(line.split()[1])
+    except (OSError, ValueError, IndexError):
+        pass
+    return None
+
+
+def write_metrics(path: str, code: int, pool: int) -> None:
+    """Пишем атомарно (tmp + rename): node-exporter не должен прочитать полфайла."""
+    now = datetime.datetime.now().timestamp()
+    last_ok = now if code == 0 else read_metric(path, "xray_lanes_auto_last_success_timestamp_seconds")
+    lines = [
+        "# HELP xray_lanes_auto_last_run_timestamp_seconds Время последнего прогона автопереката плеч.",
+        "# TYPE xray_lanes_auto_last_run_timestamp_seconds gauge",
+        f"xray_lanes_auto_last_run_timestamp_seconds {now:.0f}",
+        "# HELP xray_lanes_auto_last_exit_code Код выхода последнего прогона (0 = успех).",
+        "# TYPE xray_lanes_auto_last_exit_code gauge",
+        f"xray_lanes_auto_last_exit_code {code}",
+        "# HELP xray_lanes_auto_pool_lanes Плеч в конфиге xray после прогона.",
+        "# TYPE xray_lanes_auto_pool_lanes gauge",
+        f"xray_lanes_auto_pool_lanes {pool}",
+    ]
+    if last_ok is not None:
+        lines += [
+            "# HELP xray_lanes_auto_last_success_timestamp_seconds Время последнего успешного прогона.",
+            "# TYPE xray_lanes_auto_last_success_timestamp_seconds gauge",
+            f"xray_lanes_auto_last_success_timestamp_seconds {last_ok:.0f}",
+        ]
+    try:
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        tmp = path + ".tmp"
+        with open(tmp, "w", encoding="utf-8") as fh:
+            fh.write("\n".join(lines) + "\n")
+        os.replace(tmp, path)
+    except OSError as err:
+        log(f"метрики не записаны ({path}): {err}")
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
@@ -146,8 +192,25 @@ def main() -> int:
     ap.add_argument("--service", default="xray", help="имя сервиса в compose (для пересоздания)")
     ap.add_argument("--compose", default="docker compose -f docker-compose.yml -f docker-compose.prod.yml",
                     help="команда compose для пересоздания контейнера")
+    ap.add_argument("--textfile", default=TEXTFILE,
+                    help="куда писать метрики для node-exporter (пусто — не писать)")
     args = ap.parse_args()
 
+    code = 1
+    try:
+        code = apply(args)
+        return code
+    finally:
+        # --dry-run ничего не меняет и успехом ночного прогона не считается.
+        if args.textfile and not args.dry_run:
+            try:
+                pool = len(lane_addrs(args.config))
+            except (OSError, ValueError):
+                pool = 0
+            write_metrics(args.textfile, code, pool)
+
+
+def apply(args) -> int:
     env = dict(os.environ)
     env.update({k: v for k, v in env_from_dotenv(args.env_file).items() if k not in env})
     if not env.get("XRAY_SUBS"):
