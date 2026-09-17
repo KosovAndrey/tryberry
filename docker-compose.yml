@@ -1259,7 +1259,40 @@ services:
         condition: service_healthy
 
 
+  # ── avito-watch: личный мониторинг новых объявлений Авито в Telegram ─────────
+  # Отдельный бот (AVITO_BOT_TOKEN), пускает только AVITO_ALLOWED_CHAT_IDS.
+  # Браузер поднимается на время проверки и закрывается, поэтому потолок
+  # памяти небольшой. Подробности — avito-watch/README.md.
+  avito-watch:
+    build:
+      context: ./avito-watch
+      dockerfile: Dockerfile
+    container_name: pt_avito_watch
+    mem_limit: 1500m
+    shm_size: "512mb"
+    init: true
+    environment:
+      AVITO_BOT_TOKEN: "${AVITO_BOT_TOKEN:-}"
+      AVITO_ALLOWED_CHAT_IDS: "${AVITO_ALLOWED_CHAT_IDS:-}"
+      # Telegram с VPS только через xray.
+      AVITO_TG_PROXY_URL: "${AVITO_TG_PROXY_URL:-http://xray:8888}"
+      # Браузер к Авито идёт direct; прокси — рычаг на случай бана прод-IP.
+      AVITO_BROWSER_PROXY_URL: "${AVITO_BROWSER_PROXY_URL:-}"
+      AVITO_INTERVAL_MIN_SECONDS: "${AVITO_INTERVAL_MIN_SECONDS:-180}"
+      AVITO_INTERVAL_MAX_SECONDS: "${AVITO_INTERVAL_MAX_SECONDS:-300}"
+      AVITO_DATA_DIR: /data
+      HEADLESS: "false"
+    volumes:
+      - avito_watch_data:/data
+    depends_on:
+      xray:
+        condition: service_healthy
+    labels:
+      logging: "promtail"
+      service: "avito-watch"
+
 volumes:
+  avito_watch_data:
   price_insight_state:
   pgdata:
   redis_data:

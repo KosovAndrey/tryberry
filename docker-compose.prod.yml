@@ -29,6 +29,8 @@ services:
     restart: unless-stopped
   ali-miner:
     restart: unless-stopped
+  avito-watch:
+    restart: unless-stopped
   ozon-miner:
     restart: unless-stopped
   search-worker:
