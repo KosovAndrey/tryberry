@@ -62,7 +62,10 @@ def env_from_dotenv(path: str) -> dict[str, str]:
             continue
         key, _, value = line.partition("=")
         if key.strip() in ("XRAY_SUBS", "XRAY_SUB_HWID"):
-            out[key.strip()] = value.strip()
+            # Кавычки снимаем, как это делает docker compose: с '…' первая подписка
+            # приходила как «'https://…», генератор принимал её за путь к файлу и
+            # падал — ночной перекат молчал с 14.09 по 17.09.
+            out[key.strip()] = value.strip().strip("'\"")
     return out
 
 
