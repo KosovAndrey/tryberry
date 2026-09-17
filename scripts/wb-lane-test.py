@@ -96,8 +96,13 @@ def tcp_alive(ip: str, port: int, timeout: float = 5.0) -> bool:
         s.close()
 
 
-def dedup_by_ip(lanes: list[dict[str, Any]], skip_tcp: bool) -> dict[str, dict[str, Any]]:
-    """Один адрес — одно плечо. tcp предпочитаем grpc: он же несёт long-poll."""
+def dedup_by_ip(lanes: list[dict[str, Any]], skip_tcp: bool, per_port: bool = False,
+                only_ip: str | None = None) -> dict[str, dict[str, Any]]:
+    """Один адрес — одно плечо. tcp предпочитаем grpc: он же несёт long-poll.
+
+    per_port: ключ «ip:port» вместо «ip». Нужен для каскадных подписок, где один
+    входной адрес (72.56.246.204, РФ) раздаёт по портам РАЗНЫЕ зарубежные выходы:
+    WB видит выход, а не вход, и схлопывание по входу проверяет один выход из 77."""
     best: dict[str, dict[str, Any]] = {}
     dead = 0
     for lane in lanes:
@@ -105,16 +110,19 @@ def dedup_by_ip(lanes: list[dict[str, Any]], skip_tcp: bool) -> dict[str, dict[s
         if ip is None:
             dead += 1
             continue
+        if only_ip and ip != only_ip:
+            continue
         port = lane["settings"]["vnext"][0]["port"]
         if not skip_tcp and not tcp_alive(ip, port):
             dead += 1
             continue
-        cur = best.get(ip)
+        key = f"{ip}:{port}" if per_port else ip
+        cur = best.get(key)
         if cur is None or (
             lane["streamSettings"]["network"] == "tcp"
             and cur["streamSettings"]["network"] != "tcp"
         ):
-            best[ip] = lane
+            best[key] = lane
     print(f"узлов {len(lanes)} | мёртвых/нерезолвнутых {dead} | уникальных живых адресов {len(best)}")
     return best
 
@@ -175,6 +183,9 @@ def main() -> None:
     ap.add_argument("--name", default="xr_probe", help="имя временного контейнера")
     ap.add_argument("--port", type=int, default=8890)
     ap.add_argument("--warmup", type=float, default=3.0, help="сколько ждать старта xray, сек")
+    ap.add_argument("--per-port", action="store_true",
+                    help="не схлопывать порты одного адреса (каскадные подписки: выход у порта свой)")
+    ap.add_argument("--only-ip", help="проверять только узлы с этим резолвнутым адресом")
     ap.add_argument("--skip-tcp", action="store_true", help="не отсеивать по TCP (быстрее, грязнее)")
     args = ap.parse_args()
 
@@ -188,16 +199,17 @@ def main() -> None:
     else:
         lanes_path = args.lanes
 
-    lanes = dedup_by_ip(load_lanes(lanes_path), args.skip_tcp)
+    lanes = dedup_by_ip(load_lanes(lanes_path), args.skip_tcp, args.per_port, args.only_ip)
     if not lanes:
         sys.exit("живых плеч не осталось — нечего проверять")
 
     results: dict[str, dict[str, str]] = {}
-    for i, (ip, lane) in enumerate(sorted(lanes.items()), 1):
+    for i, (key, lane) in enumerate(sorted(lanes.items()), 1):
+        ip = key.split(":")[0]
         verdict = test_lane(lane, ip, args)
         net = ".".join(ip.split(".")[:3]) + ".0/24"
         results[lane["tag"]] = {"ip": ip, "net": net, "verdict": verdict}
-        print(f"[{i:2}/{len(lanes)}] {ip:16} {lane['tag']:32} {verdict}", flush=True)
+        print(f"[{i:2}/{len(lanes)}] {key:21} {lane['tag']:32} {verdict}", flush=True)
 
     json.dump(results, open(args.out, "w"), ensure_ascii=False, indent=1)
 
