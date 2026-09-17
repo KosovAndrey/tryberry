@@ -135,6 +135,8 @@ def main() -> int:
     ap.add_argument("--verify", action="store_true",
                     help="проверить кандидатов против ручки WB и выкинуть безответные "
                          "(дольше: поднимает одноразовый xray на каждое плечо)")
+    ap.add_argument("--min-lanes", type=int, default=5,
+                    help="не перекатывать на пул меньше этого размера (по умолчанию 5)")
     ap.add_argument("--dry-run", action="store_true", help="показать решение, ничего не менять")
     ap.add_argument("--no-restart", action="store_true", help="записать конфиг, но не трогать контейнер")
     ap.add_argument("--container", default="pt_xray", help="имя контейнера xray (для xray -test)")
@@ -181,6 +183,12 @@ def main() -> int:
     new, cur = lane_addrs(CANDIDATE), lane_addrs(args.config)
     if not new:
         log("кандидат пуст — конфиг не трогаем")
+        return 1
+    # Крошечный пул — одна точка отказа для всего TG-egress (17.09 перекатились на
+    # одно плечо). Лучше оставить старый конфиг и звать человека.
+    if len(new) < args.min_lanes:
+        log(f"в кандидате {len(new)} плеч < --min-lanes {args.min_lanes} — конфиг не трогаем, "
+            "разбираться руками")
         return 1
     added, gone = sorted(new - cur), sorted(cur - new)
     if not added and not gone:
