@@ -167,7 +167,12 @@ def main() -> None:
 
     rejected: set[str] = set()
     if args.results:
-        for tag, row in json.load(open(args.results)).items():
+        verdicts = json.load(open(args.results))
+        # Плечо без вердикта в проверенный пул не пускаем: 17.09 узел, не ответивший
+        # на TCP-пробе шага 1, ожил к шагу 3 и прошёл мимо проверки — это тот самый
+        # мигающий узел, на котором утром повис egress.
+        rejected.update(ln["tag"] for ln in lanes if ln["tag"] not in verdicts)
+        for tag, row in verdicts.items():
             # Бракуем ТОЛЬКО плечи без HTTP-ответа вообще: у них не встаёт тоннель
             # (TCP-проба это пропускает — порт открыт, а VLESS/Reality не поднялся).
             # 429 — признак ЗДОРОВОГО плеча: запрос дошёл до WB и та его увидела,
