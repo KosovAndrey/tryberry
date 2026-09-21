@@ -308,6 +308,28 @@ groups:
           summary: "WB-поиск: direct не даёт успехов, всё идёт через браузер"
           description: "За 15 минут ни одного успешного direct-запроса к поисковой ручке WB при живом браузерном фолбэке. Смотреть долю result=error (egress не пропускает) против 429/forbidden (лимит/бан WB): sum by (result) (increase(tryberrybot_wb_search_fetch_total{transport=\"direct\"}[15m])). Проверить ручку и плечи: python3 scripts/wb-endpoint-probe.py --proxy http://xray:8889 --repeat 5 (сравнить u-search.wb.ru с search.wb.ru) и python3 scripts/wb-lane-test.py --lanes xray/config.json (мёртвые плечи). Рычаги в .env: WB_SEARCH_API_BASE (ручка) и SEARCH_PROXY_URLS/RESELLER_SEARCH_PROXY_URLS (8889 random, 8888 липкий). WB меняет ручки местами: 01-09 search.wb.ru закрылся 429, 17-09 закрылся u-search (403 wbaas всем, включая все плечи), а search.wb.ru открылся — сперва сравнить обе ручки пробой, потом переключать."
 
+      # Живая цена WB пропала: карточка почти вся идёт из архива basket-CDN,
+      # который отстаёт на ДНИ. Success rate при этом 100% — скрейпер честно
+      # качает архив, поэтому ScrapeErrors и компания молчат. Инцидент 16–21.09:
+      # u-card.wb.ru начал отдавать 403 всем, 5,5 дней ucard=0, нашли по жалобе
+      # юзера. В норме доля ucard ~60% (замер 10–16.09), в поломке — ноль;
+      # порог 20% с запасом от шума. Объём > 10 отсекает ночную тишину.
+      - alert: WbLivePriceLost
+        expr: |
+          (
+            sum(increase(tryberrybot_wb_price_source_total{source="ucard"}[1h]))
+              /
+            sum(increase(tryberrybot_wb_price_source_total[1h]))
+          ) < 0.2
+          and on()
+          sum(increase(tryberrybot_wb_price_source_total[1h])) > 10
+        for: 30m
+        labels:
+          severity: warning
+        annotations:
+          summary: "WB: живой цены нет, цены идут из архива (отстают на дни)"
+          description: "Доля цен WB с живой карточки за час ниже 20% (в норме ~60%). Цены в боте устаревшие, стартовые цены новых подписок записываются неверно. Смотреть ошибки ручки: sum by (outcome) (increase(tryberrybot_wb_ucard_fetch_total[1h])) и логи scraper на 'u-card status'. Проверить хост: curl через xray :8888 на card.wb.ru и u-card.wb.ru (/cards/v4/list?appType=1&curr=rub&dest=-1257786&spp=30&nm=<артикул>). WB закрывает хосты для всех разом (u-card 16-09, u-search 17-09) — рычаг WB_CARD_API_BASE в .env, прокси WB_UCARD_PROXY_URL. После починки переписать first_seen/baseline подпискам, созданным в окне поломки."
+
       # ГЛАВНЫЙ алерт по WB-сайдкару: healthy_lanes ВРЁТ при залипании драйвера.
       # Инцидент 13-08: /search висел бесконечно (чтение тела ответа было без
       # дедлайна и держало лок дорожки), при этом healthy_lanes=1 и метрики

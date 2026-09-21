@@ -476,7 +476,7 @@ func (b *Bot) showProductList(ctx context.Context, vkID int64, user *domain.User
 			}
 			current = emoji + domain.FormatPrice(sub.CurrentPrice)
 		}
-		fmt.Fprintf(&sb, "%d. %s\n   сейчас %s | при подписке %s\n   %s\n",
+		fmt.Fprintf(&sb, "%d. %s\n   сейчас %s | при добавлении %s\n   %s\n",
 			i+1, sub.ProductName, current, domain.FormatPrice(sub.FirstSeenPrice), sub.ProductURL)
 		if cu := b.chartURL(sub.ProductPublicID); cu != "" {
 			fmt.Fprintf(&sb, "   📈 График: %s\n", cu)
