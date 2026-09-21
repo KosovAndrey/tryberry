@@ -38,7 +38,7 @@ func ucardScraper(t *testing.T, archiveKopecks int64, ucardHandler func() *http.
 	calls := 0
 	s.ucard = &http.Client{Transport: roundTripFunc(func(r *http.Request) (*http.Response, error) {
 		calls++
-		if !strings.Contains(r.URL.Host, "u-card") || r.URL.Query().Get("nm") == "" {
+		if r.URL.Host != "card.wb.ru" || r.URL.Query().Get("nm") == "" {
 			t.Errorf("u-card: неожиданный запрос %s", r.URL)
 		}
 		return ucardHandler(), nil

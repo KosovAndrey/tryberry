@@ -210,6 +210,9 @@ func run(log *slog.Logger) error {
 	// последняя точка отстаёт на дни и врала в 97% скрейпов при success rate 100%.
 	// WB_UCARD_PRIMARY=false → прежний порядок «архив первый» (рубильник в .env).
 	wbCard.SetUCardPrimary(getEnv("WB_UCARD_PRIMARY", "true") != "false")
+	// Хост живой карточки (пусто → card.wb.ru). Рычаг на случай, если WB снова
+	// закроет текущий хост для всех, как u-card 21-09.
+	wbCard.SetCardAPIBase(getEnv("WB_CARD_API_BASE", ""))
 	registry := scraper.NewRegistry(
 		wbCard,
 		scraper.NewOzonScraper(scraper.OzonOptions{
