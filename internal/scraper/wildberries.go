@@ -63,6 +63,8 @@ type WildberriesScraper struct {
 	// ucardPrimary — брать цену с живого u-card, а архив держать только под
 	// историю/имя/картинку. См. Scrape и SetUCardPrimary.
 	ucardPrimary bool
+	// cardBase — база ручки живой карточки (пусто → wbCardBase). См. SetCardAPIBase.
+	cardBase string
 }
 
 func NewWildberriesScraper(rps float64) *WildberriesScraper {
@@ -113,6 +115,21 @@ func (s *WildberriesScraper) SetUCardProxy(proxyURL string) error {
 		Transport: &http.Transport{Proxy: http.ProxyURL(u)},
 	}
 	return nil
+}
+
+// SetCardAPIBase переключает хост живой карточки (пусто → wbCardBase). WB уже
+// дважды закрывал хосты u-* для всех разом (u-search 17-09, u-card 21-09) и
+// оставлял открытым старый публичный — разворот делается в .env
+// (WB_CARD_API_BASE), без выкатки кода.
+func (s *WildberriesScraper) SetCardAPIBase(base string) {
+	s.cardBase = strings.TrimRight(strings.TrimSpace(base), "?&")
+}
+
+func (s *WildberriesScraper) cardAPIBase() string {
+	if s.cardBase == "" {
+		return wbCardBase
+	}
+	return s.cardBase
 }
 
 func (s *WildberriesScraper) Marketplace() Marketplace {
@@ -263,7 +280,7 @@ func (s *WildberriesScraper) fetchFromUCard(ctx context.Context, articleID strin
 		return nil, fmt.Errorf("%w: invalid article id", ErrInvalidURL)
 	}
 
-	apiURL := wbUCardBase + "?appType=1&curr=rub&dest=-1257786&spp=30&nm=" + articleID
+	apiURL := s.cardAPIBase() + "?appType=1&curr=rub&dest=-1257786&spp=30&nm=" + articleID
 	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, apiURL, nil)
 	req.Header.Set("User-Agent", wbUserAgent)
 	resp, err := s.ucard.Do(req)
@@ -657,8 +674,12 @@ func parseWBHistory(body []byte, now time.Time) (float64, []PriceHistoryPoint, e
 
 const wbUserAgent = "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
 
-// wbUCardBase — открытый real-time эндпоинт карточки (цена в price.product).
-const wbUCardBase = "https://u-card.wb.ru/cards/v4/list"
+// wbCardBase — открытый real-time эндпоинт карточки (цена в price.product).
+// До 21-09-2026 был u-card.wb.ru: с того дня он отдаёт 403 ВСЕМ (прод через
+// любое плечо xray и домашний RU-IP), и цены WB сутки тихо шли из архива
+// (wb_price_source: basket=1576, ucard=0). Старый card.wb.ru отдаёт ту же форму
+// ответа — тот же разворот, что у поиска 17-09.
+const wbCardBase = "https://card.wb.ru/cards/v4/list"
 
 // wbBasketNumber возвращает номер CDN-шарда basket-NN.wbbasket.ru для nmID.
 // vol = id/100000; товар отдаёт 200 только на своём шарде, на чужих 404.

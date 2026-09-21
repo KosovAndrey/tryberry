@@ -132,6 +132,8 @@ services:
       # Живая цена WB при /track (u-card едет через тот же xray из HTTPS_PROXY).
       # Рубильник — см. WB_UCARD_PRIMARY у scraper.
       WB_UCARD_PRIMARY: "${WB_UCARD_PRIMARY:-true}"
+      # Хост живой карточки WB (пусто → card.wb.ru; u-card с 21-09 403 всем).
+      WB_CARD_API_BASE: "${WB_CARD_API_BASE:-}"
       ADMIN_IDS: "${ADMIN_IDS}"
       # VK-бот (пусто = выключено): токен сообщества + ссылка для кнопки привязки.
       VK_GROUP_TOKEN: "${VK_GROUP_TOKEN:-}"
@@ -261,6 +263,8 @@ services:
       # (цены снова отстанут, но бот переживёт падение xray / 403 от u-card).
       # Следить: wb_price_source{source="basket"} — рост доли = цены снова врут.
       WB_UCARD_PRIMARY: "${WB_UCARD_PRIMARY:-true}"
+      # Хост живой карточки WB (пусто → card.wb.ru; u-card с 21-09 403 всем).
+      WB_CARD_API_BASE: "${WB_CARD_API_BASE:-}"
       # Мобильный РФ-прокси Ozon (путь B: аккаунт-сессия проходит FAB через
       # доверенный IP). Sticky/ротация 0. Секрет — в .env.
       OZON_PROXY_URL: "${OZON_PROXY_URL:-}"

@@ -117,6 +117,9 @@ func run(log *slog.Logger) error {
 	// точку архива (отстаёт на дни). Прокси отдельно не задаём — у бота HTTPS_PROXY
 	// уже указывает на xray, и u-card едет через него.
 	wbCard.SetUCardPrimary(getEnv("WB_UCARD_PRIMARY", "true") != "false")
+	// Хост живой карточки (пусто → card.wb.ru). Рычаг на случай, если WB снова
+	// закроет текущий хост для всех, как u-card 21-09.
+	wbCard.SetCardAPIBase(getEnv("WB_CARD_API_BASE", ""))
 	wbSearch := scraper.NewWildberriesSearchScraper(wbCard, nil, nil, 5, 0)
 	// WB-витрина продавца: боту нужен разбор ссылки (MatchesSearch/Normalize) и
 	// гейт CAP при подключении (MaxItems). maxPages берём из того же SELLER_MAX_PAGES,
