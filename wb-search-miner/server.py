@@ -36,6 +36,7 @@ Go-скрейпер зовёт:
 """
 
 import asyncio
+import json
 import logging
 import os
 import random
@@ -74,6 +75,13 @@ WB_SPP = os.getenv("WB_SPP", "30")
 UCARD_PATH = os.getenv("WB_UCARD_PATH", "/__internal/u-card/cards/v4/list")
 # Сколько артикулов класть в один запрос карточек. Фронт сам шлёт по 10.
 CARD_BATCH_MAX = int(os.getenv("WB_CARD_BATCH_MAX", "10"))
+# Окно накопления пачки. Плата — задержка ответа, выигрыш — во столько раз
+# меньше запросов к wbaas, сколько артикулов склеилось. Скрейп не интерактивен,
+# четверть секунды тут никто не замечает.
+CARD_BATCH_WINDOW_S = float(os.getenv("WB_CARD_BATCH_WINDOW_MS", "250")) / 1000.0
+# Сколько ждать здоровую дорожку, прежде чем отдать отказ: перепрогрев после
+# 498 занимает секунды, а отказ стоит товару архивной цены.
+CARD_WAIT_LANE_S = float(os.getenv("WB_CARD_WAIT_LANE_SECONDS", "8"))
 # Заголовок deviceid — ключ ко ВСЕМУ __internal (23-09-2026): без него in-page
 # fetch из прогретой страницы даёт 403, с ним 200. Значение произвольное
 # (site_<32 hex>), к сессии не привязано; x-spa-version/x-requested-with не нужны.
@@ -717,6 +725,17 @@ class Pool:
         alive = [l for l in self.lanes if l.healthy]
         return random.choice(alive) if alive else None
 
+    async def pick_wait(self, timeout: float):
+        """Дождаться здоровой дорожки. Перепрогрев после 498 занимает секунды, и
+        ждать его дешевле, чем отдать отказ: на отказе цена товара уезжает в
+        архив, отставший на дни."""
+        deadline = time.monotonic() + timeout
+        while True:
+            lane = self.pick()
+            if lane is not None or time.monotonic() >= deadline:
+                return lane
+            await asyncio.sleep(0.25)
+
     def healthy_count(self) -> int:
         return sum(1 for l in self.lanes if l.healthy)
 
@@ -814,6 +833,79 @@ async def handle_search(request: web.Request) -> web.Response:
                         headers={"X-WB-Lane": str(lane.idx)})
 
 
+class CardBatcher:
+    """Склейка одиночных запросов цены в пачки.
+
+    Go зовёт цену по одному товару, а таких товаров тысячи за цикл — и каждый
+    запрос тратит доверие дорожки: 23-09 при потоке «по одному» wbaas выдавал
+    498 каждые 2–4 минуты, дорожка уходила в перепрогрев, и цены сваливались в
+    архив (живых оставалась пятая часть). Фронт WB сам запрашивает карточки
+    пачками по 10 — делаем так же: ждём короткое окно, склеиваем накопившиеся
+    артикулы в один запрос и раздаём каждому свой товар. Нагрузка на wbaas
+    падает во столько раз, сколько артикулов попало в пачку.
+    """
+
+    def __init__(self, pool: "Pool"):
+        self.pool = pool
+        self._waiting: dict[str, list[asyncio.Future]] = {}
+        self._wake = asyncio.Event()
+
+    async def get(self, nm: str):
+        """(status, product|None) для одного артикула."""
+        fut = asyncio.get_event_loop().create_future()
+        self._waiting.setdefault(nm, []).append(fut)
+        self._wake.set()
+        return await fut
+
+    async def loop(self):
+        while True:
+            await self._wake.wait()
+            # Окно накопления: за это время подтянутся соседние запросы.
+            await asyncio.sleep(CARD_BATCH_WINDOW_S)
+            batch, futures = {}, []
+            for nm in list(self._waiting)[:CARD_BATCH_MAX]:
+                batch[nm] = self._waiting.pop(nm)
+                futures.extend(batch[nm])
+            if not self._waiting:
+                self._wake.clear()
+            if not batch:
+                continue
+            try:
+                await self._serve(batch)
+            except Exception as e:  # noqa: BLE001
+                log.error("батчер карточек упал: %s", _first_line(e))
+                for fs in batch.values():
+                    for f in fs:
+                        if not f.done():
+                            f.set_result((502, None))
+
+    async def _serve(self, batch: dict):
+        nms = ";".join(batch)
+        status, body = 502, b""
+        # Две попытки: 498 = у дорожки протух токен, сайдкар метит её нездоровой
+        # и чинит за секунды — вторая попытка идёт уже по здоровой.
+        for attempt in (1, 2):
+            lane = await self.pool.pick_wait(CARD_WAIT_LANE_S)
+            if lane is None:
+                status, body = 502, b""
+                break
+            status, body = await lane.fetch_card(nms)
+            if status == 200:
+                break
+        products = {}
+        if status == 200:
+            try:
+                for p in json.loads(body or b"{}").get("products") or []:
+                    products[str(p.get("id"))] = p
+            except Exception as e:  # noqa: BLE001
+                log.warning("батчер: ответ не разобран: %s", _first_line(e))
+                status = 502
+        for nm, fs in batch.items():
+            for f in fs:
+                if not f.done():
+                    f.set_result((status, products.get(nm)))
+
+
 async def handle_card(request: web.Request) -> web.Response:
     """GET /card?nm=id1;id2;... — живые карточки (цена, наличие) из браузера.
     Артикулов не больше CARD_BATCH_MAX: столько же кладёт в запрос сам фронт."""
@@ -825,6 +917,14 @@ async def handle_card(request: web.Request) -> web.Response:
     if len(nms) > CARD_BATCH_MAX:
         return web.json_response(
             {"error": "too many nm (max %d)" % CARD_BATCH_MAX}, status=400)
+    if len(nms) == 1:
+        # Штатный путь: Go зовёт по одному товару, батчер склеит их в пачку.
+        status, product = await request.app["cards"].get(nms[0])
+        if status != 200:
+            return web.Response(status=status or 502, text="card fetch failed")
+        return web.json_response({"products": [product] if product else []})
+
+    # Пачка артикулов в запросе — ручная проверка; идём напрямую, без окна.
     lane = pool.pick()
     if lane is None:
         return web.Response(status=502, text="no healthy lanes")
@@ -953,12 +1053,15 @@ async def main():
 
         app = web.Application()
         app["pool"] = pool
+        cards = CardBatcher(pool)
+        app["cards"] = cards
         app.router.add_get("/search", handle_search)
         app.router.add_get("/card", handle_card)
         app.router.add_get("/healthz", handle_health)
         app.router.add_get("/metrics", handle_metrics)
 
         asyncio.ensure_future(pool.maintenance_loop())
+        asyncio.ensure_future(cards.loop())
 
         runner = web.AppRunner(app)
         await runner.setup()

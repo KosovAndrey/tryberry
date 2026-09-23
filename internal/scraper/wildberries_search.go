@@ -58,8 +58,10 @@ type WildberriesSearchScraper struct {
 	// и браузерный сайдкар со стеной wbaas. Переключается WB_SEARCH_API_BASE.
 	apiBase string
 
-	browserURL    string
-	browserClient *http.Client
+	browserURL string
+	// searchDirectOff — не ходить в публичную ручку вовсе. См. SetSearchDirect.
+	searchDirectOff bool
+	browserClient   *http.Client
 	// browserMaxPages — сколько страниц тянуть через сайдкар (навигация-перехват
 	// нативного ответа фронта). Дорого (навигация на страницу), поэтому по
 	// умолчанию 1 (топ-100 — для горячих запросов достаточно). <=0 → 1.
@@ -130,6 +132,11 @@ func (s *WildberriesSearchScraper) tokenRequired() bool {
 // страницу выдачи, а `&page=N` в URL каталога WB игнорировал и всегда отдавал
 // первую. С 23-09-2026 сайдкар ходит in-page fetch'ем прямо в __internal, где
 // пагинация работает, — ограничение осталось только вопросом цены запроса.
+// SetSearchDirect выключает публичную ручку поиска: false — сразу в сайдкар.
+// Рычаг в .env (WB_SEARCH_DIRECT), чтобы вернуть direct без выкатки, когда WB
+// снова откроет публичный хост.
+func (s *WildberriesSearchScraper) SetSearchDirect(v bool) { s.searchDirectOff = !v }
+
 func (s *WildberriesSearchScraper) SetBrowserSidecar(baseURL string, maxPages int) {
 	baseURL = strings.TrimRight(strings.TrimSpace(baseURL), "/")
 	if maxPages <= 0 {
@@ -220,7 +227,10 @@ func (s *WildberriesSearchScraper) ScrapeSearch(ctx context.Context, rawURL stri
 	// preferBrowser залипает на весь запрос: как только страница упёрлась в 403
 	// direct и её спас браузер-сайдкар, остальные страницы идут сразу в сайдкар.
 	// browserUsed ограничивает число браузер-страниц (навигация дорогая).
-	var preferBrowser bool
+	// direct по умолчанию пробуем первым, но когда публичная ручка закрыта
+	// насовсем (с 23-09-2026), каждый такой заход — заведомый 403, который мы
+	// же и шлём в адрес WB. WB_SEARCH_DIRECT=false уводит сразу в браузер.
+	preferBrowser := s.searchDirectOff && s.browserURL != ""
 	browserUsed := 0
 
 	for page := 1; page <= s.maxPages; page++ {

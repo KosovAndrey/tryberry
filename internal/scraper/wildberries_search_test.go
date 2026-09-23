@@ -525,3 +525,30 @@ func TestPublicBase429DoesNotBurnTokenSlot(t *testing.T) {
 		t.Errorf("пул токенов опрошен %d раз(а) — публичному хосту токен не нужен", spy.asked)
 	}
 }
+
+// Режим «сразу в браузер»: с 23-09-2026 публичная ручка закрыта насовсем, и
+// поход в неё перед каждым запросом — это заведомый 403, который мы сами шлём
+// в адрес WB. WB_SEARCH_DIRECT=false должен уводить запрос в сайдкар сразу.
+func TestSearchDirectOffSkipsPublicHost(t *testing.T) {
+	s := newTestSearchScraper()
+	directCalls, browserCalls := 0, 0
+	s.http = &http.Client{Transport: roundTripFunc(func(r *http.Request) (*http.Response, error) {
+		directCalls++
+		return resp(403, "", nil), nil
+	})}
+	s.SetBrowserSidecar("http://wb-search-miner:8081", 1)
+	s.browserClient = &http.Client{Transport: roundTripFunc(func(r *http.Request) (*http.Response, error) {
+		browserCalls++
+		return resp(200, `{"data":{"products":[]}}`, nil), nil
+	})}
+	s.SetSearchDirect(false)
+
+	_, _ = s.ScrapeSearch(context.Background(), "https://www.wildberries.ru/catalog/0/search.aspx?search=rtx+5080")
+
+	if directCalls != 0 {
+		t.Fatalf("в закрытую публичную ручку сходили %d раз", directCalls)
+	}
+	if browserCalls == 0 {
+		t.Fatal("сайдкар не позвали")
+	}
+}

@@ -13,12 +13,15 @@
   C. поиск идёт дешёвым in-page fetch'ем, а пагинация попадает в URL
      (через навигацию &page=N не работал — WB всегда отдавал первую страницу);
   D. 403 от __internal снимает healthy — дорожку надо прогревать заново;
-  E. у каждой дорожки свой deviceid, и пересоздание браузера его меняет.
+  E. у каждой дорожки свой deviceid, и пересоздание браузера его меняет;
+  F. одиночные запросы цены склеиваются в ОДНУ пачку, и каждый получает свой
+     товар (поток «по одному» выжигал доверие дорожки за 2–4 минуты).
 
 Запуск: python3 wb-search-miner/test_internal_fetch.py
 Зависимостей нет — aiohttp/patchright замоканы.
 """
 import asyncio
+import json
 import os
 import re
 import sys
@@ -29,6 +32,8 @@ os.environ.update({
     "WB_SEARCH_POOL_SIZE": "1",
     "WB_FETCH_TIMEOUT_SECONDS": "0.5",
     "WB_LANE_MIN_INTERVAL_MS": "0",
+    "WB_CARD_BATCH_WINDOW_MS": "50",
+    "WB_CARD_WAIT_LANE_SECONDS": "1",
     "LOG_LEVEL": "CRITICAL",
 })
 
@@ -130,6 +135,31 @@ async def main():
     a.close = lambda: asyncio.sleep(0)
     await a._relaunch()
     check(a.device_id != before, "пересоздание выдало новый deviceid")
+
+    print("\nF. Одиночные запросы цены склеиваются в одну пачку.")
+    fetches = []
+
+    class BatchLane:
+        idx = 0
+        healthy = True
+
+        async def fetch_card(self, nms):
+            fetches.append(nms)
+            prods = [{"id": int(x), "sizes": [{"price": {"product": 100 * i}}]}
+                     for i, x in enumerate(nms.split(";"), start=1)]
+            return 200, json.dumps({"products": prods}).encode()
+
+    pool = server.Pool([BatchLane()])
+    batcher = server.CardBatcher(pool)
+    task = asyncio.ensure_future(batcher.loop())
+    got = await asyncio.gather(batcher.get("111"), batcher.get("222"), batcher.get("333"))
+    task.cancel()
+    check(len(fetches) == 1, "один запрос к WB вместо трёх: %d" % len(fetches))
+    check(sorted(fetches[0].split(";")) == ["111", "222", "333"],
+          "в пачке все три артикула: %s" % fetches[0])
+    check(all(st == 200 for st, _ in got), "все ответы 200")
+    check([p["id"] for _, p in got] == [111, 222, 333],
+          "каждому достался СВОЙ товар: %s" % [p["id"] for _, p in got])
 
     print("\nвсё зелено" if not check.failed else "\nЕСТЬ ПРОВАЛЫ")
     return 1 if check.failed else 0

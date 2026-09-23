@@ -168,6 +168,7 @@ func run(log *slog.Logger) error {
 	// нужен и bot-worker'у, иначе горячая ссылка упрётся в X5SEC на добавлении.
 	aliSearch := scraper.NewAliexpressSearchScraper(aliexpressCard, 80)
 	aliSearch.SetBrowserSidecar(getEnv("ALI_BROWSER_URL", ""), 1)
+	wbSearch.SetSearchDirect(getEnv("WB_SEARCH_DIRECT", "false") != "false")
 	registry := scraper.NewRegistry(
 		wbSearch,
 		wbSeller,

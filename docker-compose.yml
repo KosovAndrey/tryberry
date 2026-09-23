@@ -364,6 +364,9 @@ services:
       # (различие в транспорте, не в токене/IP). Горячие уходят в прогретый
       # браузер wb-search-miner (in-page fetch к тому же u-search).
       WB_SEARCH_BROWSER_URL: "${WB_SEARCH_BROWSER_URL:-http://wb-search-miner:8081}"
+      # Публичная ручка поиска закрыта с 23-09-2026: не шлём в неё заведомый
+      # 403 перед каждым походом в браузер. true — вернуть direct.
+      WB_SEARCH_DIRECT: "${WB_SEARCH_DIRECT:-false}"
       SEARCH_SCRAPE_INTERVAL_MINUTES: "20"
       # Темп запросов к поисковой ручке WB: страниц на запрос × пауза между ними.
       # Крутилки вынесены в .env, потому что при 429 это единственный рычаг на
@@ -449,6 +452,9 @@ services:
       # 403-фолбэк перекуп-дорожки в тот же браузер-сайдкар wb-search-miner.
       # См. WB_SEARCH_BROWSER_URL у search-worker.
       WB_SEARCH_BROWSER_URL: "${WB_SEARCH_BROWSER_URL:-http://wb-search-miner:8081}"
+      # Публичная ручка поиска закрыта с 23-09-2026: не шлём в неё заведомый
+      # 403 перед каждым походом в браузер. true — вернуть direct.
+      WB_SEARCH_DIRECT: "${WB_SEARCH_DIRECT:-false}"
       SEARCH_SCRAPE_INTERVAL_MINUTES: "20"
       # Reseller — премиум-тариф: даём WB-поиску покрытие 3 стр (300) против 2 у
       # бесплатной дорожки. WB-каталог дёшев, поэтому +1 страница ничего не стоит.
