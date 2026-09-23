@@ -125,6 +125,11 @@ func (s *WildberriesSearchScraper) tokenRequired() bool {
 // direct запрос уходит в прогретый браузер (GET /search?query=&sort=&page=).
 // maxPages — сколько страниц тянуть через сайдкар (<=0 → 1). Пустой URL —
 // фолбэка нет (403 остаётся ошибкой). См. поля browserURL/browserMaxPages.
+//
+// Потолок страниц раньше упирался в механику: сайдкар навигировал браузер на
+// страницу выдачи, а `&page=N` в URL каталога WB игнорировал и всегда отдавал
+// первую. С 23-09-2026 сайдкар ходит in-page fetch'ем прямо в __internal, где
+// пагинация работает, — ограничение осталось только вопросом цены запроса.
 func (s *WildberriesSearchScraper) SetBrowserSidecar(baseURL string, maxPages int) {
 	baseURL = strings.TrimRight(strings.TrimSpace(baseURL), "/")
 	if maxPages <= 0 {

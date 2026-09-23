@@ -164,7 +164,7 @@ func buildSearchRegistry(ctx context.Context, log *slog.Logger) (*scraper.Regist
 		wbCard, nil, tokens, getEnvInt("SEARCH_MAX_PAGES", 3), 700*time.Millisecond)
 	// 403-фолбэк горячих запросов в браузер-сайдкар (как в search-worker) — иначе
 	// сбор WB по популярным запросам упрётся в wbaas 403.
-	wbSearch.SetBrowserSidecar(getEnv("WB_SEARCH_BROWSER_URL", ""), getEnvInt("WB_SEARCH_BROWSER_MAX_PAGES", 1))
+	wbSearch.SetBrowserSidecar(getEnv("WB_SEARCH_BROWSER_URL", ""), getEnvInt("WB_SEARCH_BROWSER_MAX_PAGES", 3))
 	scrapers = append(scrapers, wbSearch)
 
 	scrapers = append(scrapers, scraper.NewYandexMarketSearchScraper(
