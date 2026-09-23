@@ -106,3 +106,28 @@ func TestCardBrowserNotConfiguredKeepsOldPath(t *testing.T) {
 		t.Fatalf("сайдкар звали %d раз при пустом URL", *calls)
 	}
 }
+
+func TestCardBrowserRetriesAfterChallenge(t *testing.T) {
+	// 498 = у дорожки протух токен wbaas; сайдкар метит её нездоровой и чинит
+	// фоном, а вторая попытка попадает на соседнюю. Без ретрая товар молча
+	// уезжал бы на архивную цену, отставшую на дни.
+	n := 0
+	s, calls := cardSidecarScraper(t, 500000, func(r *http.Request) *http.Response {
+		n++
+		if n == 1 {
+			return resp(498, "", nil)
+		}
+		return resp(200, wbUCardBody(69900), nil)
+	})
+
+	res, err := s.Scrape(context.Background(), "https://www.wildberries.ru/catalog/211695539/detail.aspx")
+	if err != nil {
+		t.Fatalf("скрейп упал: %v", err)
+	}
+	if *calls != 2 {
+		t.Fatalf("сайдкар звали %d раз, ждали 2", *calls)
+	}
+	if res.Price != 699 {
+		t.Fatalf("цена %v — ретрай не спас живую цену", res.Price)
+	}
+}

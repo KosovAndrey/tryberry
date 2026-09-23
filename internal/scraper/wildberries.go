@@ -407,6 +407,24 @@ func (s *WildberriesScraper) fetchCardViaBrowser(ctx context.Context, articleID 
 	if err != nil {
 		return cardBody{}, err
 	}
+	// Две попытки: у дорожки протухает токен wbaas (498), и тогда сайдкар метит
+	// её нездоровой и чинит фоном. Вторая попытка попадает на соседнюю дорожку и
+	// спасает цену — иначе товар молча уехал бы на архивную, отставшую на дни.
+	var lastErr error
+	for attempt := 1; attempt <= 2; attempt++ {
+		body, err := s.cardBrowserOnce(ctx, req.Clone(ctx))
+		if err == nil {
+			return body, nil
+		}
+		lastErr = err
+		if ctx.Err() != nil {
+			break
+		}
+	}
+	return cardBody{}, lastErr
+}
+
+func (s *WildberriesScraper) cardBrowserOnce(ctx context.Context, req *http.Request) (cardBody, error) {
 	resp, err := s.cardBrowser.Do(req)
 	if err != nil {
 		metrics.WBUCardFetch.WithLabelValues("browser", "error").Inc()
@@ -415,7 +433,8 @@ func (s *WildberriesScraper) fetchCardViaBrowser(ctx context.Context, articleID 
 	defer resp.Body.Close()
 	data, _ := io.ReadAll(io.LimitReader(resp.Body, maxSearchBodyBytes))
 	if resp.StatusCode != http.StatusOK {
-		// 502 = нет прогретых дорожек, 403 = челлендж не пройден и в браузере.
+		// 502 = нет прогретых дорожек, 498 = токен дорожки протух (перепрогрев
+		// идёт фоном), 403 = челлендж не пройден и в браузере.
 		metrics.WBUCardFetch.WithLabelValues("browser", wbUCardOutcome(resp.StatusCode)).Inc()
 		return cardBody{}, fmt.Errorf("card sidecar status %d", resp.StatusCode)
 	}
@@ -443,6 +462,10 @@ func wbUCardOutcome(status int) string {
 	switch {
 	case status == http.StatusForbidden:
 		return "forbidden"
+	case status == 498:
+		// wbaas просит пройти челлендж заново: токен дорожки протух. Лечится
+		// перепрогревом, а не сменой хоста — отделяем от прочих ошибок.
+		return "challenge"
 	case status == http.StatusTooManyRequests:
 		return "rate_limited"
 	case status >= 500:
