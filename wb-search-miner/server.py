@@ -90,14 +90,22 @@ CARD_BATCH_MAX = int(os.getenv("WB_CARD_BATCH_MAX", "10"))
 CARD_BATCH_WINDOW_S = float(os.getenv("WB_CARD_BATCH_WINDOW_MS", "250")) / 1000.0
 # Сколько ждать здоровую дорожку, прежде чем отдать отказ: перепрогрев после
 # 498 занимает секунды, а отказ стоит товару архивной цены.
-# 12с, а не 8: за 20 минут после выката 502 («не дождались дорожки») набралось
-# столько же, сколько успехов, а клиент в Go ждёт 25с — лучше подождать, чем
-# отдать отказ и записать товару архивную цену.
-CARD_WAIT_LANE_S = float(os.getenv("WB_CARD_WAIT_LANE_SECONDS", "12"))
+# Сколько ждать здоровую дорожку. Было 12с и две попытки — в сумме с заходом в
+# публичный хост это давало p95 в 30с и душило ОБЩИЙ пул воркеров скрейпера, а
+# следом и соседние площадки. Отказ должен стоить секунды: цена всё равно уедет
+# в архив, и лучше сделать это быстро.
+CARD_WAIT_LANE_S = float(os.getenv("WB_CARD_WAIT_LANE_SECONDS", "4"))
 # Заголовок deviceid — ключ ко ВСЕМУ __internal (23-09-2026): без него in-page
 # fetch из прогретой страницы даёт 403, с ним 200. Значение произвольное
 # (site_<32 hex>), к сессии не привязано; x-spa-version/x-requested-with не нужны.
 DEVICE_ID_PREFIX = os.getenv("WB_DEVICE_ID_PREFIX", "site_")
+# Страница-стоянка. После прогрева дорожка НЕ должна оставаться на выдаче: это
+# тяжёлая SPA, которая крутит таймеры и анимации круглосуточно — 23-09 вечером
+# три дорожки съели 477% CPU, и в голоде оказались все площадки разом (p95 у WB,
+# Ozon и Яндекса уехал к 30с одинаково). Лёгкий текстовый документ ТОГО ЖЕ
+# origin сохраняет куки и доверие: in-page fetch к __internal с него отдаёт 200
+# и по цене, и по поиску (проверено). about:blank не годится — origin теряется.
+PARK_URL = os.getenv("WB_PARK_URL", "https://www.wildberries.ru/robots.txt")
 
 HEADLESS = os.getenv("HEADLESS", "false").lower() in ("1", "true", "yes")
 # Таймаут одной попытки in-page fetch. Здоровый ответ u-search ~1–2с.
@@ -480,6 +488,7 @@ class Lane:
             self._next_warm = 0.0
             self._last_warm = time.monotonic()
             _mark_success()
+            await self._park()
             log.info("дорожка %d прогрета: u-search 200 (wbaas пройден)", self.idx)
             return
 
@@ -540,6 +549,19 @@ class Lane:
                         self.idx, len(seen["all"]), docs[-4:] or "—", title)
         except Exception as e:  # noqa: BLE001
             log.warning("краткая диагностика упала: %s", _first_line(e))
+
+    async def _park(self):
+        """Увести дорожку с выдачи на лёгкую страницу того же origin. Куки и
+        пройденный челлендж остаются при ней, а рендерер перестаёт жечь CPU."""
+        try:
+            await asyncio.wait_for(
+                self._page.goto(PARK_URL, wait_until="domcontentloaded",
+                                timeout=int(NAV_TIMEOUT_S * 1000)),
+                timeout=NAV_TIMEOUT_S + NAV_HARD_SLACK_S)
+        except Exception as e:  # noqa: BLE001
+            # Не повод считать дорожку больной: прогрев уже удался, fetch
+            # работает и с выдачи — просто дороже.
+            log.warning("дорожка %d: парковка не удалась: %s", self.idx, _first_line(e))
 
     async def _api_fetch(self, rel_url: str, what: str):
         """In-page fetch к __internal ИЗ прогретой страницы, с заголовком
@@ -714,6 +736,8 @@ class Lane:
                     self._page.remove_listener("response", on_resp)
                 except Exception:  # noqa: BLE001
                     pass
+                # Со страницы выдачи уходим сразу: держать её открытой дорого.
+                await self._park()
 
     def due_keepalive(self, now: float) -> bool:
         return self.healthy and WARM_KEEPALIVE_S > 0 and (now - self._last_warm) >= WARM_KEEPALIVE_S

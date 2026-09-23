@@ -18,7 +18,9 @@
      товар (поток «по одному» выжигал доверие дорожки за 2–4 минуты);
   G. потерянный пачкой артикул добирается через detail — у распроданных нет
      оффера, list их не отдаёт, и без добора товар уезжал на архивную цену и
-     числился в наличии.
+     числился в наличии;
+  H. после прогрева дорожка паркуется на лёгкой странице того же origin —
+     стоянка на выдаче стоила 477% CPU и уронила p95 у ВСЕХ площадок.
 
 Запуск: python3 wb-search-miner/test_internal_fetch.py
 Зависимостей нет — aiohttp/patchright замоканы.
@@ -192,6 +194,48 @@ async def main():
     check(p1 is not None and p1["id"] == 111, "живой товар пришёл из пачки")
     check(p2 is not None and p2["id"] == 222 and p2["totalQuantity"] == 0,
           "распроданный пришёл честным OOS, а не пустотой")
+
+    print("\nH. После прогрева дорожка уходит на стоянку.")
+    nav = []
+
+    class WarmPage(FakePage):
+        def __init__(self):
+            super().__init__()
+            self.url = "https://www.wildberries.ru/catalog/0/search.aspx?search=x"
+
+        async def goto(self, url, **kw):
+            nav.append(url)
+
+        def on(self, *a, **k):
+            pass
+
+        def remove_listener(self, *a, **k):
+            pass
+
+        async def title(self):
+            return ""
+
+        async def wait_for_timeout(self, *a, **k):
+            pass
+
+        @property
+        def mouse(self):
+            class M:
+                async def move(self, *a, **k):
+                    pass
+
+                async def wheel(self, *a, **k):
+                    pass
+            return M()
+
+    lane5 = make_lane(WarmPage())
+    lane5._warm_fails = 0
+    # Прогрев считается удачным, когда страница получила свой u-search 200.
+    # Подсовываем это напрямую: нас интересует только, куда лейн уедет потом.
+    await lane5._park()
+    check(nav and nav[-1] == server.PARK_URL, "паркуемся на %s" % server.PARK_URL)
+    check("wildberries.ru" in server.PARK_URL and "search.aspx" not in server.PARK_URL,
+          "стоянка — лёгкая страница того же origin, а не выдача")
 
     print("\nвсё зелено" if not check.failed else "\nЕСТЬ ПРОВАЛЫ")
     return 1 if check.failed else 0
