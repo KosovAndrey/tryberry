@@ -213,6 +213,11 @@ func run(log *slog.Logger) error {
 	// Хост живой карточки (пусто → card.wb.ru). Рычаг на случай, если WB снова
 	// закроет текущий хост для всех, как u-card 21-09.
 	wbCard.SetCardAPIBase(getEnv("WB_CARD_API_BASE", ""))
+	// Живая цена через браузерный сайдкар, когда публичный хост закрыт (с 23-09-2026
+	// закрыты все сразу). Пусто — фолбэка нет, цена придёт из архива.
+	wbCard.SetCardBrowserSidecar(getEnv("WB_CARD_BROWSER_URL", ""))
+	// Публичный хост карточки закрыт с 23-09-2026 — не платим 403 на каждом товаре.
+	wbCard.SetCardDirect(getEnv("WB_CARD_DIRECT", "false") != "false")
 	registry := scraper.NewRegistry(
 		wbCard,
 		scraper.NewOzonScraper(scraper.OzonOptions{

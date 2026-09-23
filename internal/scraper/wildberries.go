@@ -65,6 +65,13 @@ type WildberriesScraper struct {
 	ucardPrimary bool
 	// cardBase — база ручки живой карточки (пусто → wbCardBase). См. SetCardAPIBase.
 	cardBase string
+	// cardBrowserURL — база сайдкара wb-search-miner для живой цены через браузер
+	// (пусто = фолбэка нет). См. SetCardBrowserSidecar и fetchCardViaBrowser.
+	cardBrowserURL string
+	cardBrowser    *http.Client
+	// cardDirectOff — не ходить в публичный хост вовсе, сразу в браузер. Нужен,
+	// когда хост закрыт надолго: иначе каждый товар платит лишним 403.
+	cardDirectOff bool
 }
 
 func NewWildberriesScraper(rps float64) *WildberriesScraper {
@@ -124,6 +131,28 @@ func (s *WildberriesScraper) SetUCardProxy(proxyURL string) error {
 func (s *WildberriesScraper) SetCardAPIBase(base string) {
 	s.cardBase = strings.TrimRight(strings.TrimSpace(base), "?&")
 }
+
+// SetCardBrowserSidecar подключает wb-search-miner как источник живой цены, когда
+// публичный хост закрыт (с 23-09-2026 это штатный режим). Пустой URL — фолбэка нет,
+// цена тогда придёт из архива и отстанет на дни.
+func (s *WildberriesScraper) SetCardBrowserSidecar(baseURL string) {
+	baseURL = strings.TrimRight(strings.TrimSpace(baseURL), "/")
+	s.cardBrowserURL = baseURL
+	if baseURL == "" {
+		s.cardBrowser = nil
+		return
+	}
+	// Свой клиент с запасом по времени: дорожка сайдкара ждёт очереди на локе,
+	// а общий 8-секундный клиент рубил бы ответ на полпути.
+	s.cardBrowser = &http.Client{Timeout: 25 * time.Second}
+}
+
+// SetCardDirect выключает публичный хост карточки: false — сразу идём в сайдкар.
+// С 23-09-2026 публичные хосты закрыты для всех, и на каждом товаре пробовать
+// заведомо мёртвый путь — только лишний 403 в адрес WB. Рубильник в .env
+// (WB_CARD_DIRECT=false), чтобы вернуть публичный путь без выкатки, когда WB
+// снова откроет хост.
+func (s *WildberriesScraper) SetCardDirect(v bool) { s.cardDirectOff = !v }
 
 func (s *WildberriesScraper) cardAPIBase() string {
 	if s.cardBase == "" {
@@ -280,36 +309,21 @@ func (s *WildberriesScraper) fetchFromUCard(ctx context.Context, articleID strin
 		return nil, fmt.Errorf("%w: invalid article id", ErrInvalidURL)
 	}
 
-	apiURL := s.cardAPIBase() + "?appType=1&curr=rub&dest=-1257786&spp=30&nm=" + articleID
-	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, apiURL, nil)
-	req.Header.Set("User-Agent", wbUserAgent)
-	resp, err := s.ucard.Do(req)
+	body, err := s.fetchCardBody(ctx, articleID)
 	if err != nil {
-		// Таймаут клиента (8с) отделяем от прочей сети: это разные болезни —
-		// «не тянет прокси» против «нет связи».
-		if errors.Is(err, context.DeadlineExceeded) || os.IsTimeout(err) {
-			metrics.WBUCardFetch.WithLabelValues("timeout").Inc()
-		} else {
-			metrics.WBUCardFetch.WithLabelValues("error").Inc()
-		}
 		return nil, err
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusOK {
-		metrics.WBUCardFetch.WithLabelValues(wbUCardOutcome(resp.StatusCode)).Inc()
-		return nil, fmt.Errorf("u-card status %d", resp.StatusCode)
 	}
 
 	var parsed wbSearchResponse
-	if err := json.NewDecoder(resp.Body).Decode(&parsed); err != nil {
-		metrics.WBUCardFetch.WithLabelValues("error").Inc()
+	if err := json.Unmarshal(body.data, &parsed); err != nil {
+		metrics.WBUCardFetch.WithLabelValues(body.transport, "error").Inc()
 		return nil, err
 	}
 	if len(parsed.Products) == 0 {
-		metrics.WBUCardFetch.WithLabelValues("empty").Inc()
+		metrics.WBUCardFetch.WithLabelValues(body.transport, "empty").Inc()
 		return nil, ErrProductNotFound
 	}
-	metrics.WBUCardFetch.WithLabelValues("ok").Inc()
+	metrics.WBUCardFetch.WithLabelValues(body.transport, "ok").Inc()
 
 	p := parsed.Products[0]
 	priceKopecks := ucardPriceKopecks(p)
@@ -327,6 +341,85 @@ func (s *WildberriesScraper) fetchFromUCard(ctx context.Context, articleID strin
 		// кончившегося товара, и такой товар уезжал в дайджест «лучших цен».
 		InStock: stock > 0 && priceKopecks > 0,
 	}, nil
+}
+
+// cardBody — сырой ответ карточки и то, каким транспортом он добыт (для метрики).
+type cardBody struct {
+	data      []byte
+	transport string
+}
+
+// fetchCardBody добывает сырой JSON живой карточки: сперва публичным хостом
+// (дёшево), затем — браузерным сайдкаром wb-search-miner.
+//
+// Фолбэк появился 23-09-2026, когда WB закрыл 403-м ВСЕ публичные хосты сразу
+// (card/u-card/search/u-search) для всех, включая домашний RU-IP, и оставил цену
+// только за фронтом, на www.wildberries.ru/__internal. Туда не попасть обычным
+// HTTP-клиентом даже с валидной кукой и верным JA3 (498), поэтому живая цена
+// теперь идёт через браузер. Публичный путь оставлен первым и почти ничего не
+// стоит: он вернётся, если WB снова откроет хост, и тогда браузер не понадобится.
+func (s *WildberriesScraper) fetchCardBody(ctx context.Context, articleID string) (cardBody, error) {
+	if s.cardDirectOff && s.cardBrowserURL != "" {
+		return s.fetchCardViaBrowser(ctx, articleID)
+	}
+	apiURL := s.cardAPIBase() + "?appType=1&curr=rub&dest=-1257786&spp=30&nm=" + articleID
+	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, apiURL, nil)
+	req.Header.Set("User-Agent", wbUserAgent)
+	resp, err := s.ucard.Do(req)
+	if err != nil {
+		// Таймаут клиента (8с) отделяем от прочей сети: это разные болезни —
+		// «не тянет прокси» против «нет связи».
+		outcome := "error"
+		if errors.Is(err, context.DeadlineExceeded) || os.IsTimeout(err) {
+			outcome = "timeout"
+		}
+		metrics.WBUCardFetch.WithLabelValues("direct", outcome).Inc()
+		if b, berr := s.fetchCardViaBrowser(ctx, articleID); berr == nil {
+			return b, nil
+		}
+		return cardBody{}, err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		metrics.WBUCardFetch.WithLabelValues("direct", wbUCardOutcome(resp.StatusCode)).Inc()
+		if b, berr := s.fetchCardViaBrowser(ctx, articleID); berr == nil {
+			return b, nil
+		}
+		return cardBody{}, fmt.Errorf("u-card status %d", resp.StatusCode)
+	}
+	data, err := io.ReadAll(io.LimitReader(resp.Body, maxSearchBodyBytes))
+	if err != nil {
+		metrics.WBUCardFetch.WithLabelValues("direct", "error").Inc()
+		return cardBody{}, err
+	}
+	return cardBody{data: data, transport: "direct"}, nil
+}
+
+// fetchCardViaBrowser — живая карточка через сайдкар (GET /card?nm=<id>). Сайдкар
+// делает in-page fetch к __internal из прогретого браузера и отдаёт СЫРОЙ JSON
+// той же формы, что раньше давал публичный хост, — парсер общий.
+func (s *WildberriesScraper) fetchCardViaBrowser(ctx context.Context, articleID string) (cardBody, error) {
+	if s.cardBrowserURL == "" {
+		return cardBody{}, fmt.Errorf("card browser sidecar not configured")
+	}
+	api := s.cardBrowserURL + "/card?nm=" + neturl.QueryEscape(articleID)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, api, nil)
+	if err != nil {
+		return cardBody{}, err
+	}
+	resp, err := s.cardBrowser.Do(req)
+	if err != nil {
+		metrics.WBUCardFetch.WithLabelValues("browser", "error").Inc()
+		return cardBody{}, err
+	}
+	defer resp.Body.Close()
+	data, _ := io.ReadAll(io.LimitReader(resp.Body, maxSearchBodyBytes))
+	if resp.StatusCode != http.StatusOK {
+		// 502 = нет прогретых дорожек, 403 = челлендж не пройден и в браузере.
+		metrics.WBUCardFetch.WithLabelValues("browser", wbUCardOutcome(resp.StatusCode)).Inc()
+		return cardBody{}, fmt.Errorf("card sidecar status %d", resp.StatusCode)
+	}
+	return cardBody{data: data, transport: "browser"}, nil
 }
 
 // ucardStockQty — сколько единиц лежит на складах по всем размерам. Пусто = товара

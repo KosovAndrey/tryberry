@@ -134,6 +134,12 @@ services:
       WB_UCARD_PRIMARY: "${WB_UCARD_PRIMARY:-true}"
       # Хост живой карточки WB (пусто → card.wb.ru; u-card с 21-09 403 всем).
       WB_CARD_API_BASE: "${WB_CARD_API_BASE:-}"
+      # Живая цена через браузер, когда публичный хост закрыт: с 23-09-2026 WB
+      # 403-ит ВСЕ публичные хосты, цена осталась только за фронтом (__internal).
+      WB_CARD_BROWSER_URL: "${WB_CARD_BROWSER_URL:-http://wb-search-miner:8081}"
+      # Публичный хост карточки (WB_CARD_API_BASE) закрыт с 23-09-2026: не ходим
+      # туда вовсе. true — вернуть публичный путь, когда WB его откроет.
+      WB_CARD_DIRECT: "${WB_CARD_DIRECT:-false}"
       ADMIN_IDS: "${ADMIN_IDS}"
       # VK-бот (пусто = выключено): токен сообщества + ссылка для кнопки привязки.
       VK_GROUP_TOKEN: "${VK_GROUP_TOKEN:-}"
@@ -265,6 +271,12 @@ services:
       WB_UCARD_PRIMARY: "${WB_UCARD_PRIMARY:-true}"
       # Хост живой карточки WB (пусто → card.wb.ru; u-card с 21-09 403 всем).
       WB_CARD_API_BASE: "${WB_CARD_API_BASE:-}"
+      # Живая цена через браузер, когда публичный хост закрыт: с 23-09-2026 WB
+      # 403-ит ВСЕ публичные хосты, цена осталась только за фронтом (__internal).
+      WB_CARD_BROWSER_URL: "${WB_CARD_BROWSER_URL:-http://wb-search-miner:8081}"
+      # Публичный хост карточки (WB_CARD_API_BASE) закрыт с 23-09-2026: не ходим
+      # туда вовсе. true — вернуть публичный путь, когда WB его откроет.
+      WB_CARD_DIRECT: "${WB_CARD_DIRECT:-false}"
       # Мобильный РФ-прокси Ozon (путь B: аккаунт-сессия проходит FAB через
       # доверенный IP). Sticky/ротация 0. Секрет — в .env.
       OZON_PROXY_URL: "${OZON_PROXY_URL:-}"

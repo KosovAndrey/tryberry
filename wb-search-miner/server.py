@@ -11,14 +11,21 @@ Chromium (patchright, тот же движок, что проходит wbaas в
 не в IP: майнер с того же IP в браузере ловит 200. Поэтому горячие запросы
 уводим в браузер — как у Ozon (ozon-miner) с FAB.
 
-Дорожка прогревается навигацией на страницу поиска нейтрального запроса (проходит
-wbaas-стену), затем цену/выдачу достаём «методом друга»: in-page fetch к тому же
-u-search ИЗНУТРИ доверенного контекста (cookie + решённый челлендж согласованы).
+С 23-09-2026 это не подпорка под горячие запросы, а ЕДИНСТВЕННЫЙ путь к WB:
+публичные хосты (card/u-card/search/u-search .wb.ru) закрыты 403 для всех, включая
+домашний RU-IP, а фронт ушёл на __internal за тем же сайтом. Из HTTP-клиента туда
+не попасть даже с валидной кукой и верным JA3 (curl и curl_cffi impersonate → 498).
 
-Go-скрейпер (WildberriesSearchScraper, фолбэк на 403) зовёт
-GET /search?query=<q>&sort=<s>&page=<n> → дорожка делает in-page fetch к u-search
-и отдаёт СЫРОЙ JSON той же формы, что и direct (wbSearchResponse), зеркаля
-upstream-статус (403 при стойкой стене).
+Дорожка прогревается навигацией на страницу поиска нейтрального запроса (проходит
+wbaas-стену), затем выдачу и цены достаём «методом друга»: in-page fetch к
+__internal ИЗНУТРИ доверенного контекста, с заголовком `deviceid` — без него
+даже прогретая страница получает 403, с ним 200 (значение произвольное).
+
+Go-скрейпер зовёт:
+  GET /search?query=<q>&sort=<s>&page=<n>  — выдача (пагинация работает);
+  GET /card?nm=id1;id2;...                 — живые цены пачкой до CARD_BATCH_MAX.
+Оба отдают СЫРОЙ JSON той же формы, что раньше давали публичные хосты
+(wbSearchResponse), зеркаля upstream-статус.
 
 Живучесть: джиттер интервала, backoff на стойкой стене (не долбить — жжёт IP),
 периодический re-warm, пересоздание браузера после смерти драйвера И после N
@@ -61,6 +68,16 @@ USEARCH_PATH = os.getenv(
 # Фиксированные параметры u-search (совпадают с buildSearchAPIURL в Go).
 WB_DEST = os.getenv("WB_DEST", "-1257786")
 WB_SPP = os.getenv("WB_SPP", "30")
+# Живая карточка. 23-09-2026 WB закрыл ВСЕ публичные хосты (card/u-card/search/
+# u-search — 403 wbaas всем, включая домашний RU-IP), и цена осталась только за
+# фронтом, на том же __internal. Форма ответа прежняя, nm принимает пачкой.
+UCARD_PATH = os.getenv("WB_UCARD_PATH", "/__internal/u-card/cards/v4/list")
+# Сколько артикулов класть в один запрос карточек. Фронт сам шлёт по 10.
+CARD_BATCH_MAX = int(os.getenv("WB_CARD_BATCH_MAX", "10"))
+# Заголовок deviceid — ключ ко ВСЕМУ __internal (23-09-2026): без него in-page
+# fetch из прогретой страницы даёт 403, с ним 200. Значение произвольное
+# (site_<32 hex>), к сессии не привязано; x-spa-version/x-requested-with не нужны.
+DEVICE_ID_PREFIX = os.getenv("WB_DEVICE_ID_PREFIX", "site_")
 
 HEADLESS = os.getenv("HEADLESS", "false").lower() in ("1", "true", "yes")
 # Таймаут одной попытки in-page fetch. Здоровый ответ u-search ~1–2с.
@@ -210,6 +227,32 @@ def _search_page_url(query: str, sort: str, page: int, filters: str = "") -> str
     return url
 
 
+def _new_device_id() -> str:
+    """deviceid вида site_<32 hex> — тот самый заголовок, без которого __internal
+    отвечает 403 даже прогретому браузеру (23-09-2026). Значение произвольное:
+    фронт генерит его сам, привязки к сессии/куке нет — проверено случайным."""
+    return DEVICE_ID_PREFIX + "%032x" % random.getrandbits(128)
+
+
+def _ucard_url(nms: str) -> str:
+    """Относительный URL живых карточек пачкой: nm=id1;id2;... (та же форма
+    ответа, что у закрытого u-card.wb.ru — products[].sizes[].price)."""
+    return (UCARD_PATH + "?appType=1&curr=rub&dest=" + quote(WB_DEST)
+            + "&spp=" + quote(WB_SPP) + "&lang=ru&ab_testing=false&nm=" + quote(nms))
+
+
+def _search_api_url(query: str, sort: str, page: int) -> str:
+    """Относительный URL выдачи для in-page fetch. Пагинация здесь РАБОТАЕТ
+    (в отличие от навигации по &page=N, которая всегда отдавала стр. 1)."""
+    url = (USEARCH_PATH + "?appType=1&curr=rub&dest=" + quote(WB_DEST)
+           + "&spp=" + quote(WB_SPP) + "&query=" + quote(query)
+           + "&resultset=catalog&lang=ru&locale=ru&suppressSpellcheck=false")
+    url += "&sort=" + quote(sort or "popular")
+    if page and page > 1:
+        url += "&page=" + str(page)
+    return url
+
+
 def _parse_proxy(url: str):
     if not url:
         return None
@@ -263,6 +306,9 @@ class Lane:
         self._browser = None
         self._ctx = None
         self._page = None
+        # deviceid — ключ к __internal (см. DEVICE_ID_PREFIX). Свой на дорожку,
+        # чтобы дорожки не выглядели одним устройством.
+        self.device_id = _new_device_id()
 
     async def _launch(self):
         kw = {"headless": HEADLESS, "args": ["--no-sandbox", "--disable-dev-shm-usage"]}
@@ -301,6 +347,9 @@ class Lane:
         log.warning("дорожка %d: пересоздаю браузер", self.idx)
         await self.close()
         self._browser = self._ctx = self._page = None
+        # Свежий контекст — свежее «устройство»: старый deviceid мог попасть под
+        # ограничение вместе с залипшей сессией.
+        self.device_id = _new_device_id()
         try:
             await self._launch()
             return True
@@ -465,19 +514,94 @@ class Lane:
         except Exception as e:  # noqa: BLE001
             log.warning("краткая диагностика упала: %s", _first_line(e))
 
+    async def _api_fetch(self, rel_url: str, what: str):
+        """In-page fetch к __internal ИЗ прогретой страницы, с заголовком
+        deviceid. Дёшево (нет навигации) и работает для обеих ручек. Возвращает
+        (status, body_bytes); 0 — дорожка не ответила (драйвер мёртв/висит)."""
+        js = """async ([u, dev]) => {
+            const r = await fetch(u, {headers: {deviceid: dev}, credentials: 'include'});
+            return {s: r.status, b: await r.text()};
+        }"""
+        try:
+            res = await asyncio.wait_for(
+                self._page.evaluate(js, [rel_url, self.device_id]),
+                timeout=FETCH_TIMEOUT_S)
+        except asyncio.TimeoutError:
+            self.healthy = False
+            self._needs_relaunch = True
+            log.warning("дорожка %d: %s не вернулся за %.0fс — нездорова",
+                        self.idx, what, FETCH_TIMEOUT_S)
+            return 0, b""
+        except Exception as e:  # noqa: BLE001
+            if _is_dead(e):
+                self.healthy = False
+                self._needs_relaunch = True
+            log.warning("дорожка %d: %s упал: %s", self.idx, what, _first_line(e))
+            return 0, b""
+        status = int(res.get("s") or 0)
+        body = (res.get("b") or "").encode("utf-8")
+        if status != 200:
+            # 403 здесь = прогрев протух (кука/челлендж), а не «нет товара».
+            self.healthy = False
+            log.warning("дорожка %d: %s status=%s — нездорова", self.idx, what, status)
+        return status, body
+
+    async def _spacing(self):
+        """Человекоподобная пауза между запросами одной дорожки."""
+        t0 = time.monotonic()
+        spacing = max(0.1, LANE_MIN_INTERVAL_S * (1.0 + LANE_JITTER * (2 * random.random() - 1)))
+        wait = spacing - (t0 - self._last_at)
+        if wait > 0:
+            await asyncio.sleep(wait)
+        self._last_at = time.monotonic()
+
+    async def fetch_card(self, nms: str):
+        """Живые карточки пачкой (nm=id1;id2;...). Ответ той же формы, что отдавал
+        закрытый u-card.wb.ru, — Go-парсер не меняется."""
+        async with self.lock:
+            self._lock_since = time.monotonic()
+            try:
+                await self._spacing()
+                status, body = await self._api_fetch(_ucard_url(nms), "u-card")
+                if status == 200:
+                    _mark_success()
+                    log.info("дорожка %d: card %s ок (%d байт)",
+                             self.idx, nms[:60], len(body))
+                return status, body
+            finally:
+                self._lock_since = 0.0
+
     async def fetch_search(self, query: str, sort: str, page: int, filters: str = ""):
+        """Выдача из прогретого браузера. Основной путь — in-page fetch к
+        u-search (дёшево, и пагинация работает). Фильтры каталога через API не
+        переносятся, поэтому с ними идём прежним путём: навигация на страницу
+        запроса и перехват нативного ответа фронта."""
+        if not filters:
+            async with self.lock:
+                self._lock_since = time.monotonic()
+                try:
+                    await self._spacing()
+                    status, body = await self._api_fetch(
+                        _search_api_url(query, sort, page), "u-search")
+                    if status == 200:
+                        _mark_success()
+                        log.info("дорожка %d: search %r p%d ок (%d байт)",
+                                 self.idx, query[:40], page, len(body))
+                        return status, body
+                finally:
+                    self._lock_since = 0.0
+            # Сюда попадаем при 403/пустом ответе: пробуем прежний путь через
+            # навигацию — он переживает протухший deviceid-путь.
+        return await self._fetch_search_via_nav(query, sort, page, filters)
+
+    async def _fetch_search_via_nav(self, query: str, sort: str, page: int, filters: str = ""):
         """Навигируем прогретый браузер на страницу запроса и ПЕРЕХВАТЫВАЕМ ответ
         u-search, который фронт делает сам (нативно, со всеми нужными заголовками —
         ручной fetch wbaas отвергает 403). Возвращает (status, body_bytes)."""
         nav_url = _search_page_url(query, sort, page, filters)
         async with self.lock:
             self._lock_since = time.monotonic()
-            t0 = time.monotonic()
-            spacing = max(0.1, LANE_MIN_INTERVAL_S * (1.0 + LANE_JITTER * (2 * random.random() - 1)))
-            wait = spacing - (t0 - self._last_at)
-            if wait > 0:
-                await asyncio.sleep(wait)
-            self._last_at = time.monotonic()
+            await self._spacing()
 
             loop = asyncio.get_event_loop()
             fut: asyncio.Future = loop.create_future()
@@ -690,6 +814,27 @@ async def handle_search(request: web.Request) -> web.Response:
                         headers={"X-WB-Lane": str(lane.idx)})
 
 
+async def handle_card(request: web.Request) -> web.Response:
+    """GET /card?nm=id1;id2;... — живые карточки (цена, наличие) из браузера.
+    Артикулов не больше CARD_BATCH_MAX: столько же кладёт в запрос сам фронт."""
+    pool: Pool = request.app["pool"]
+    raw = (request.query.get("nm") or "").strip()
+    nms = [x for x in re.split(r"[;,\s]+", raw) if x.isdigit()]
+    if not nms:
+        return web.json_response({"error": "nm required"}, status=400)
+    if len(nms) > CARD_BATCH_MAX:
+        return web.json_response(
+            {"error": "too many nm (max %d)" % CARD_BATCH_MAX}, status=400)
+    lane = pool.pick()
+    if lane is None:
+        return web.Response(status=502, text="no healthy lanes")
+    status, body = await lane.fetch_card(";".join(nms))
+    if status == 0:
+        return web.Response(status=502, text="lane fetch failed")
+    return web.Response(status=status, body=body, content_type="application/json",
+                        headers={"X-WB-Lane": str(lane.idx)})
+
+
 async def handle_health(request: web.Request) -> web.Response:
     pool: Pool = request.app["pool"]
     healthy = pool.healthy_count()
@@ -809,6 +954,7 @@ async def main():
         app = web.Application()
         app["pool"] = pool
         app.router.add_get("/search", handle_search)
+        app.router.add_get("/card", handle_card)
         app.router.add_get("/healthz", handle_health)
         app.router.add_get("/metrics", handle_metrics)
 
