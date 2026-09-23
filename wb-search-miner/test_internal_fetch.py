@@ -15,7 +15,10 @@
   D. 403 от __internal снимает healthy — дорожку надо прогревать заново;
   E. у каждой дорожки свой deviceid, и пересоздание браузера его меняет;
   F. одиночные запросы цены склеиваются в ОДНУ пачку, и каждый получает свой
-     товар (поток «по одному» выжигал доверие дорожки за 2–4 минуты).
+     товар (поток «по одному» выжигал доверие дорожки за 2–4 минуты);
+  G. потерянный пачкой артикул добирается через detail — у распроданных нет
+     оффера, list их не отдаёт, и без добора товар уезжал на архивную цену и
+     числился в наличии.
 
 Запуск: python3 wb-search-miner/test_internal_fetch.py
 Зависимостей нет — aiohttp/patchright замоканы.
@@ -160,6 +163,35 @@ async def main():
     check(all(st == 200 for st, _ in got), "все ответы 200")
     check([p["id"] for _, p in got] == [111, 222, 333],
           "каждому достался СВОЙ товар: %s" % [p["id"] for _, p in got])
+
+    print("\nG. Потерянный пачкой артикул добирается через detail.")
+    seen = {"list": 0, "detail": 0}
+
+    class MissingLane:
+        idx = 0
+        healthy = True
+
+        async def fetch_card(self, nms):
+            seen["list"] += 1
+            # 222 распродан — WB его в пачке не отдаёт.
+            prods = [{"id": int(x), "sizes": [{"price": {"product": 500}}]}
+                     for x in nms.split(";") if x != "222"]
+            return 200, json.dumps({"products": prods}).encode()
+
+        async def fetch_card_detail(self, nm):
+            seen["detail"] += 1
+            return 200, json.dumps({"products": [
+                {"id": int(nm), "totalQuantity": 0, "sizes": [{"stocks": []}]}]}).encode()
+
+    pool2 = server.Pool([MissingLane()])
+    b2 = server.CardBatcher(pool2)
+    t2 = asyncio.ensure_future(b2.loop())
+    (s1, p1), (s2, p2) = await asyncio.gather(b2.get("111"), b2.get("222"))
+    t2.cancel()
+    check(seen["detail"] == 1, "detail позвали ровно для потерянного: %d" % seen["detail"])
+    check(p1 is not None and p1["id"] == 111, "живой товар пришёл из пачки")
+    check(p2 is not None and p2["id"] == 222 and p2["totalQuantity"] == 0,
+          "распроданный пришёл честным OOS, а не пустотой")
 
     print("\nвсё зелено" if not check.failed else "\nЕСТЬ ПРОВАЛЫ")
     return 1 if check.failed else 0

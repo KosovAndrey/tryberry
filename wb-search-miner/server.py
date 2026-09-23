@@ -73,6 +73,15 @@ WB_SPP = os.getenv("WB_SPP", "30")
 # u-search — 403 wbaas всем, включая домашний RU-IP), и цена осталась только за
 # фронтом, на том же __internal. Форма ответа прежняя, nm принимает пачкой.
 UCARD_PATH = os.getenv("WB_UCARD_PATH", "/__internal/u-card/cards/v4/list")
+# Карточка по одному артикулу. Нужна там, где list МОЛЧА пропускает товар: у
+# распроданных нет живого оффера, и в пачке они просто отсутствуют (проверено
+# 23-09: один и тот же набор теряется во всех прогонах). detail же отдаёт их с
+# totalQuantity=0 и пустой ценой — это честный OOS, а без него товар сваливался
+# на архивную цену и выглядел «в наличии», хотя его нет.
+UCARD_DETAIL_PATH = os.getenv("WB_UCARD_DETAIL_PATH", "/__internal/u-card/cards/v4/detail")
+# Сколько потерянных артикулов добирать поштучно. Дороже пачки, поэтому с
+# потолком: остальные уедут на архив, как раньше.
+CARD_DETAIL_MAX = int(os.getenv("WB_CARD_DETAIL_MAX", "4"))
 # Сколько артикулов класть в один запрос карточек. Фронт сам шлёт по 10.
 CARD_BATCH_MAX = int(os.getenv("WB_CARD_BATCH_MAX", "10"))
 # Окно накопления пачки. Плата — задержка ответа, выигрыш — во столько раз
@@ -81,7 +90,10 @@ CARD_BATCH_MAX = int(os.getenv("WB_CARD_BATCH_MAX", "10"))
 CARD_BATCH_WINDOW_S = float(os.getenv("WB_CARD_BATCH_WINDOW_MS", "250")) / 1000.0
 # Сколько ждать здоровую дорожку, прежде чем отдать отказ: перепрогрев после
 # 498 занимает секунды, а отказ стоит товару архивной цены.
-CARD_WAIT_LANE_S = float(os.getenv("WB_CARD_WAIT_LANE_SECONDS", "8"))
+# 12с, а не 8: за 20 минут после выката 502 («не дождались дорожки») набралось
+# столько же, сколько успехов, а клиент в Go ждёт 25с — лучше подождать, чем
+# отдать отказ и записать товару архивную цену.
+CARD_WAIT_LANE_S = float(os.getenv("WB_CARD_WAIT_LANE_SECONDS", "12"))
 # Заголовок deviceid — ключ ко ВСЕМУ __internal (23-09-2026): без него in-page
 # fetch из прогретой страницы даёт 403, с ним 200. Значение произвольное
 # (site_<32 hex>), к сессии не привязано; x-spa-version/x-requested-with не нужны.
@@ -247,6 +259,13 @@ def _ucard_url(nms: str) -> str:
     ответа, что у закрытого u-card.wb.ru — products[].sizes[].price)."""
     return (UCARD_PATH + "?appType=1&curr=rub&dest=" + quote(WB_DEST)
             + "&spp=" + quote(WB_SPP) + "&lang=ru&ab_testing=false&nm=" + quote(nms))
+
+
+def _ucard_detail_url(nm: str) -> str:
+    """URL карточки одного артикула (отдаёт и распроданный товар — с qty 0)."""
+    return (UCARD_DETAIL_PATH + "?appType=1&curr=rub&dest=" + quote(WB_DEST)
+            + "&spp=" + quote(WB_SPP) + "&mtype=257&lang=ru&ab_testing=false&nm="
+            + quote(nm))
 
 
 def _search_api_url(query: str, sort: str, page: int) -> str:
@@ -579,6 +598,19 @@ class Lane:
             finally:
                 self._lock_since = 0.0
 
+    async def fetch_card_detail(self, nm: str):
+        """Карточка одного артикула через detail — добор того, что list потерял."""
+        async with self.lock:
+            self._lock_since = time.monotonic()
+            try:
+                await self._spacing()
+                status, body = await self._api_fetch(_ucard_detail_url(nm), "u-card detail")
+                if status == 200:
+                    _mark_success()
+                return status, body
+            finally:
+                self._lock_since = 0.0
+
     async def fetch_search(self, query: str, sort: str, page: int, filters: str = ""):
         """Выдача из прогретого браузера. Основной путь — in-page fetch к
         u-search (дёшево, и пагинация работает). Фильтры каталога через API не
@@ -900,6 +932,24 @@ class CardBatcher:
             except Exception as e:  # noqa: BLE001
                 log.warning("батчер: ответ не разобран: %s", _first_line(e))
                 status = 502
+        # Кого пачка потеряла — добираем поштучно: у распроданных нет оффера, и
+        # list их не отдаёт вовсе. Без этого товар уезжал на архивную цену и
+        # числился в наличии, хотя его нет.
+        if status == 200:
+            missing = [nm for nm in batch if nm not in products]
+            for nm in missing[:CARD_DETAIL_MAX]:
+                lane = await self.pool.pick_wait(CARD_WAIT_LANE_S)
+                if lane is None:
+                    break
+                st, body = await lane.fetch_card_detail(nm)
+                if st != 200:
+                    continue
+                try:
+                    for p in json.loads(body or b"{}").get("products") or []:
+                        products[str(p.get("id"))] = p
+                except Exception as e:  # noqa: BLE001
+                    log.warning("батчер: detail не разобран: %s", _first_line(e))
+
         for nm, fs in batch.items():
             for f in fs:
                 if not f.done():
