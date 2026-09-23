@@ -245,6 +245,15 @@ func (s *WildberriesSearchScraper) ScrapeSearch(ctx context.Context, rawURL stri
 			}
 			body, err = s.fetchViaBrowser(ctx, query, sortMode, page, filters)
 			browserUsed++
+			// Сайдкар не ответил — пробуем публичную ручку. Сейчас она закрыта
+			// и вернёт 403, но WB уже дважды открывал ручки обратно: когда
+			// откроет, падение браузера не уронит поиск целиком.
+			if err != nil {
+				if dbody, derr := s.fetchPage(ctx, buildSearchAPIURL(s.searchAPIBase(), query, sortMode, page, filters), referer); derr == nil {
+					body, err = dbody, nil
+					preferBrowser = false
+				}
+			}
 		} else {
 			body, err = s.fetchPage(ctx, buildSearchAPIURL(s.searchAPIBase(), query, sortMode, page, filters), referer)
 			// direct заблокирован (обычно 403 на горячем) → уводим в браузер и

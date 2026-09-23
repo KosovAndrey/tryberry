@@ -131,3 +131,27 @@ func TestCardBrowserRetriesAfterChallenge(t *testing.T) {
 		t.Fatalf("цена %v — ретрай не спас живую цену", res.Price)
 	}
 }
+
+func TestCardBrowserDownFallsBackToPublicHost(t *testing.T) {
+	// Сайдкар лёг, а публичный хост жив (так будет, когда WB откроет ручки
+	// обратно — он уже дважды менял их местами). Цена должна прийти оттуда, а
+	// не с архива, отстающего на дни.
+	s, calls := cardSidecarScraper(t, 500000, func(r *http.Request) *http.Response {
+		return resp(502, "no healthy lanes", nil)
+	})
+	s.SetCardDirect(false) // штатный режим с 23-09: публичный путь выключен
+	s.ucard = &http.Client{Transport: roundTripFunc(func(r *http.Request) (*http.Response, error) {
+		return resp(200, wbUCardBody(69900), nil), nil
+	})}
+
+	res, err := s.Scrape(context.Background(), "https://www.wildberries.ru/catalog/211695539/detail.aspx")
+	if err != nil {
+		t.Fatalf("скрейп упал: %v", err)
+	}
+	if *calls == 0 {
+		t.Fatal("сайдкар не пробовали — а он основной путь")
+	}
+	if res.Price != 699 {
+		t.Fatalf("цена %v — публичный хост не подхватил упавший браузер", res.Price)
+	}
+}

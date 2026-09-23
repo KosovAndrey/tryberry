@@ -360,8 +360,34 @@ type cardBody struct {
 // стоит: он вернётся, если WB снова откроет хост, и тогда браузер не понадобится.
 func (s *WildberriesScraper) fetchCardBody(ctx context.Context, articleID string) (cardBody, error) {
 	if s.cardDirectOff && s.cardBrowserURL != "" {
-		return s.fetchCardViaBrowser(ctx, articleID)
+		b, err := s.fetchCardViaBrowser(ctx, articleID)
+		if err == nil {
+			return b, nil
+		}
+		// Сайдкар не ответил — прежде чем уйти на архив (а он отстаёт на дни),
+		// пробуем публичный хост. Сейчас он закрыт и вернёт 403, но WB уже
+		// дважды открывал ручки обратно: когда откроет, мы переживём падение
+		// браузера без ручного вмешательства.
+		if b, derr := s.fetchCardDirect(ctx, articleID); derr == nil {
+			return b, nil
+		}
+		return cardBody{}, err
 	}
+	// Публичный путь первым (WB_CARD_DIRECT=true): на неудаче — браузер.
+	b, err := s.fetchCardDirect(ctx, articleID)
+	if err == nil {
+		return b, nil
+	}
+	if bb, berr := s.fetchCardViaBrowser(ctx, articleID); berr == nil {
+		return bb, nil
+	}
+	return cardBody{}, err
+}
+
+// fetchCardDirect — публичный хост карточки (WB_CARD_API_BASE). Порядок путей
+// задаёт fetchCardBody: сама эта функция в браузер не уходит, иначе фолбэк
+// browser → direct возвращался бы в браузер вторым заходом.
+func (s *WildberriesScraper) fetchCardDirect(ctx context.Context, articleID string) (cardBody, error) {
 	apiURL := s.cardAPIBase() + "?appType=1&curr=rub&dest=-1257786&spp=30&nm=" + articleID
 	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, apiURL, nil)
 	req.Header.Set("User-Agent", wbUserAgent)
@@ -374,17 +400,11 @@ func (s *WildberriesScraper) fetchCardBody(ctx context.Context, articleID string
 			outcome = "timeout"
 		}
 		metrics.WBUCardFetch.WithLabelValues("direct", outcome).Inc()
-		if b, berr := s.fetchCardViaBrowser(ctx, articleID); berr == nil {
-			return b, nil
-		}
 		return cardBody{}, err
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
 		metrics.WBUCardFetch.WithLabelValues("direct", wbUCardOutcome(resp.StatusCode)).Inc()
-		if b, berr := s.fetchCardViaBrowser(ctx, articleID); berr == nil {
-			return b, nil
-		}
 		return cardBody{}, fmt.Errorf("u-card status %d", resp.StatusCode)
 	}
 	data, err := io.ReadAll(io.LimitReader(resp.Body, maxSearchBodyBytes))
