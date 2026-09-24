@@ -318,17 +318,17 @@ groups:
       # :8889) — отказ 27-08, который в метриках читался как ТИШИНА, а не как
       # ошибки; с тех пор транспортные ошибки считаются как direct+error.
       # Условие «сайдкар работает» отсекает штатный простой без запросов.
-      - alert: WbSearchDirectDown
+      - alert: WbSearchNoResults
         expr: |
-          sum(increase(tryberrybot_wb_search_fetch_total{transport="direct",result="ok"}[15m])) == 0
+          sum(increase(tryberrybot_search_scrapes_total{status="success"}[30m])) == 0
           and
-          sum(increase(tryberrybot_wb_search_fetch_total{transport="browser"}[15m])) > 0
-        for: 10m
+          sum(increase(tryberrybot_search_scrapes_total[30m])) > 0
+        for: 15m
         labels:
           severity: warning
         annotations:
-          summary: "WB-поиск: direct не даёт успехов, всё идёт через браузер"
-          description: "За 15 минут ни одного успешного direct-запроса к поисковой ручке WB при живом браузерном фолбэке. Смотреть долю result=error (egress не пропускает) против 429/forbidden (лимит/бан WB): sum by (result) (increase(tryberrybot_wb_search_fetch_total{transport=\"direct\"}[15m])). Проверить ручку и плечи: python3 scripts/wb-endpoint-probe.py --proxy http://xray:8889 --repeat 5 (сравнить u-search.wb.ru с search.wb.ru) и python3 scripts/wb-lane-test.py --lanes xray/config.json (мёртвые плечи). Рычаги в .env: WB_SEARCH_API_BASE (ручка) и SEARCH_PROXY_URLS/RESELLER_SEARCH_PROXY_URLS (8889 random, 8888 липкий). WB меняет ручки местами: 01-09 search.wb.ru закрылся 429, 17-09 закрылся u-search (403 wbaas всем, включая все плечи), а search.wb.ru открылся — сперва сравнить обе ручки пробой, потом переключать."
+          summary: "WB-поиск не отдаёт результатов"
+          description: "За 30 минут ни одного успешного цикла скрейпа выдачи при том, что циклы запускались. С 23-09-2026 поиск идёт ТОЛЬКО через браузерный сайдкар (публичные хосты WB закрыты 403 для всех), поэтому смотреть: healthy-дорожки (wb_search_miner_healthy_lanes), логи pt_wb_search_miner на wbaas-стену (create-token 498) и CPU/память контейнера. Разбор и рычаги — docs/WB-SEARCH-STATUS.md."
 
       # Живая цена WB пропала: карточка почти вся идёт из архива basket-CDN,
       # который отстаёт на ДНИ. Success rate при этом 100% — скрейпер честно
@@ -408,9 +408,18 @@ groups:
           summary: "Ali-сайдкар: залипшие дорожки"
           description: "У ali-miner дорожка держит лок дольше порога 15+ минут. Вотчдог должен был снять healthy и пересоздать браузер — если алерт держится, смотреть логи pt_ali_miner."
 
-      # Высокая латентность скрейпинга
+      # Высокая латентность скрейпинга.
+      #
+      # Требование к ОБЪЁМУ обязательно. Ночью 23/24-09 правило флапало каждые
+      # полчаса по всем площадкам подряд: на разреженном трафике p95 считается
+      # по единицам наблюдений и упирается в верхний бакет гистограммы (ровно
+      # 30с в алертах — это граница, а не измерение). Порог 0.05 запроса/с ≈ 15
+      # запросов за 5 минут: ниже этого квантиль не несёт смысла.
       - alert: HighScrapeLatency
-        expr: tryberrybot:scrape_duration_p95:5m > 10
+        expr: |
+          tryberrybot:scrape_duration_p95:5m > 10
+          and
+          sum by (marketplace) (rate(tryberrybot_scrape_duration_seconds_count[5m])) > 0.05
         for: 5m
         labels:
           severity: warning
@@ -691,6 +700,7 @@ groups:
       # Ночной автоперекат плеч xray (cron 04:00) давно не завершался успешно.
       # 14–17.09 он трое суток падал молча (кавычки в XRAY_SUBS), провайдер тем
       # временем сменил узлы, поисковый пул :8889 вымер — узнали по WbSearchDirectDown
+      # (правило снято 23-09: direct больше не используется, его сменил WbSearchNoResults)
       # через сутки. 36ч = пропущен один ночной прогон плюс запас.
       - alert: XrayLanesAutoStale
         expr: time() - xray_lanes_auto_last_success_timestamp_seconds > 36 * 3600
