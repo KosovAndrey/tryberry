@@ -61,6 +61,16 @@ for _i in range(__N__):
         r = o.open("__URL__", timeout=12); r.read(); c[str(r.status)] += 1
     except Exception as e:
         c[str(e)[:24]] += 1
+# Страна ВЫХОДА через это же плечо. Адрес узла про неё ничего не говорит: у
+# каскадов вход в РФ, выход за границей, а бывает и выход прямо в РФ. WB с
+# российского выхода отвечает 200, а Telegram душит ТСПУ (24.09 leastPing
+# сел на такое плечо, и бот час ловил TLS handshake timeout).
+try:
+    o = urllib.request.build_opener(urllib.request.ProxyHandler(
+        {"https": "__PROXY__", "http": "__PROXY__"}))
+    c["exit"] = o.open("https://ipinfo.io/country", timeout=12).read().decode().strip()
+except Exception:
+    c["exit"] = "?"
 print(dict(c))
 """
 

@@ -184,6 +184,11 @@ def main() -> None:
             verdict = row.get("verdict", "")
             if "'200'" not in verdict and "HTTP Error" not in verdict:
                 rejected.add(tag)
+            # Выход в РФ: WB через него отвечает, а Telegram — нет (ТСПУ), и
+            # leastPing на :8888 выбирает именно его, потому что ближе всех.
+            # Неизвестную страну («?») не бракуем: ipinfo мог просто не ответить.
+            if "'exit': 'RU'" in verdict:
+                rejected.add(tag)
 
     # Пробим параллельно: последовательно 100 узлов с таймаутом 5с — это минуты
     # тишины, и в cron-логе выглядит как зависание.
