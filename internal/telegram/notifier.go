@@ -281,8 +281,15 @@ func (n *Notifier) SendSearchAlert(ctx context.Context, a SearchAlert) error {
 	if hero := a.Items[0].ImageURL; hero != "" {
 		caption := renderSearchAlert(a, searchCaptionBudget)
 		err := n.sendPhoto(ctx, a.ChatID, hero, caption, keyboard)
-		if errors.Is(err, ErrTelegramPermanent) && !errors.Is(err, ErrTelegramRecipientGone) {
-			n.log.Warn("search alert hero photo rejected, falling back to text", "image_url", hero, "err", err)
+		// Фолбэк на текст — при ЛЮБОЙ беде с фото, кроме ушедшего получателя.
+		// Перманентный отказ Telegram («failed to get HTTP URL content») был
+		// покрыт и раньше, а вот таймаут — нет: sendPhoto заставляет Telegram
+		// самому сходить за картинкой, и на медленном CDN запрос висит дольше
+		// нашего клиента. Ночью 24-09 такой алерт трижды ушёл в ретрай с тем же
+		// фото и был отброшен — подписчик не узнал о снижении цены. Картинка
+		// приятна, но содержание важнее: лучше текст, чем молчание.
+		if err != nil && !errors.Is(err, ErrTelegramRecipientGone) {
+			n.log.Warn("search alert hero photo failed, falling back to text", "image_url", hero, "err", err)
 			return n.sendMessage(ctx, a.ChatID, renderSearchAlert(a, 0), keyboard)
 		}
 		return err
