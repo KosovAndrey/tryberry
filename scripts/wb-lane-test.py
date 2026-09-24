@@ -64,7 +64,8 @@ for _i in range(__N__):
 # Страна ВЫХОДА через это же плечо. Адрес узла про неё ничего не говорит: у
 # каскадов вход в РФ, выход за границей, а бывает и выход прямо в РФ. WB с
 # российского выхода отвечает 200, а Telegram душит ТСПУ (24.09 leastPing
-# сел на такое плечо, и бот час ловил TLS handshake timeout).
+# сел на такое плечо, и бот час ловил TLS handshake timeout). По этому полю
+# xray-lanes-pick.py уводит плечо в пул только для поиска (:8889).
 try:
     o = urllib.request.build_opener(urllib.request.ProxyHandler(
         {"https": "__PROXY__", "http": "__PROXY__"}))
@@ -83,7 +84,7 @@ def load_lanes(path: str) -> list[dict[str, Any]]:
     """Плечи из конфига xray или из списка, сохранённого прошлым прогоном."""
     data = json.load(open(path))
     outbounds = data["outbounds"] if isinstance(data, dict) else data
-    return [o for o in outbounds if str(o.get("tag", "")).startswith("vless")]
+    return [o for o in outbounds if str(o.get("tag", "")).startswith(("vless", "ruexit-"))]
 
 
 def resolve(lane: dict[str, Any]) -> str | None:

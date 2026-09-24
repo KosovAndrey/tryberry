@@ -45,6 +45,10 @@ from typing import Any
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 GENERATOR = os.path.join(HERE, "xray-config-from-sub.py")
+# Префикс тега плеч с выходом в РФ. Балансировщики матчат теги по префиксу:
+# общий (:8888) берёт «vless», поисковый (egress-spread, :8889) — ещё и этот.
+RU_EXIT_PREFIX = "ruexit-"
+SPREAD_BALANCER = "egress-spread"
 
 
 def resolve(lane: dict[str, Any]) -> str | None:
@@ -166,6 +170,12 @@ def main() -> None:
         print(f"слито подписок: {len(src_paths)}, плеч всего {len(lanes)}")
 
     rejected: set[str] = set()
+    # Плечи с выходом в РФ: площадкам годятся (а то и лучше зарубежных), а
+    # Telegram через них душит ТСПУ. 24.09 leastPing на :8888 сел на такое
+    # плечо как на самое близкое — час TLS handshake timeout у бота. Поэтому
+    # не бракуем, а уводим под отдельный префикс тега: его видит только
+    # поисковый балансировщик :8889. «?» (ipinfo не ответил) остаётся в общем.
+    ru_exit: set[str] = set()
     if args.results:
         verdicts = json.load(open(args.results))
         # Плечо без вердикта в проверенный пул не пускаем: 17.09 узел, не ответивший
@@ -184,11 +194,8 @@ def main() -> None:
             verdict = row.get("verdict", "")
             if "'200'" not in verdict and "HTTP Error" not in verdict:
                 rejected.add(tag)
-            # Выход в РФ: WB через него отвечает, а Telegram — нет (ТСПУ), и
-            # leastPing на :8888 выбирает именно его, потому что ближе всех.
-            # Неизвестную страну («?») не бракуем: ipinfo мог просто не ответить.
             if "'exit': 'RU'" in verdict:
-                rejected.add(tag)
+                ru_exit.add(tag)
 
     # Пробим параллельно: последовательно 100 узлов с таймаутом 5с — это минуты
     # тишины, и в cron-логе выглядит как зависание.
@@ -253,7 +260,17 @@ def main() -> None:
         print("\n--dry-run: конфиг не записан")
         return
 
-    cfg["outbounds"] = [lane for _, lane in picked] + tail
+    out_lanes = []
+    for _, lane in picked:
+        if lane["tag"] in ru_exit:
+            lane = dict(lane, tag=RU_EXIT_PREFIX + lane["tag"].removeprefix("vless-"))
+        out_lanes.append(lane)
+    for bal in (cfg.get("routing") or {}).get("balancers") or []:
+        if bal.get("tag") == SPREAD_BALANCER and RU_EXIT_PREFIX not in bal["selector"]:
+            bal["selector"].append(RU_EXIT_PREFIX)
+    ru_n = sum(1 for ln in out_lanes if ln["tag"].startswith(RU_EXIT_PREFIX))
+    print(f"плеч с выходом в РФ (только :8889): {ru_n}, в общем пуле :8888: {len(out_lanes) - ru_n}")
+    cfg["outbounds"] = out_lanes + tail
     if os.path.exists(args.out):
         backup = args.out + ".bak-" + datetime.datetime.now().strftime("%F-%H%M")
         shutil.copy(args.out, backup)

@@ -42,6 +42,7 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.dirname(HERE)
 PICK = os.path.join(HERE, "xray-lanes-pick.py")
 LANE_TEST = os.path.join(HERE, "wb-lane-test.py")
+RU_EXIT_PREFIX = "ruexit-"  # как в xray-lanes-pick.py: плечи только для :8889
 CANDIDATE = "/tmp/xray-lanes-candidate.json"
 VERDICTS = "/tmp/xray-lanes-auto-verdicts.json"
 KEEP_BACKUPS = 5
@@ -81,11 +82,15 @@ def lane_addrs(cfg_path: str) -> set[str]:
     cfg = json.load(open(cfg_path))
     out = set()
     for ob in cfg.get("outbounds", []):
-        if not str(ob.get("tag", "")).startswith("vless"):
+        tag = str(ob.get("tag", ""))
+        if not tag.startswith(("vless", RU_EXIT_PREFIX)):
             continue
         v = (ob.get("settings") or {}).get("vnext") or [{}]
         if v[0].get("address"):
-            out.add(f'{v[0]["address"]}:{v[0].get("port", 443)}')
+            # Префикс в ключе: плечо, переехавшее из общего пула в «только поиск»
+            # (выход в РФ), — это изменение, хотя адрес тот же.
+            pool = RU_EXIT_PREFIX if tag.startswith(RU_EXIT_PREFIX) else ""
+            out.add(f'{pool}{v[0]["address"]}:{v[0].get("port", 443)}')
     return out
 
 
@@ -255,6 +260,13 @@ def apply(args) -> int:
     if len(new) < args.min_lanes:
         log(f"в кандидате {len(new)} плеч < --min-lanes {args.min_lanes} — конфиг не трогаем, "
             "разбираться руками")
+        return 1
+    # Отдельно — пул Telegram (:8888): плечи с выходом в РФ туда не входят, и
+    # если осталось мало остальных, TG-egress снова висит на одном-двух узлах.
+    tg_lanes = sum(1 for a in new if not a.startswith(RU_EXIT_PREFIX))
+    if tg_lanes < args.min_lanes:
+        log(f"в пуле :8888 (без выхода в РФ) {tg_lanes} плеч < --min-lanes {args.min_lanes} — "
+            "конфиг не трогаем, разбираться руками")
         return 1
     added, gone = sorted(new - cur), sorted(cur - new)
     if not added and not gone:
