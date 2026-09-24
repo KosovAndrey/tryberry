@@ -250,6 +250,25 @@ var (
 		[]string{"transport", "result"},
 	)
 
+	// SearchAlertHeroPhoto — судьба hero-картинки в алерте по поиск-подписке:
+	//   sent     — ушла вместе с сообщением;
+	//   rejected — Telegram отказался её скачивать («failed to get HTTP URL
+	//              content»): по URL за картинкой ходит ОН, и наши CDN его
+	//              пускают не всегда — алерт при этом доставлен текстом;
+	//   failed   — отправка фото сорвалась иначе (таймаут, 5xx) → тоже текстом;
+	//   absent   — у топ-позиции картинки не было вовсе.
+	// Заведена 24-09-2026: доля отказов видна была только в логах, а они
+	// исчезают вместе с контейнером при каждом выкате. По ней решаем, нужно ли
+	// слать картинку файлом вместо ссылки.
+	SearchAlertHeroPhoto = promauto.NewCounterVec(
+		prometheus.CounterOpts{
+			Namespace: namespace,
+			Name:      "search_alert_hero_photo_total",
+			Help:      "Fate of the hero photo in search alerts (sent|rejected|failed|absent)",
+		},
+		[]string{"outcome"},
+	)
+
 	// SearchNotificationsSent — отправленные батч-уведомления по поиск-подпискам,
 	// сгруппированные по типу триггера.
 	SearchNotificationsSent = promauto.NewCounterVec(

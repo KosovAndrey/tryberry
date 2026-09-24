@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"gitlab.com/KosovAndrey/tryberrybot/internal/domain"
+	"gitlab.com/KosovAndrey/tryberrybot/internal/metrics"
 )
 
 // ErrTelegramPermanent — Telegram отверг запрос ПЕРМАНЕНТНО (HTTP 4xx, кроме 429):
@@ -289,11 +290,23 @@ func (n *Notifier) SendSearchAlert(ctx context.Context, a SearchAlert) error {
 		// фото и был отброшен — подписчик не узнал о снижении цены. Картинка
 		// приятна, но содержание важнее: лучше текст, чем молчание.
 		if err != nil && !errors.Is(err, ErrTelegramRecipientGone) {
+			// «rejected» — Telegram не смог скачать картинку сам, «failed» —
+			// сорвалось иначе (таймаут, 5xx). Различаем, потому что лечатся
+			// по-разному: первое — отправкой файлом, второе — таймаутами.
+			outcome := "failed"
+			if errors.Is(err, ErrTelegramPermanent) {
+				outcome = "rejected"
+			}
+			metrics.SearchAlertHeroPhoto.WithLabelValues(outcome).Inc()
 			n.log.Warn("search alert hero photo failed, falling back to text", "image_url", hero, "err", err)
 			return n.sendMessage(ctx, a.ChatID, renderSearchAlert(a, 0), keyboard)
 		}
+		if err == nil {
+			metrics.SearchAlertHeroPhoto.WithLabelValues("sent").Inc()
+		}
 		return err
 	}
+	metrics.SearchAlertHeroPhoto.WithLabelValues("absent").Inc()
 	// Без фото у топа — обычный текст; лог, чтобы отличать «hero не было» от
 	// «hero отвергнут» при разборах.
 	n.log.Info("search alert without hero (no image on top item)", "sub_id", a.UserID)
