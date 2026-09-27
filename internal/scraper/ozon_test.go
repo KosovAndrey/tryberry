@@ -220,6 +220,36 @@ func TestParseOzonWidgetsOutOfStock(t *testing.T) {
 	}
 }
 
+// ozonOOSBodyV2 — новая вложенная сигнатура webOutOfStock (дамп 2230185975,
+// 2026-09-28): без поля sku, id только в common.action.link. Плюс полка
+// tileGridDesktop с чужим товаром.
+const ozonOOSBodyV2 = `{"widgetStates":{
+	"webOutOfStock-13545189-default-1":"{\"text\":{\"text\":\"Генератор инверторный BOXBOT BGI-5000E, 5 кВт\",\"textColor\":\"textPrimary\"},\"image\":{\"image\":\"https://ir.ozone.ru/s3/multimedia-1-a/7590938590.jpg\",\"aspectRatio\":\"RATIO_3_4\"},\"price\":{\"price\":[{\"text\":\"27 890 ₽\",\"textStyle\":\"PRICE\",\"color\":\"textTertiary\"}],\"priceStyle\":{\"styleType\":\"UNAVAILABLE\"}},\"common\":{\"action\":{\"behavior\":\"BEHAVIOR_TYPE_REDIRECT\",\"link\":\"/product/2230185975/?oos_search=false\"}}}",
+	"tileGridDesktop-3669724-default-1":"{\"items\":[{\"sku\":4855158561,\"mainState\":[{\"type\":\"priceV2\",\"priceV2\":{\"price\":[{\"text\":\"19 990 ₽\",\"textStyle\":\"PRICE\"}]}}]}]}"
+}}`
+
+func TestParseOzonWidgetsOutOfStockV2(t *testing.T) {
+	res, err := parseOzonWidgets([]byte(ozonOOSBodyV2), "2230185975")
+	if err != nil {
+		t.Fatalf("parseOzonWidgets error: %v", err)
+	}
+	if res.InStock {
+		t.Error("InStock = true; товара нет в продаже")
+	}
+	if res.Price != 27890 {
+		t.Errorf("Price = %v; want 27890", res.Price)
+	}
+	if !strings.Contains(res.Name, "BOXBOT") {
+		t.Errorf("Name = %q", res.Name)
+	}
+	if res.ImageURL != "https://ir.ozone.ru/s3/multimedia-1-a/7590938590.jpg" {
+		t.Errorf("ImageURL = %q", res.ImageURL)
+	}
+	if _, err := parseOzonWidgets([]byte(ozonOOSBodyV2), "999"); err == nil {
+		t.Error("чужой id в ссылке виджета не должен давать результат")
+	}
+}
+
 // TestParseOzonWidgetsOutOfStockForeignSKU: OOS-виджет, подписанный ЧУЖИМ sku
 // (предложение другого продавца / полка), не должен выдаваться за наш товар.
 func TestParseOzonWidgetsOutOfStockForeignSKU(t *testing.T) {

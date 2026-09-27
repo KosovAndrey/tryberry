@@ -546,6 +546,80 @@ type ozonOutOfStockWidget struct {
 	Price      string `json:"price"`
 }
 
+// ozonOutOfStockWidgetV2 — новая вложенная сигнатура того же виджета (дамп
+// 2230185975, 2026-09-28): плоских sku/skuName/coverImage нет, id товара — только
+// в ссылке common.action.link, цена — массивом в price.price.
+//
+//	{"text":{"text":"Генератор инверторный BOXBOT BGI-5000E, …"},
+//	 "image":{"image":"https://ir.ozone.ru/s3/multimedia-1-a/7590938590.jpg"},
+//	 "price":{"price":[{"text":"27 890 ₽","textStyle":"PRICE"}],"priceStyle":{"styleType":"UNAVAILABLE"}},
+//	 "common":{"action":{"link":"/product/2230185975/?oos_search=false"}}}
+type ozonOutOfStockWidgetV2 struct {
+	Text struct {
+		Text string `json:"text"`
+	} `json:"text"`
+	Image struct {
+		Image string `json:"image"`
+	} `json:"image"`
+	Price struct {
+		Price []struct {
+			Text      string `json:"text"`
+			TextStyle string `json:"textStyle"`
+		} `json:"price"`
+	} `json:"price"`
+	Common struct {
+		Action struct {
+			Link string `json:"link"`
+		} `json:"action"`
+	} `json:"common"`
+}
+
+var ozonLinkIDRe = regexp.MustCompile(`/product/(?:[^/?#]*-)?(\d+)`)
+
+// parseOzonOOSWidget разбирает виджет в любом из двух форматов и возвращает
+// Result, только если виджет подписан нашим sku (плоское поле sku либо id в
+// ссылке на карточку). Иначе nil.
+func parseOzonOOSWidget(raw, sku string) *Result {
+	var w ozonOutOfStockWidget
+	if json.Unmarshal([]byte(raw), &w) == nil && w.SKU != "" {
+		if w.SKU != sku {
+			return nil
+		}
+		return oosResult(w.SKUName, w.CoverImage, w.Price)
+	}
+	var v2 ozonOutOfStockWidgetV2
+	if json.Unmarshal([]byte(raw), &v2) != nil {
+		return nil
+	}
+	m := ozonLinkIDRe.FindStringSubmatch(v2.Common.Action.Link)
+	if len(m) < 2 || m[1] != sku {
+		return nil
+	}
+	price := ""
+	for _, p := range v2.Price.Price {
+		if p.TextStyle == "PRICE" || price == "" {
+			price = p.Text
+		}
+		if p.TextStyle == "PRICE" {
+			break
+		}
+	}
+	return oosResult(v2.Text.Text, v2.Image.Image, price)
+}
+
+func oosResult(name, image, price string) *Result {
+	name = strings.TrimSpace(name)
+	if name == "" {
+		name = "Товар Ozon"
+	}
+	return &Result{
+		Name:     name,
+		ImageURL: image,
+		Price:    parseRubles(price),
+		InStock:  false,
+	}
+}
+
 // extractOzonOutOfStock распознаёт «товара нет в продаже» и собирает Result по
 // НАШЕЙ карточке: имя, фото и ПОСЛЕДНЮЮ известную цену (всё это несёт сам
 // OOS-виджет), с InStock=false. Возвращает nil, если товар в продаже.
@@ -572,22 +646,8 @@ func extractOzonOutOfStock(ws map[string]string, sku string) *Result {
 	}
 	sort.Strings(keys)
 	for _, k := range keys {
-		var w ozonOutOfStockWidget
-		if json.Unmarshal([]byte(ws[k]), &w) != nil {
-			continue
-		}
-		if w.SKU != sku {
-			continue
-		}
-		name := strings.TrimSpace(w.SKUName)
-		if name == "" {
-			name = "Товар Ozon"
-		}
-		return &Result{
-			Name:     name,
-			ImageURL: w.CoverImage,
-			Price:    parseRubles(w.Price),
-			InStock:  false,
+		if res := parseOzonOOSWidget(ws[k], sku); res != nil {
+			return res
 		}
 	}
 	return nil
