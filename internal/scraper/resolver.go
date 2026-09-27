@@ -190,7 +190,31 @@ func (r *LinkResolver) Expand(ctx context.Context, raw string) string {
 	if final == "" {
 		return raw
 	}
+	if u := ozonSearchProductURL(resp.Request.URL); u != "" {
+		r.log.Info("link resolver: ozon short landed on search, using product_id", "raw", raw, "url", u)
+		return u
+	}
 	return final
+}
+
+// ozonSearchProductURL — шэр товара НЕ в наличии: приложение Ozon редиректит
+// ozon.ru/t/… не на карточку, а на поиск
+// /search/?product_id=2230185975&text=Генератор. Такой URL матчится как
+// подписка на выдачу (или не матчится вовсе), и товар не добавить. Берём
+// product_id и отдаём канонический товарный URL. Не Ozon-поиск → "".
+func ozonSearchProductURL(u *url.URL) string {
+	host := strings.ToLower(strings.TrimPrefix(u.Host, "www."))
+	if host != "ozon.ru" && !strings.HasSuffix(host, ".ozon.ru") {
+		return ""
+	}
+	if !strings.HasPrefix(u.Path, "/search") {
+		return ""
+	}
+	id := u.Query().Get("product_id")
+	if id == "" || strings.Trim(id, "0123456789") != "" {
+		return ""
+	}
+	return "https://www.ozon.ru/product/" + id + "/"
 }
 
 // isYandexShort — шорт-ссылка Яндекса (market.yandex.ru/cc/, ya.cc): её резолвит

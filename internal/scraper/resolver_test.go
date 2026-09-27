@@ -5,6 +5,7 @@ import (
 	"errors"
 	"io"
 	"net/http"
+	"net/url"
 	"strings"
 	"testing"
 
@@ -230,5 +231,32 @@ func TestExpandInText_NoURLNoChange(t *testing.T) {
 	in := "просто текст без ссылок"
 	if got := r.ExpandInText(context.Background(), in); got != in {
 		t.Fatalf("ExpandInText changed plain text: %q", got)
+	}
+}
+
+func TestExpand_OzonOOSSearchRedirectToProduct(t *testing.T) {
+	withTestShortHost(t, "sh.test", "/t/")
+	r := NewLinkResolver(0, nil)
+	r.client.Transport = fakeRT{hops: map[string]string{
+		"https://sh.test/t/3Qp7bQw": "https://www.ozon.ru/search/?deny_category_prediction=true&from_global=true&miniapp=main&product_id=2230185975&short=3Qp7bQw&text=%D0%93%D0%B5%D0%BD",
+	}}
+	got := r.Expand(context.Background(), "https://sh.test/t/3Qp7bQw")
+	want := "https://www.ozon.ru/product/2230185975/"
+	if got != want {
+		t.Fatalf("Expand = %q, want %q", got, want)
+	}
+}
+
+func TestOzonSearchProductURL_IgnoresPlainSearch(t *testing.T) {
+	for _, raw := range []string{
+		"https://www.ozon.ru/search/?text=генератор",
+		"https://www.ozon.ru/search/?product_id=abc",
+		"https://market.yandex.ru/search?product_id=123",
+		"https://www.ozon.ru/product/123/?product_id=5",
+	} {
+		u, _ := url.Parse(raw)
+		if got := ozonSearchProductURL(u); got != "" {
+			t.Errorf("ozonSearchProductURL(%q) = %q, want empty", raw, got)
+		}
 	}
 }
