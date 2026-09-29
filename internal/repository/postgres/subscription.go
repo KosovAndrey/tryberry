@@ -284,6 +284,14 @@ func (r *SubscriptionRepo) UpdateBaseline(ctx context.Context, id int64, newPric
 	return err
 }
 
+// ResetNotified — перевзвести подписку: товар пропал из наличия, следующее
+// появление снова уведомит (триггер back_in_stock).
+func (r *SubscriptionRepo) ResetNotified(ctx context.Context, id int64) error {
+	const q = `UPDATE subscriptions SET notified = FALSE, updated_at = NOW() WHERE id = $1 AND notified`
+	_, err := r.db.Exec(ctx, q, id)
+	return err
+}
+
 // SetTrigger — сменить стратегию триггера товарной подписки.
 // target и pct передаются только для соответствующих типов (иначе nil).
 // CHECK-констрейнты в БД гарантируют согласованность.

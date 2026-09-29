@@ -523,16 +523,23 @@ func shouldEvaluate(lastEval *time.Time, interval time.Duration, now time.Time) 
 
 // backInStockFires — срабатывает ли подписка back_in_stock на этом событии.
 //
-// Раньше ловили только переход wasInStock(false)→inStock(true), то есть ровно
-// одно событие. Если его пропускал throttle (чек-поинт подписки ещё не наступил)
-// или оно обрабатывалось повторно, следующее событие приходило уже с
-// wasInStock=true и уведомление терялось навсегда: товар в продаже, подписка
-// вечно «жду наличия» (BOXBOT 2230226596, 28-09-2026). Поэтому ещё не
-// уведомлявшая подписка (notified=false, так её заводит UpsertOutOfStock)
-// срабатывает на ЛЮБОМ событии «в наличии». Переход оставлен для подписок,
-// переключённых на back_in_stock после уведомления (там notified=true).
-func backInStockFires(inStock, wasInStock, notified bool) bool {
-	return inStock && (!wasInStock || !notified)
+// Уведомляем о КАЖДОМ появлении товара, а не только о первом: подписка остаётся
+// back_in_stock, notified значит «об этом появлении уже сообщили». Событие «нет в
+// наличии» снимает notified (перевзвод, см. rearmBackInStock), и следующее «в
+// наличии» снова срабатывает.
+//
+// Срабатываем по уровню (в наличии и ещё не сообщили), а не по переходу
+// wasInStock→inStock: переход — одно событие, и если его пропускал throttle,
+// уведомление терялось навсегда (BOXBOT 2230226596, 28-09-2026).
+func backInStockFires(inStock, notified bool) bool {
+	return inStock && !notified
+}
+
+// rearmBackInStock — снять notified у back_in_stock, когда товар пропал:
+// следующее появление снова уведомит. Вне throttle — иначе короткое «нет в
+// наличии» между чек-поинтами прошло бы мимо, и подписка не перевзвелась бы.
+func rearmBackInStock(sub *domain.Subscription, inStock bool) bool {
+	return sub.TriggerType == domain.TriggerBackInStock && !inStock && sub.Notified
 }
 
 // alertSender — доставка алертов (deliverer; в тестах можно мокать).
@@ -588,9 +595,8 @@ func makeHandler(
 		}
 
 		// Наличие: дополнительно страхуемся ценой (>0 ⇒ в наличии) на случай старых
-		// событий без полей InStock/WasInStock во время rolling-деплоя scraper.
+		// событий без поля InStock во время rolling-деплоя scraper.
 		inStock := event.InStock || event.NewPrice > 0
-		wasInStock := event.WasInStock || event.OldPrice > 0
 
 		now := time.Now()
 
@@ -617,6 +623,13 @@ func makeHandler(
 		}
 
 		for _, sub := range subs {
+			if rearmBackInStock(sub, inStock) {
+				if err := subRepo.ResetNotified(ctx, sub.ID); err != nil {
+					return fmt.Errorf("rearm back_in_stock: %w", err)
+				}
+				sub.Notified = false
+			}
+
 			// Throttle: оцениваем подписку не чаще интервала её тарифа. PriceEvent
 			// шлётся на каждом скрейпе (= MIN-интервал по подписчикам товара), но
 			// доставку каждому держим строго по его плану.
@@ -636,12 +649,12 @@ func makeHandler(
 				}
 			}
 
-			// back_in_stock: срабатываем, когда товар в наличии. Ценовой движок тут
-			// неприменим (подписка заведена без цены).
+			// back_in_stock: срабатываем на каждом появлении товара. Ценовой движок
+			// тут неприменим (подписка заведена без цены).
 			backInStock := sub.TriggerType == domain.TriggerBackInStock
 			if backInStock {
-				if !backInStockFires(inStock, wasInStock, sub.Notified) {
-					markEval() // ещё не появился (или уже был в наличии) — чек-поинт пройден
+				if !backInStockFires(inStock, sub.Notified) {
+					markEval() // нет в наличии или об этом появлении уже сообщили
 					continue
 				}
 			} else {
@@ -728,18 +741,6 @@ func makeHandler(
 			// Фиксируем цену последнего уведомления (+ notified=TRUE)
 			if err := subRepo.UpdateBaseline(ctx, sub.ID, event.NewPrice); err != nil {
 				return fmt.Errorf("update baseline: %w", err)
-			}
-
-			// Товар вернулся в наличии: дальше следим за ЦЕНОЙ — переключаем триггер на
-			// any_drop (baseline уже = цена возврата). Иначе подписка осталась бы «жду
-			// наличия» и ничего не делала, пока товар в продаже, а /list врал бы.
-			// SetTrigger не трогает baseline/notified — they уже выставлены выше.
-			if backInStock {
-				if err := subRepo.SetTrigger(ctx, sub.ID, sub.UserID, string(domain.TriggerAnyDrop), nil, nil); err != nil {
-					log.Warn("back_in_stock: switch to any_drop", "sub_id", sub.ID, "err", err)
-				} else {
-					log.Info("back_in_stock: switched to any_drop", "sub_id", sub.ID)
-				}
 			}
 
 			// Записываем в notifications (idempotency)

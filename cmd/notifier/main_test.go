@@ -181,20 +181,38 @@ func TestPickDigestDealsSkipsOutOfStock(t *testing.T) {
 
 func TestBackInStockFires(t *testing.T) {
 	cases := []struct {
-		name                          string
-		inStock, wasInStock, notified bool
-		want                          bool
+		name              string
+		inStock, notified bool
+		want              bool
 	}{
-		{"всё ещё нет в наличии", false, false, false, false},
-		{"переход нет→есть", true, false, false, true},
-		// Переход съел throttle: следующее событие уже wasInStock=true.
-		{"пропущенный переход, ещё не уведомляли", true, true, false, true},
-		{"уже уведомляли и товар в наличии", true, true, true, false},
-		{"переход после ручного переключения", true, false, true, true},
-		{"пропал снова", false, true, false, false},
+		{"нет в наличии", false, false, false},
+		{"появился, ещё не сообщали", true, false, true},
+		{"в наличии, об этом появлении уже сообщили", true, true, false},
+		{"пропал после уведомления", false, true, false},
 	}
 	for _, c := range cases {
-		if got := backInStockFires(c.inStock, c.wasInStock, c.notified); got != c.want {
+		if got := backInStockFires(c.inStock, c.notified); got != c.want {
+			t.Errorf("%s: got %v, want %v", c.name, got, c.want)
+		}
+	}
+}
+
+func TestRearmBackInStock(t *testing.T) {
+	bis := domain.TriggerBackInStock
+	cases := []struct {
+		name              string
+		trigger           domain.TriggerType
+		inStock, notified bool
+		want              bool
+	}{
+		{"пропал после уведомления — перевзводим", bis, false, true, true},
+		{"пропал, ещё не сообщали — нечего снимать", bis, false, false, false},
+		{"в наличии — не трогаем", bis, true, true, false},
+		{"ценовой триггер не перевзводим", domain.TriggerAnyDrop, false, true, false},
+	}
+	for _, c := range cases {
+		sub := &domain.Subscription{TriggerType: c.trigger, Notified: c.notified}
+		if got := rearmBackInStock(sub, c.inStock); got != c.want {
 			t.Errorf("%s: got %v, want %v", c.name, got, c.want)
 		}
 	}
