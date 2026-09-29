@@ -521,6 +521,20 @@ func shouldEvaluate(lastEval *time.Time, interval time.Duration, now time.Time) 
 	return now.Sub(*lastEval) >= interval-evalSlack
 }
 
+// backInStockFires — срабатывает ли подписка back_in_stock на этом событии.
+//
+// Раньше ловили только переход wasInStock(false)→inStock(true), то есть ровно
+// одно событие. Если его пропускал throttle (чек-поинт подписки ещё не наступил)
+// или оно обрабатывалось повторно, следующее событие приходило уже с
+// wasInStock=true и уведомление терялось навсегда: товар в продаже, подписка
+// вечно «жду наличия» (BOXBOT 2230226596, 28-09-2026). Поэтому ещё не
+// уведомлявшая подписка (notified=false, так её заводит UpsertOutOfStock)
+// срабатывает на ЛЮБОМ событии «в наличии». Переход оставлен для подписок,
+// переключённых на back_in_stock после уведомления (там notified=true).
+func backInStockFires(inStock, wasInStock, notified bool) bool {
+	return inStock && (!wasInStock || !notified)
+}
+
 // alertSender — доставка алертов (deliverer; в тестах можно мокать).
 type alertSender interface {
 	SendPriceAlert(ctx context.Context, a telegram.PriceAlert) error
@@ -618,11 +632,11 @@ func makeHandler(
 				}
 			}
 
-			// back_in_stock: срабатываем при переходе «нет в наличии»→«появилось».
-			// Ценовой движок тут неприменим (подписка заведена без цены).
+			// back_in_stock: срабатываем, когда товар в наличии. Ценовой движок тут
+			// неприменим (подписка заведена без цены).
 			backInStock := sub.TriggerType == domain.TriggerBackInStock
 			if backInStock {
-				if wasInStock || !inStock {
+				if !backInStockFires(inStock, wasInStock, sub.Notified) {
 					markEval() // ещё не появился (или уже был в наличии) — чек-поинт пройден
 					continue
 				}

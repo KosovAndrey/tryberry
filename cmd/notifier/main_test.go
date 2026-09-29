@@ -178,3 +178,24 @@ func TestPickDigestDealsSkipsOutOfStock(t *testing.T) {
 		t.Errorf("товар без цены не должен попадать, got %d", len(got))
 	}
 }
+
+func TestBackInStockFires(t *testing.T) {
+	cases := []struct {
+		name                          string
+		inStock, wasInStock, notified bool
+		want                          bool
+	}{
+		{"всё ещё нет в наличии", false, false, false, false},
+		{"переход нет→есть", true, false, false, true},
+		// Переход съел throttle: следующее событие уже wasInStock=true.
+		{"пропущенный переход, ещё не уведомляли", true, true, false, true},
+		{"уже уведомляли и товар в наличии", true, true, true, false},
+		{"переход после ручного переключения", true, false, true, true},
+		{"пропал снова", false, true, false, false},
+	}
+	for _, c := range cases {
+		if got := backInStockFires(c.inStock, c.wasInStock, c.notified); got != c.want {
+			t.Errorf("%s: got %v, want %v", c.name, got, c.want)
+		}
+	}
+}
