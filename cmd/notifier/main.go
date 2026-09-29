@@ -570,9 +570,13 @@ func makeHandler(
 			return nil
 		}
 
-		// Получаем актуальную цену (из Redis или PostgreSQL)
+		// Цена для решения — цена ЭТОГО события: её же пишем в алерт и в baseline.
+		// Раньше Redis перекрывал её всегда, а кэш мог держать цену параллельного
+		// скрейпа (Ozon отдаёт разным дорожкам разные цены): решение «упала» по
+		// кэшу 45 477, а в сообщении «45 952 → 45 952» (sub 66601, 28-09-2026).
+		// Кэш и история — только фолбэк, когда цены в событии нет.
 		currentPrice := event.NewPrice
-		if priceCache != nil {
+		if currentPrice == 0 && priceCache != nil {
 			if cached, err := priceCache.Get(ctx, event.ProductID); err == nil {
 				currentPrice = cached
 			}
