@@ -113,8 +113,8 @@ type PriceAlert struct {
 func (n *Notifier) priceAlertKeyboard(a PriceAlert) map[string]any {
 	rows := [][]map[string]any{
 		{
-			{"text": "✅ Продолжить следить", "callback_data": fmt.Sprintf("keep:%d", a.SubscriptionID)},
-			{"text": "❌ Отменить отслеживание", "callback_data": fmt.Sprintf("untrack:%d", a.SubscriptionID)},
+			{"text": "Продолжить следить", "callback_data": fmt.Sprintf("keep:%d", a.SubscriptionID)},
+			{"text": "Отменить отслеживание", "callback_data": fmt.Sprintf("untrack:%d", a.SubscriptionID)},
 		},
 	}
 	if cu := n.chartURL(a.PublicID); cu != "" {
@@ -127,7 +127,7 @@ func (n *Notifier) SendPriceAlert(ctx context.Context, a PriceAlert) error {
 	var caption string
 	if a.BackInStock {
 		caption = fmt.Sprintf(
-			"🔔 Снова в наличии!\n\n%s\n\nЦена: %s\nСообщу и в следующий раз, когда товар вернётся в продажу (сменить на слежение за ценой – /list)\n\n%s",
+			"🔔 Снова в наличии!\n\n%s\n\nЦена: %s\n\n%s",
 			a.ProductName, domain.FormatPrice(a.NewPrice), a.ProductURL,
 		)
 	} else {

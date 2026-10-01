@@ -6,6 +6,7 @@ import (
 
 	"gitlab.com/KosovAndrey/tryberrybot/internal/domain"
 	"gitlab.com/KosovAndrey/tryberrybot/internal/repository/postgres"
+	"gitlab.com/KosovAndrey/tryberrybot/internal/searchsub"
 )
 
 var testNow = time.Date(2026, 1, 1, 12, 0, 0, 0, time.UTC)
@@ -180,40 +181,52 @@ func TestPickDigestDealsSkipsOutOfStock(t *testing.T) {
 }
 
 func TestBackInStockFires(t *testing.T) {
-	cases := []struct {
-		name              string
-		inStock, notified bool
-		want              bool
-	}{
-		{"нет в наличии", false, false, false},
-		{"появился, ещё не сообщали", true, false, true},
-		{"в наличии, об этом появлении уже сообщили", true, true, false},
-		{"пропал после уведомления", false, true, false},
-	}
-	for _, c := range cases {
-		if got := backInStockFires(c.inStock, c.notified); got != c.want {
-			t.Errorf("%s: got %v, want %v", c.name, got, c.want)
-		}
-	}
-}
-
-func TestRearmBackInStock(t *testing.T) {
-	bis := domain.TriggerBackInStock
+	bis, drop := domain.TriggerBackInStock, domain.TriggerAnyDrop
 	cases := []struct {
 		name              string
 		trigger           domain.TriggerType
 		inStock, notified bool
 		want              bool
 	}{
-		{"пропал после уведомления — перевзводим", bis, false, true, true},
-		{"пропал, ещё не сообщали — нечего снимать", bis, false, false, false},
-		{"в наличии — не трогаем", bis, true, true, false},
-		{"ценовой триггер не перевзводим", domain.TriggerAnyDrop, false, true, false},
+		{"ждём наличия, нет в наличии", bis, false, false, false},
+		{"ждём наличия, появился", bis, true, false, true},
+		{"о появлении сообщили — дальше цена", bis, true, true, false},
+		{"any_drop в наличии — ценовой движок", drop, true, false, false},
 	}
 	for _, c := range cases {
 		sub := &domain.Subscription{TriggerType: c.trigger, Notified: c.notified}
-		if got := rearmBackInStock(sub, c.inStock); got != c.want {
+		if got := backInStockFires(sub, c.inStock); got != c.want {
 			t.Errorf("%s: got %v, want %v", c.name, got, c.want)
 		}
+	}
+}
+
+func TestArmBackInStock(t *testing.T) {
+	cases := []struct {
+		name              string
+		trigger           domain.TriggerType
+		inStock, notified bool
+		want              bool
+	}{
+		{"back_in_stock сообщил и товар пропал", domain.TriggerBackInStock, false, true, true},
+		{"back_in_stock уже ждёт", domain.TriggerBackInStock, false, false, false},
+		{"any_drop: товар закончился", domain.TriggerAnyDrop, false, true, true},
+		{"any_drop: товар закончился до первого снижения", domain.TriggerAnyDrop, false, false, true},
+		{"any_drop в наличии", domain.TriggerAnyDrop, true, false, false},
+		{"below_target не трогаем", domain.TriggerBelowTarget, false, true, false},
+		{"discount_pct не трогаем", domain.TriggerDiscountPct, false, false, false},
+	}
+	for _, c := range cases {
+		sub := &domain.Subscription{TriggerType: c.trigger, Notified: c.notified}
+		if got := armBackInStock(sub, c.inStock); got != c.want {
+			t.Errorf("%s: got %v, want %v", c.name, got, c.want)
+		}
+	}
+}
+
+func TestPriceRuleForBackInStock(t *testing.T) {
+	sub := &domain.Subscription{TriggerType: domain.TriggerBackInStock}
+	if got := priceRuleFor(sub).Kind; got != searchsub.AnyDrop {
+		t.Errorf("back_in_stock после появления должен следить как any_drop, got %q", got)
 	}
 }

@@ -284,10 +284,15 @@ func (r *SubscriptionRepo) UpdateBaseline(ctx context.Context, id int64, newPric
 	return err
 }
 
-// ResetNotified — перевзвести подписку: товар пропал из наличия, следующее
-// появление снова уведомит (триггер back_in_stock).
-func (r *SubscriptionRepo) ResetNotified(ctx context.Context, id int64) error {
-	const q = `UPDATE subscriptions SET notified = FALSE, updated_at = NOW() WHERE id = $1 AND notified`
+// ArmBackInStock — товар пропал из наличия: подписка any_drop или уже
+// сообщившая back_in_stock переходит в «ждём наличия» (back_in_stock,
+// notified=false). Следующее появление уведомит при любой цене.
+func (r *SubscriptionRepo) ArmBackInStock(ctx context.Context, id int64) error {
+	const q = `
+		UPDATE subscriptions
+		SET trigger_type = 'back_in_stock', notified = FALSE, updated_at = NOW()
+		WHERE id = $1
+		  AND (trigger_type = 'any_drop' OR (trigger_type = 'back_in_stock' AND notified))`
 	_, err := r.db.Exec(ctx, q, id)
 	return err
 }

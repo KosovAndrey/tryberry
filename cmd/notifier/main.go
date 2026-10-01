@@ -521,25 +521,48 @@ func shouldEvaluate(lastEval *time.Time, interval time.Duration, now time.Time) 
 	return now.Sub(*lastEval) >= interval-evalSlack
 }
 
-// backInStockFires — срабатывает ли подписка back_in_stock на этом событии.
+// Наличие — одна логика для всех площадок.
 //
-// Уведомляем о КАЖДОМ появлении товара, а не только о первом: подписка остаётся
-// back_in_stock, notified значит «об этом появлении уже сообщили». Событие «нет в
-// наличии» снимает notified (перевзвод, см. rearmBackInStock), и следующее «в
-// наличии» снова срабатывает.
+// Подписка back_in_stock живёт в двух фазах по полю notified:
+//   - notified=false — «ждём наличия»: первое событие «в наличии» шлёт «Снова в
+//     наличии» при ЛЮБОЙ цене, и эта цена становится baseline;
+//   - notified=true — об этом появлении сообщили, дальше обычное «любое снижение»
+//     от baseline (юзеру об этом не говорим).
 //
-// Срабатываем по уровню (в наличии и ещё не сообщили), а не по переходу
-// wasInStock→inStock: переход — одно событие, и если его пропускал throttle,
-// уведомление терялось навсегда (BOXBOT 2230226596, 28-09-2026).
-func backInStockFires(inStock, notified bool) bool {
-	return inStock && !notified
+// Товар пропал — фаза снова «ждём наличия» (armBackInStock). Туда же переводится
+// и ценовая any_drop: иначе о возвращении распроданного товара юзер узнал бы, только
+// если цена окажется ниже прежней (WB 326337820, 30-09-2026). below_target и
+// discount_pct не трогаем — там юзер сам задал условие по цене.
+//
+// Срабатываем по уровню (в наличии и ещё ждём), а не по переходу wasInStock→inStock:
+// переход — одно событие, и если его пропускал throttle, уведомление терялось
+// навсегда (BOXBOT 2230226596, 28-09-2026).
+func backInStockFires(sub *domain.Subscription, inStock bool) bool {
+	return inStock && sub.TriggerType == domain.TriggerBackInStock && !sub.Notified
 }
 
-// rearmBackInStock — снять notified у back_in_stock, когда товар пропал:
-// следующее появление снова уведомит. Вне throttle — иначе короткое «нет в
-// наличии» между чек-поинтами прошло бы мимо, и подписка не перевзвелась бы.
-func rearmBackInStock(sub *domain.Subscription, inStock bool) bool {
-	return sub.TriggerType == domain.TriggerBackInStock && !inStock && sub.Notified
+// armBackInStock — товар пропал: перевести подписку в «ждём наличия». Вне
+// throttle — иначе короткое «нет в наличии» между чек-поинтами прошло бы мимо.
+func armBackInStock(sub *domain.Subscription, inStock bool) bool {
+	if inStock {
+		return false
+	}
+	switch sub.TriggerType {
+	case domain.TriggerAnyDrop:
+		return true
+	case domain.TriggerBackInStock:
+		return sub.Notified
+	}
+	return false
+}
+
+// priceRuleFor — правило ценового движка. back_in_stock после уведомления о
+// появлении следит за снижением как any_drop.
+func priceRuleFor(sub *domain.Subscription) searchsub.Rule {
+	if sub.TriggerType == domain.TriggerBackInStock {
+		return searchsub.Rule{Kind: searchsub.AnyDrop}
+	}
+	return searchsub.RuleFromProductSub(sub)
 }
 
 // alertSender — доставка алертов (deliverer; в тестах можно мокать).
@@ -623,10 +646,11 @@ func makeHandler(
 		}
 
 		for _, sub := range subs {
-			if rearmBackInStock(sub, inStock) {
-				if err := subRepo.ResetNotified(ctx, sub.ID); err != nil {
-					return fmt.Errorf("rearm back_in_stock: %w", err)
+			if armBackInStock(sub, inStock) {
+				if err := subRepo.ArmBackInStock(ctx, sub.ID); err != nil {
+					return fmt.Errorf("arm back_in_stock: %w", err)
 				}
+				sub.TriggerType = domain.TriggerBackInStock
 				sub.Notified = false
 			}
 
@@ -649,26 +673,18 @@ func makeHandler(
 				}
 			}
 
-			// back_in_stock: срабатываем на каждом появлении товара. Ценовой движок
-			// тут неприменим (подписка заведена без цены).
-			backInStock := sub.TriggerType == domain.TriggerBackInStock
-			if backInStock {
-				if !backInStockFires(inStock, sub.Notified) {
-					markEval() // нет в наличии или об этом появлении уже сообщили
-					continue
-				}
-			} else {
-				// Ценовые триггеры оцениваем ТОЛЬКО когда товар в наличии: при OOS
-				// currentPrice=0 дал бы ложное срабатывание below_target (0 <= target).
-				if !inStock {
-					markEval()
-					continue
-				}
-				// Решение о срабатывании — общий движок поиск-подписок:
-				//   first_seen_price  — база первого срабатывания (any_drop/discount_pct),
-				//   baseline_price    — цена последнего уведомления (повторные срабатывания),
-				//   notified          — фаза (первое vs повторное).
-				rule := searchsub.RuleFromProductSub(sub)
+			// Ничего не оцениваем, пока товара нет: при OOS currentPrice=0 дал бы
+			// ложное срабатывание below_target (0 <= target).
+			if !inStock {
+				markEval()
+				continue
+			}
+			// «Снова в наличии» — при любой цене. Иначе ценовой движок:
+			//   first_seen_price  — база первого срабатывания (any_drop/discount_pct),
+			//   baseline_price    — цена последнего уведомления (повторные срабатывания),
+			//   notified          — фаза (первое vs повторное).
+			backInStock := backInStockFires(sub, inStock)
+			if !backInStock {
 				state := searchsub.ProductState{
 					ProductID:           sub.ProductID,
 					CurrentKopecks:      searchsub.Kopecks(currentPrice),
@@ -676,7 +692,7 @@ func makeHandler(
 					LastNotifiedKopecks: searchsub.Kopecks(sub.BaselinePrice),
 					HasNotified:         sub.Notified,
 				}
-				if !searchsub.Decide(rule, state) {
+				if !searchsub.Decide(priceRuleFor(sub), state) {
 					markEval() // чек-поинт пройден, триггер не сработал
 					continue
 				}

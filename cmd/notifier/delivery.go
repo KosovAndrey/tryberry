@@ -396,7 +396,7 @@ func vkPriceText(a telegram.PriceAlert, chartBaseURL string) string {
 		chart = "\n📈 График цены: " + chartBaseURL + "/p/" + a.PublicID
 	}
 	if a.BackInStock {
-		return fmt.Sprintf("🔔 Снова в наличии!\n\n%s\n\nЦена: %.0f ₽\nСообщу и в следующий раз, когда товар вернётся в продажу (сменить на слежение за ценой – /list)\n\n%s%s",
+		return fmt.Sprintf("🔔 Снова в наличии!\n\n%s\n\nЦена: %.0f ₽\n\n%s%s",
 			a.ProductName, a.NewPrice, a.ProductURL, chart)
 	}
 	diff := a.OldPrice - a.NewPrice
