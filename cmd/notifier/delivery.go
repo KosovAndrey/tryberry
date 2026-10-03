@@ -216,13 +216,15 @@ func (d *deliverer) deliver(ctx context.Context, userID, telegramID int64, sendT
 		}
 		return nil
 	}
-	// Не доставлено. Перманентную ошибку TG (битая картинка, бан, чат не найден)
-	// НЕ ретраим — иначе одно сообщение зацикливает kafka-консьюмер и копит лаг.
-	// Транзиентные (429/сеть, любые VK) — отдаём наверх для ретрая.
-	if errors.Is(tgErr, telegram.ErrTelegramPermanent) && vkErr == nil && mxErr == nil {
+	// Не доставлено. Перманентные ошибки (TG: битая картинка, бан, чат не найден;
+	// VK: получатель запретил сообщения) НЕ ретраим — иначе одно сообщение
+	// зацикливает kafka-консьюмер/флашер, копит лаг и будит алерт пачкой ошибок.
+	// Если хоть один канал упал транзиентно (429/сеть) — отдаём наверх для ретрая.
+	if noRetry(tgErr, vkErr, mxErr) {
 		// Исход уже посчитан выше (statusLabel: rejected или error) — второй раз
 		// не инкрементим, иначе одна отправка даёт две записи в метрике.
-		d.log.Error("deliver: tg permanent, skipping (no kafka retry)", "user_id", userID, "err", tgErr)
+		d.log.Error("deliver: permanent, skipping (no retry)", "user_id", userID,
+			"tg_err", tgErr, "vk_err", vkErr, "max_err", mxErr)
 		return nil
 	}
 	if tgErr != nil {
@@ -234,6 +236,23 @@ func (d *deliverer) deliver(ctx context.Context, userID, telegramID int64, sendT
 	return mxErr
 }
 
+// noRetry — все упавшие каналы упали перманентно (ретрай не поможет).
+// nil-ошибка = канал не пытались или он не падал; хотя бы одна ошибка нужна,
+// но сюда приходим только когда ничего не доставлено.
+func noRetry(errs ...error) bool {
+	failed := false
+	for _, err := range errs {
+		if err == nil {
+			continue
+		}
+		failed = true
+		if !errors.Is(err, telegram.ErrTelegramPermanent) && !errors.Is(err, vk.ErrRecipientGone) {
+			return false
+		}
+	}
+	return failed
+}
+
 // statusLabel — исход одной отправки для метрики. Отдельная метка rejected у
 // «получатель недоставляем» (заблокировал бота, удалил аккаунт) принципиальна:
 // это НЕ отказ канала, и алерт NotificationChannelFailing её не считает. Иначе
@@ -243,7 +262,7 @@ func statusLabel(err error) string {
 	switch {
 	case err == nil:
 		return "ok"
-	case errors.Is(err, telegram.ErrTelegramRecipientGone):
+	case errors.Is(err, telegram.ErrTelegramRecipientGone), errors.Is(err, vk.ErrRecipientGone):
 		return "rejected"
 	default:
 		return "error"

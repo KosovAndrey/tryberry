@@ -9,6 +9,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"math/rand"
@@ -20,6 +21,16 @@ import (
 )
 
 const apiVersion = "5.199"
+
+// ErrRecipientGone — получатель недоставляем по своей воле: запретил сообщения
+// от сообщества (901), закрыл ЛС настройками приватности (902), занёс в чёрный
+// список (900), удалён или заблокирован (18). Это НЕ отказ канала: ретрай не
+// поможет, алерт NotificationChannelFailing такое считать не должен. Ложная
+// тревога 03-10-2026: один юзер с 901 будил critical каждые 15 минут.
+var ErrRecipientGone = errors.New("vk recipient gone")
+
+// recipientGoneCodes — коды error_code VK API, означающие ErrRecipientGone.
+var recipientGoneCodes = map[int]bool{18: true, 900: true, 901: true, 902: true}
 
 type Client struct {
 	token string
@@ -234,6 +245,9 @@ func (c *Client) callJSON(ctx context.Context, method string, params url.Values,
 		} `json:"error"`
 	}
 	if err := json.Unmarshal(data, &probe); err == nil && probe.Error != nil {
+		if recipientGoneCodes[probe.Error.Code] {
+			return fmt.Errorf("%w: vk %s: api error %d: %s", ErrRecipientGone, method, probe.Error.Code, probe.Error.Msg)
+		}
 		return fmt.Errorf("vk %s: api error %d: %s", method, probe.Error.Code, probe.Error.Msg)
 	}
 	if out != nil {
