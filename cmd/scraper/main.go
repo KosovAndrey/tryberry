@@ -206,15 +206,13 @@ func run(log *slog.Logger) error {
 	if err := wbCard.SetUCardProxy(getEnv("WB_UCARD_PROXY_URL", "")); err != nil {
 		log.Warn("bad WB_UCARD_PROXY_URL, u-card uses direct egress", "err", err)
 	}
-	// Цена — с ЖИВОГО u-card, архив basket только под историю/имя/картинку: его
-	// последняя точка отстаёт на дни и врала в 97% скрейпов при success rate 100%.
-	// WB_UCARD_PRIMARY=false → прежний порядок «архив первый» (рубильник в .env).
-	wbCard.SetUCardPrimary(getEnv("WB_UCARD_PRIMARY", "true") != "false")
+	// Цена — только с ЖИВОЙ карточки, архив basket только под историю/имя/картинку:
+	// его последняя точка отстаёт на дни. Нет живой цены → скрейп пропускается.
 	// Хост живой карточки (пусто → card.wb.ru). Рычаг на случай, если WB снова
 	// закроет текущий хост для всех, как u-card 21-09.
 	wbCard.SetCardAPIBase(getEnv("WB_CARD_API_BASE", ""))
 	// Живая цена через браузерный сайдкар, когда публичный хост закрыт (с 23-09-2026
-	// закрыты все сразу). Пусто — фолбэка нет, цена придёт из архива.
+	// закрыты все сразу). Пусто — живой цены нет, скрейп WB будет пропускаться.
 	wbCard.SetCardBrowserSidecar(getEnv("WB_CARD_BROWSER_URL", ""))
 	// Публичный хост карточки закрыт с 23-09-2026 — не платим 403 на каждом товаре.
 	wbCard.SetCardDirect(getEnv("WB_CARD_DIRECT", "false") != "false")
@@ -304,6 +302,14 @@ func makeHandler(
 			// следующая плановая задача по этому товару попробует снова.
 			if errors.Is(err, scraper.ErrProductNotFound) || errors.Is(err, scraper.ErrInvalidURL) {
 				log.Warn("scrape skipped (permanent)", "err", err)
+				return nil
+			}
+			// Живая цена не добыта (WB: сайдкар/хост карточки не ответили). Ретраи
+			// здесь бесполезны (сайдкар сам делает 2 попытки по 25с) и только держат
+			// слот; событие не шлём, чтобы notifier не сработал по старым данным.
+			// Следующая плановая задача по товару попробует снова.
+			if errors.Is(err, scraper.ErrLivePriceUnavailable) {
+				log.Warn("scrape skipped (no live price)", "err", err)
 				return nil
 			}
 			log.Error("scrape failed", "err", err)

@@ -80,7 +80,8 @@ UCARD_PATH = os.getenv("WB_UCARD_PATH", "/__internal/u-card/cards/v4/list")
 # на архивную цену и выглядел «в наличии», хотя его нет.
 UCARD_DETAIL_PATH = os.getenv("WB_UCARD_DETAIL_PATH", "/__internal/u-card/cards/v4/detail")
 # Сколько потерянных артикулов добирать поштучно. Дороже пачки, поэтому с
-# потолком: остальные уедут на архив, как раньше.
+# потолком: остальные останутся без живой цены (скрейп пропустится до следующей
+# задачи — архивную цену Go больше не отдаёт).
 CARD_DETAIL_MAX = int(os.getenv("WB_CARD_DETAIL_MAX", "4"))
 # Сколько артикулов класть в один запрос карточек. Фронт сам шлёт по 10.
 CARD_BATCH_MAX = int(os.getenv("WB_CARD_BATCH_MAX", "10"))
@@ -89,12 +90,18 @@ CARD_BATCH_MAX = int(os.getenv("WB_CARD_BATCH_MAX", "10"))
 # четверть секунды тут никто не замечает.
 CARD_BATCH_WINDOW_S = float(os.getenv("WB_CARD_BATCH_WINDOW_MS", "250")) / 1000.0
 # Сколько ждать здоровую дорожку, прежде чем отдать отказ: перепрогрев после
-# 498 занимает секунды, а отказ стоит товару архивной цены.
+# 498 занимает секунды, а отказ стоит товару пропущенного обновления цены.
 # Сколько ждать здоровую дорожку. Было 12с и две попытки — в сумме с заходом в
 # публичный хост это давало p95 в 30с и душило ОБЩИЙ пул воркеров скрейпера, а
-# следом и соседние площадки. Отказ должен стоить секунды: цена всё равно уедет
-# в архив, и лучше сделать это быстро.
+# следом и соседние площадки. Отказ должен стоить секунды: скрейп всё равно
+# пропустится до следующей задачи, и лучше сделать это быстро.
 CARD_WAIT_LANE_S = float(os.getenv("WB_CARD_WAIT_LANE_SECONDS", "4"))
+# Сколько пачек карточек обслуживать ОДНОВРЕМЕННО. Раньше батчер крутил их строго
+# по одной: пачка с добором detail занимает секунды, и при нескольких дорожках все,
+# кроме одной, простаивали, а очередь цен копилась до таймаута Go. 0 → по числу
+# дорожек (каждая пачка всё равно ждёт лок своей дорожки, так что wbaas не
+# получает больше параллельных запросов, чем дорожек).
+CARD_BATCH_CONCURRENCY = int(os.getenv("WB_CARD_BATCH_CONCURRENCY", "0"))
 # Заголовок deviceid — ключ ко ВСЕМУ __internal (23-09-2026): без него in-page
 # fetch из прогретой страницы даёт 403, с ним 200. Значение произвольное
 # (site_<32 hex>), к сессии не привязано; x-spa-version/x-requested-with не нужны.
@@ -779,12 +786,18 @@ class Pool:
 
     def pick(self):
         alive = [l for l in self.lanes if l.healthy]
-        return random.choice(alive) if alive else None
+        if not alive:
+            return None
+        # Свободная дорожка лучше занятой: случайный выбор клал параллельные
+        # запросы на одну и ту же, пока соседняя простаивала.
+        free = [l for l in alive
+                if not (getattr(l, "lock", None) and l.lock.locked())]
+        return random.choice(free or alive)
 
     async def pick_wait(self, timeout: float):
         """Дождаться здоровой дорожки. Перепрогрев после 498 занимает секунды, и
-        ждать его дешевле, чем отдать отказ: на отказе цена товара уезжает в
-        архив, отставший на дни."""
+        ждать его дешевле, чем отдать отказ: на отказе товар остаётся без живой
+        цены до следующего скрейпа."""
         deadline = time.monotonic() + timeout
         while True:
             lane = self.pick()
@@ -905,6 +918,9 @@ class CardBatcher:
         self.pool = pool
         self._waiting: dict[str, list[asyncio.Future]] = {}
         self._wake = asyncio.Event()
+        n = CARD_BATCH_CONCURRENCY or len(pool.lanes) or 1
+        self._slots = asyncio.Semaphore(max(1, n))
+        self._tasks: set = set()  # держим ссылки, иначе GC прибьёт задачу на лету
 
     async def get(self, nm: str):
         """(status, product|None) для одного артикула."""
@@ -918,22 +934,33 @@ class CardBatcher:
             await self._wake.wait()
             # Окно накопления: за это время подтянутся соседние запросы.
             await asyncio.sleep(CARD_BATCH_WINDOW_S)
-            batch, futures = {}, []
+            # Свободный слот ждём ДО сборки пачки: пока все слоты заняты, запросы
+            # копятся в _waiting и уходят следующей пачкой целиком.
+            await self._slots.acquire()
+            batch = {}
             for nm in list(self._waiting)[:CARD_BATCH_MAX]:
                 batch[nm] = self._waiting.pop(nm)
-                futures.extend(batch[nm])
             if not self._waiting:
                 self._wake.clear()
             if not batch:
+                self._slots.release()
                 continue
-            try:
-                await self._serve(batch)
-            except Exception as e:  # noqa: BLE001
-                log.error("батчер карточек упал: %s", _first_line(e))
-                for fs in batch.values():
-                    for f in fs:
-                        if not f.done():
-                            f.set_result((502, None))
+            t = asyncio.create_task(self._serve_guarded(batch))
+            self._tasks.add(t)
+            t.add_done_callback(self._tasks.discard)
+
+    async def _serve_guarded(self, batch: dict):
+        try:
+            await self._serve(batch)
+        except Exception as e:  # noqa: BLE001
+            log.error("батчер карточек упал: %s", _first_line(e))
+        finally:
+            # Никто из ждущих не должен повиснуть до таймаута Go.
+            for fs in batch.values():
+                for f in fs:
+                    if not f.done():
+                        f.set_result((502, None))
+            self._slots.release()
 
     async def _serve(self, batch: dict):
         nms = ";".join(batch)
@@ -957,8 +984,8 @@ class CardBatcher:
                 log.warning("батчер: ответ не разобран: %s", _first_line(e))
                 status = 502
         # Кого пачка потеряла — добираем поштучно: у распроданных нет оффера, и
-        # list их не отдаёт вовсе. Без этого товар уезжал на архивную цену и
-        # числился в наличии, хотя его нет.
+        # list их не отдаёт вовсе. Без этого товар остался бы без живой цены и
+        # без честного OOS.
         if status == 200:
             missing = [nm for nm in batch if nm not in products]
             for nm in missing[:CARD_DETAIL_MAX]:

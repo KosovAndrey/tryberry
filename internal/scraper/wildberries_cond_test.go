@@ -98,6 +98,10 @@ func condTestScraper(t *testing.T, priceHandler func(*http.Request) *http.Respon
 
 const condTestURL = "https://www.wildberries.ru/catalog/221501024/detail.aspx"
 
+// condTestArticle — тот же артикул для тестов слоя архива напрямую: цену Scrape
+// берёт только с живой карточки, а conditional GET живёт в fetchFromBasket.
+const condTestArticle = "221501024"
+
 func wbHistoryBody(priceKopecks int64) string {
 	// Одна прошлая точка (для бэкфилла) + текущая (последняя = текущая цена).
 	old := time.Now().Add(-10 * 24 * time.Hour).Unix()
@@ -119,7 +123,7 @@ func TestWBCondGetNotModified(t *testing.T) {
 	})
 
 	// 1-й скрейп: снимка нет → полный путь (price-history + card), снимок записан.
-	r1, err := s.Scrape(context.Background(), condTestURL)
+	r1, err := s.fetchFromBasket(context.Background(), condTestArticle)
 	if err != nil {
 		t.Fatalf("первый скрейп: %v", err)
 	}
@@ -132,7 +136,7 @@ func TestWBCondGetNotModified(t *testing.T) {
 	}
 
 	// 2-й скрейп: валидатор совпал → 304, Result из снимка, card.json не трогаем.
-	r2, err := s.Scrape(context.Background(), condTestURL)
+	r2, err := s.fetchFromBasket(context.Background(), condTestArticle)
 	if err != nil {
 		t.Fatalf("второй скрейп: %v", err)
 	}
@@ -165,7 +169,7 @@ func TestWBCondGetModified(t *testing.T) {
 		return resp(200, wbHistoryBody(price), h)
 	})
 
-	if _, err := s.Scrape(context.Background(), condTestURL); err != nil {
+	if _, err := s.fetchFromBasket(context.Background(), condTestArticle); err != nil {
 		t.Fatalf("первый скрейп: %v", err)
 	}
 
@@ -173,7 +177,7 @@ func TestWBCondGetModified(t *testing.T) {
 	// 200, снимок обновляется, card.json дочитывается.
 	version = `"v2"`
 	price = 99000
-	r, err := s.Scrape(context.Background(), condTestURL)
+	r, err := s.fetchFromBasket(context.Background(), condTestArticle)
 	if err != nil {
 		t.Fatalf("скрейп после смены цены: %v", err)
 	}
@@ -188,7 +192,7 @@ func TestWBCondGetModified(t *testing.T) {
 	}
 
 	// Третий скрейп: новый валидатор совпал → снова 304.
-	r3, err := s.Scrape(context.Background(), condTestURL)
+	r3, err := s.fetchFromBasket(context.Background(), condTestArticle)
 	if err != nil {
 		t.Fatalf("третий скрейп: %v", err)
 	}
@@ -204,7 +208,7 @@ func TestWBCondGetNoValidators(t *testing.T) {
 	})
 
 	for i := 0; i < 2; i++ {
-		if _, err := s.Scrape(context.Background(), condTestURL); err != nil {
+		if _, err := s.fetchFromBasket(context.Background(), condTestArticle); err != nil {
 			t.Fatalf("скрейп %d: %v", i+1, err)
 		}
 	}

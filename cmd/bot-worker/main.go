@@ -116,12 +116,11 @@ func run(log *slog.Logger) error {
 	// Живая цена при /track: юзер должен увидеть то же, что на сайте, а не последнюю
 	// точку архива (отстаёт на дни). Прокси отдельно не задаём — у бота HTTPS_PROXY
 	// уже указывает на xray, и u-card едет через него.
-	wbCard.SetUCardPrimary(getEnv("WB_UCARD_PRIMARY", "true") != "false")
 	// Хост живой карточки (пусто → card.wb.ru). Рычаг на случай, если WB снова
 	// закроет текущий хост для всех, как u-card 21-09.
 	wbCard.SetCardAPIBase(getEnv("WB_CARD_API_BASE", ""))
 	// Живая цена через браузерный сайдкар, когда публичный хост закрыт (с 23-09-2026
-	// закрыты все сразу). Пусто — фолбэка нет, цена придёт из архива.
+	// закрыты все сразу). Пусто — живой цены нет, скрейп WB будет пропускаться.
 	wbCard.SetCardBrowserSidecar(getEnv("WB_CARD_BROWSER_URL", ""))
 	// Публичный хост карточки закрыт с 23-09-2026 — не платим 403 на каждом товаре.
 	wbCard.SetCardDirect(getEnv("WB_CARD_DIRECT", "false") != "false")

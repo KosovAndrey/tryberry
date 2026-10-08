@@ -2,6 +2,7 @@ package scraper
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net/http"
 	"strings"
@@ -21,7 +22,6 @@ import (
 func ucardScraper(t *testing.T, archiveKopecks int64, ucardHandler func() *http.Response) (*WildberriesScraper, *int) {
 	t.Helper()
 	s := NewWildberriesScraper(1000)
-	s.SetUCardPrimary(true)
 	s.http = &http.Client{Transport: roundTripFunc(func(r *http.Request) (*http.Response, error) {
 		switch {
 		case strings.HasSuffix(r.URL.Path, "/price-history.json"):
@@ -95,18 +95,28 @@ func TestWBUCardBeatsArchive(t *testing.T) {
 	}
 }
 
-// u-card не ответил (лёг xray / 403) → отдаём архивную цену: она отстаёт, но это
-// лучше, чем ничего. Долю видно по wb_price_source{source="basket"}.
-func TestWBUCardDownFallsBackToArchive(t *testing.T) {
+// u-card не ответил (лёг xray / 403) → ErrLivePriceUnavailable, архивную цену НЕ
+// отдаём: она отстаёт на дни, и notifier срабатывал по ней (решение 2026-10-08).
+func TestWBUCardDownNoArchivePrice(t *testing.T) {
 	s, _ := ucardScraper(t, 369602, func() *http.Response {
 		return resp(http.StatusForbidden, "", nil)
 	})
 	r, err := s.Scrape(context.Background(), condTestURL)
-	if err != nil {
-		t.Fatalf("scrape: %v", err)
+	if !errors.Is(err, ErrLivePriceUnavailable) {
+		t.Fatalf("err = %v, ждали ErrLivePriceUnavailable", err)
 	}
-	if r.Price != 3696.02 {
-		t.Errorf("цена = %v, ждали архивную 3696.02", r.Price)
+	if r != nil {
+		t.Errorf("результат = %+v, ждали nil (архивная цена 3696.02 = тот самый баг)", r)
+	}
+}
+
+// Живая карточка ответила пустой выдачей → «не нашли», а не сбой источника.
+func TestWBUCardEmptyIsNotFound(t *testing.T) {
+	s, _ := ucardScraper(t, 369602, func() *http.Response {
+		return resp(200, `{"products":[]}`, nil)
+	})
+	if _, err := s.Scrape(context.Background(), condTestURL); !errors.Is(err, ErrProductNotFound) {
+		t.Fatalf("err = %v, ждали ErrProductNotFound", err)
 	}
 }
 
@@ -143,25 +153,6 @@ func TestWBUCardWorksWithoutArchive(t *testing.T) {
 	}
 }
 
-// Рубильник WB_UCARD_PRIMARY=false: архив первый, u-card не трогаем вовсе —
-// поведение ровно как до фикса.
-func TestWBUCardPrimaryOffKeepsArchiveFirst(t *testing.T) {
-	s, calls := ucardScraper(t, 369602, func() *http.Response {
-		return resp(200, wbUCardBody(504700), nil)
-	})
-	s.SetUCardPrimary(false)
-	r, err := s.Scrape(context.Background(), condTestURL)
-	if err != nil {
-		t.Fatalf("scrape: %v", err)
-	}
-	if r.Price != 3696.02 {
-		t.Errorf("цена = %v, ждали архивную 3696.02", r.Price)
-	}
-	if *calls != 0 {
-		t.Errorf("обращений к u-card = %d, ждали 0 при выключенном рубильнике", *calls)
-	}
-}
-
 // Цена в карточке есть, а остатков нет: WB показывает такой товар как «нет в
 // наличии». Раньше мы считали его живым и советовали купить (инцидент 01-09-2026).
 func TestWBUCardPriceWithoutStockIsOOS(t *testing.T) {
@@ -177,24 +168,5 @@ func TestWBUCardPriceWithoutStockIsOOS(t *testing.T) {
 	}
 	if r.StockUnknown {
 		t.Error("StockUnknown = true, хотя u-card наличие видит")
-	}
-}
-
-// Когда u-card недоступен (403 с забаненного IP — наш штатный случай), цена
-// приходит из архива, а он про наличие не знает. Такой ответ обязан быть помечен
-// StockUnknown, иначе пропавший товар навсегда останется «в наличии».
-func TestWBArchiveFallbackMarksStockUnknown(t *testing.T) {
-	s, _ := ucardScraper(t, 369602, func() *http.Response {
-		return resp(403, "", nil)
-	})
-	r, err := s.Scrape(context.Background(), condTestURL)
-	if err != nil {
-		t.Fatalf("scrape: %v", err)
-	}
-	if r.Price != 3696.02 {
-		t.Errorf("цена = %v, ждали архивную 3696.02", r.Price)
-	}
-	if !r.StockUnknown {
-		t.Error("StockUnknown = false: архив наличия не знает и не должен его утверждать")
 	}
 }

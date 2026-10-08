@@ -330,27 +330,27 @@ groups:
           summary: "WB-поиск не отдаёт результатов"
           description: "За 30 минут ни одного успешного цикла скрейпа выдачи при том, что циклы запускались. С 23-09-2026 поиск идёт ТОЛЬКО через браузерный сайдкар (публичные хосты WB закрыты 403 для всех), поэтому смотреть: healthy-дорожки (wb_search_miner_healthy_lanes), логи pt_wb_search_miner на wbaas-стену (create-token 498) и CPU/память контейнера. Разбор и рычаги — docs/WB-SEARCH-STATUS.md."
 
-      # Живая цена WB пропала: карточка почти вся идёт из архива basket-CDN,
-      # который отстаёт на ДНИ. Success rate при этом 100% — скрейпер честно
-      # качает архив, поэтому ScrapeErrors и компания молчат. Инцидент 16–21.09:
-      # u-card.wb.ru начал отдавать 403 всем, 5,5 дней ucard=0, нашли по жалобе
-      # юзера. В норме доля ucard ~60% (замер 10–16.09), в поломке — ноль;
-      # порог 20% с запасом от шума. Объём > 10 отсекает ночную тишину.
+      # Живая цена WB пропала. С 08-10-2026 архивную цену (basket-CDN, отстаёт на
+      # ДНИ) как фолбэк не отдаём: без живой карточки скрейп пропускается
+      # (source="none", scrape status no_live_price) — товары просто перестают
+      # обновляться. Раньше в той же поломке цены тихо шли из архива и будили
+      # notifier по старым данным (инцидент 16–21.09: 5,5 дней ucard=0).
+      # Порог 20% пропусков; объём > 10 отсекает ночную тишину.
       - alert: WbLivePriceLost
         expr: |
           (
-            sum(increase(tryberrybot_wb_price_source_total{source="ucard"}[1h]))
+            sum(increase(tryberrybot_wb_price_source_total{source="none"}[1h]))
               /
             sum(increase(tryberrybot_wb_price_source_total[1h]))
-          ) < 0.2
+          ) > 0.2
           and on()
           sum(increase(tryberrybot_wb_price_source_total[1h])) > 10
         for: 30m
         labels:
           severity: warning
         annotations:
-          summary: "WB: живой цены нет, цены идут из архива (отстают на дни)"
-          description: "Доля цен WB с живой карточки за час ниже 20% (в норме ~60%). Цены в боте устаревшие, стартовые цены новых подписок записываются неверно. Смотреть ошибки ручки: sum by (outcome) (increase(tryberrybot_wb_ucard_fetch_total[1h])) и логи scraper на 'u-card status'. Проверить хост: curl через xray :8888 на card.wb.ru и u-card.wb.ru (/cards/v4/list?appType=1&curr=rub&dest=-1257786&spp=30&nm=<артикул>). WB закрывает хосты для всех разом (u-card 16-09, u-search 17-09) — рычаг WB_CARD_API_BASE в .env, прокси WB_UCARD_PROXY_URL. После починки переписать first_seen/baseline подпискам, созданным в окне поломки."
+          summary: "WB: живой цены нет, скрейпы карточек пропускаются"
+          description: "Больше 20% скрейпов WB за час без живой цены — товары не обновляются (архивную цену не отдаём). Смотреть ошибки ручки: sum by (transport, outcome) (increase(tryberrybot_wb_ucard_fetch_total[1h])), healthy-дорожки сайдкара (wb_search_miner_healthy_lanes), логи pt_wb_search_miner и scraper на 'no live price'. Рычаги: WB_SEARCH_POOL_SIZE/WB_SEARCH_MINER_CPUS (ёмкость сайдкара), WB_CARD_DIRECT/WB_CARD_API_BASE (если WB откроет публичный хост)."
 
       # ГЛАВНЫЙ алерт по WB-сайдкару: healthy_lanes ВРЁТ при залипании драйвера.
       # Инцидент 13-08: /search висел бесконечно (чтение тела ответа было без
