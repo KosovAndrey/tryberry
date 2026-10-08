@@ -365,6 +365,7 @@ section{position:relative}
 .plus-sum .pp{font-family:var(--font-display);font-weight:700;font-size:2rem;margin-top:10px}
 .plus-sum .pp small{font-family:var(--font-body);font-weight:400;font-size:.8rem;color:#c8a9b8}
 .plus-sum .psub{font-size:.82rem;color:#c8a9b8}
+.plus-sum .psave{font-size:.86rem;font-weight:600;color:var(--good)}
 .plus-sum .pcta{margin-top:16px;border:0;cursor:pointer;font:inherit;font-weight:600;font-size:.95rem;color:#fff;background:linear-gradient(120deg,var(--berry-bright),var(--berry-deep));padding:13px 18px;border-radius:14px;transition:transform .2s}
 .plus-sum .pcta:hover{transform:translateY(-2px)}
 .plus-sum .phow{font-size:.76rem;color:#a98896;margin-top:8px;line-height:1.45}
@@ -574,7 +575,7 @@ footer{background:var(--plum-deep);padding:70px 0 40px;border-top:1px solid var(
     "@type": "AggregateOffer",
     "priceCurrency": "RUB",
     "lowPrice": "0",
-    "highPrice": "6190",
+    "highPrice": "6140",
     "offerCount": "6"
   }
 }
@@ -938,7 +939,7 @@ footer{background:var(--plum-deep);padding:70px 0 40px;border-top:1px solid var(
           <div class="plus-row">
             <label for="plusS">Поиск-подписок <output id="plusSv">20</output></label>
             <input type="range" id="plusS" min="10" max="50" step="5" value="20">
-            <div class="hint" id="plusSh">+5 поисков — 150 ₽</div>
+            <div class="hint" id="plusSh">Чем больше, тем дешевле: 11–20 по 35 ₽ · 21–30 по 30 ₽ · 31–50 по 25 ₽</div>
           </div>
           <div class="plus-row">
             <label for="plusP">Товарных подписок <output id="plusPv">100</output></label>
@@ -949,8 +950,10 @@ footer{background:var(--plum-deep);padding:70px 0 40px;border-top:1px solid var(
         <div class="plus-sum" aria-live="polite">
           <div class="pn" id="plusName">Pro+</div>
           <div class="pi" id="plusInfo">20 поисков · 100 товаров · проверка раз в 15 мин</div>
-          <div class="pp"><span id="plusPrice">799 ₽</span><small> / мес</small></div>
-          <div class="psub" id="plusSub">с автопродлением — 759 ₽</div>
+          <div class="pp"><span id="plusPrice">849 ₽</span><small> / мес</small></div>
+          <div class="psub" id="plusSub">с автопродлением — 809 ₽</div>
+          <div class="psave" id="plusSave" hidden></div>
+          <div class="psub" id="plusNext">➕ С 21-го поиска — по 30 ₽</div>
           <button type="button" class="pcta" id="plusGo">Собрать в боте →</button>
           <div class="phow">В боте: «Тарифы» → «Нужно больше? Собрать свой». Там же оплата картой или СБП — тариф подключится сразу.</div>
         </div>
@@ -1376,25 +1379,34 @@ if(mpick)mpick.addEventListener('click',e=>{if(e.target===mpick)closeMpick();});
 (function(){
   var root=document.getElementById('plus');if(!root)return;
   var B={
-    pro:{name:'Pro+',base:'Pro',iv:'раз в 15 мин',price:499,s0:10,p0:100,sStep:5,sRub:150,pStep:50,pRub:50,sMax:50,pMax:500,sDef:20},
-    rp:{name:'Reseller Pro+',base:'Reseller Pro',iv:'раз в 1 мин',price:1990,s0:3,p0:15,sStep:1,sRub:450,pStep:5,pRub:150,sMax:10,pMax:50,sDef:4}
+    pro:{name:'Pro+',base:'Pro',iv:'раз в 15 мин',price:499,s0:10,p0:100,sStep:5,tiers:[[20,35],[30,30],[50,25]],pStep:50,pRub:50,sMax:50,pMax:500,sDef:20},
+    rp:{name:'Reseller Pro+',base:'Reseller Pro',iv:'раз в 1 мин',price:1990,s0:3,p0:15,sStep:1,tiers:[[5,500],[7,450],[10,400]],pStep:5,pRub:150,sMax:10,pMax:50,sDef:4}
   };
   var cur='pro',$=function(id){return document.getElementById(id)};
   var S=$('plusS'),P=$('plusP');
   function pl(n,a,b,c){var m=n%10,h=n%100;return m===1&&h!==11?a:(m>=2&&m<=4&&(h<10||h>=20)?b:c)}
   function rub(n){return n.toLocaleString('ru-RU')+' ₽'}
+  /* лесенка: цена n-го поиска, стоимость добавочных, начало ступени i */
+  function sRub(b,n){for(var i=0;i<b.tiers.length;i++)if(n<=b.tiers[i][0])return b.tiers[i][1];return b.tiers[b.tiers.length-1][1]}
+  function sCost(b,s){var c=0;for(var n=b.s0+1;n<=s;n++)c+=sRub(b,n);return c}
+  function tFrom(b,i){return i===0?b.s0+1:b.tiers[i-1][0]+1}
+  function ladder(b){return b.tiers.map(function(t,i){var f=tFrom(b,i);return (f===t[0]?f+'-й':f+'–'+t[0])+' по '+rub(t[1])}).join(' · ')}
   function setBase(k){
     cur=k;var b=B[k];
     S.min=b.s0;S.max=b.sMax;S.step=b.sStep;S.value=b.sDef;
     P.min=b.p0;P.max=b.pMax;P.step=b.pStep;P.value=b.p0;
-    $('plusSh').textContent='+'+b.sStep+' '+pl(b.sStep,'поиск','поиска','поисков')+' — '+rub(b.sRub);
+    $('plusSh').textContent='Чем больше, тем дешевле: '+ladder(b);
     $('plusPh').textContent='+'+b.pStep+' '+pl(b.pStep,'товар','товара','товаров')+' — '+rub(b.pRub);
     root.querySelectorAll('.plus-seg button').forEach(function(x){x.setAttribute('aria-pressed',x.dataset.base===k?'true':'false')});
     upd();
   }
   function upd(){
     var b=B[cur],s=+S.value,p=+P.value;
-    var price=b.price+(s-b.s0)/b.sStep*b.sRub+(p-b.p0)/b.pStep*b.pRub;
+    var price=b.price+sCost(b,s)+(p-b.p0)/b.pStep*b.pRub;
+    var save=(s-b.s0)*b.tiers[0][1]-sCost(b,s),next='';
+    for(var i=0;i<b.tiers.length;i++)if(s<=b.tiers[i][0]){if(i+1<b.tiers.length)next='➕ С '+tFrom(b,i+1)+'-го поиска — по '+rub(b.tiers[i+1][1]);break}
+    $('plusSave').hidden=save<=0;$('plusSave').textContent='🎁 Экономия '+rub(save)+' на оптовой цене поисков';
+    $('plusNext').hidden=!next;$('plusNext').textContent=next;
     var sub=price-Math.floor((price*5+500)/1000)*10;
     $('plusSv').textContent=s;$('plusPv').textContent=p;
     $('plusName').textContent=(s===b.s0&&p===b.p0)?b.base+' — обычный тариф':b.name;
