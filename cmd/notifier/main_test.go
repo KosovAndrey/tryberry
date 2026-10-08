@@ -110,12 +110,59 @@ func TestSelectSearchRestores(t *testing.T) {
 	}
 }
 
+func TestSelectSearchPauses(t *testing.T) {
+	past := testNow.Add(-time.Hour)
+	future := testNow.Add(time.Hour)
+
+	var cands []postgres.PausedSearchSub
+	// user 1: истёкший pro → free (MaxSearch=1), 3 активных → гасим 2 младших.
+	for i := int64(1); i <= 3; i++ {
+		cands = append(cands, postgres.PausedSearchSub{ID: i, UserID: 1, Plan: "pro", PlanExpiresAt: ptime(past), CreatedAt: at(i)})
+	}
+	// user 2: истёкший, ровно 1 активный (фри-лимит) — НЕ трогаем и НЕ уведомляем.
+	// Раньше гасился и тут же возвращался — цикл с «Тариф закончился» каждый тик.
+	cands = append(cands, postgres.PausedSearchSub{ID: 4, UserID: 2, Plan: "trial", PlanExpiresAt: ptime(past), CreatedAt: at(4)})
+	// user 3: действующий pro — не трогаем.
+	for i := int64(5); i <= 7; i++ {
+		cands = append(cands, postgres.PausedSearchSub{ID: i, UserID: 3, Plan: "pro", PlanExpiresAt: ptime(future), CreatedAt: at(i)})
+	}
+
+	pause, affected := selectSearchPauses(cands, testNow)
+	if want := []int64{2, 3}; !eq(pause, want) {
+		t.Fatalf("pause = %v, want %v", pause, want)
+	}
+	if want := []int64{1}; !eq(affected, want) {
+		t.Fatalf("affected = %v, want %v", affected, want)
+	}
+}
+
+// После паузы избытка у истёкшего остаётся 1 активный — restore его же лимит
+// не превышает (иначе следующий тик снова гасит: цикл пауза→возврат).
+func TestSelectSearchRestoresCountsActive(t *testing.T) {
+	past := testNow.Add(-time.Hour)
+	future := testNow.Add(time.Hour)
+	cands := []postgres.PausedSearchSub{
+		{ID: 2, UserID: 1, Plan: "pro", PlanExpiresAt: ptime(past), CreatedAt: at(2), ActiveCount: 1},
+		{ID: 3, UserID: 1, Plan: "pro", PlanExpiresAt: ptime(past), CreatedAt: at(3), ActiveCount: 1},
+		// user 2: продлил pro (10), 8 активных + 3 паузных → вернём 2 старейших.
+		{ID: 4, UserID: 2, Plan: "pro", PlanExpiresAt: ptime(future), CreatedAt: at(4), ActiveCount: 8},
+		{ID: 5, UserID: 2, Plan: "pro", PlanExpiresAt: ptime(future), CreatedAt: at(5), ActiveCount: 8},
+		{ID: 6, UserID: 2, Plan: "pro", PlanExpiresAt: ptime(future), CreatedAt: at(6), ActiveCount: 8},
+	}
+	if got, want := selectSearchRestores(cands, testNow), []int64{4, 5}; !eq(got, want) {
+		t.Fatalf("restore = %v, want %v", got, want)
+	}
+}
+
 func TestSelectorsEmpty(t *testing.T) {
 	if p, a := selectProductPauses(nil, testNow); p != nil || a != nil {
 		t.Fatalf("empty pauses: got %v %v", p, a)
 	}
 	if r := selectProductRestores(nil, testNow); r != nil {
 		t.Fatalf("empty product restores: got %v", r)
+	}
+	if p, a := selectSearchPauses(nil, testNow); p != nil || a != nil {
+		t.Fatalf("empty search pauses: got %v %v", p, a)
 	}
 	if r := selectSearchRestores(nil, testNow); r != nil {
 		t.Fatalf("empty search restores: got %v", r)

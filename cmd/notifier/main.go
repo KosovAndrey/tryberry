@@ -234,7 +234,7 @@ func runPlanReconciler(
 		// 1. Пауза сверхлимитных подписок истёкших юзеров (поиск + товары).
 		//    Затронутых уведомляем ОДИН раз, объединяя оба типа.
 		notify := make(map[int64]struct{})
-		for _, uid := range pauseExpiredSearch(ctx, log, searchRepo) {
+		for _, uid := range pauseExpiredSearch(ctx, log, searchRepo, now) {
 			notify[uid] = struct{}{}
 		}
 		for _, uid := range pauseExpiredProducts(ctx, log, subRepo, now) {
@@ -307,18 +307,25 @@ func runPlanReconciler(
 	}
 }
 
-// pauseExpiredSearch ставит на паузу ВСЕ активные поиск-подписки истёкших юзеров
-// (free → MaxSearch=0). Возвращает users.id затронутых.
-func pauseExpiredSearch(ctx context.Context, log *slog.Logger, repo *postgres.SearchSubscriptionRepo) []int64 {
-	paused, err := repo.PauseExpiredSearchSubs(ctx)
+// pauseExpiredSearch гасит ИЗБЫТОК поиск-подписок истёкших юзеров сверх лимита
+// плана (free.MaxSearch=1 — старейший поиск продолжает жить). Возвращает
+// users.id затронутых. Зеркало pauseExpiredProducts.
+func pauseExpiredSearch(ctx context.Context, log *slog.Logger, repo *postgres.SearchSubscriptionRepo, now time.Time) []int64 {
+	cands, err := repo.ListActiveOfExpiredUsers(ctx)
 	if err != nil {
-		log.Error("reconcile: pause expired search", "err", err)
+		log.Error("reconcile: list active search of expired", "err", err)
 		return nil
 	}
-	if len(paused) > 0 {
-		log.Info("reconcile: paused search subs", "users", len(paused))
+	toPause, affected := selectSearchPauses(cands, now)
+	if len(toPause) == 0 {
+		return nil
 	}
-	return paused
+	if err := repo.PauseSearchSubs(ctx, toPause); err != nil {
+		log.Error("reconcile: pause search", "err", err)
+		return nil
+	}
+	log.Info("reconcile: paused search subs", "count", len(toPause), "users", len(affected))
+	return affected
 }
 
 // pauseExpiredProducts гасит ИЗБЫТОК товарных подписок истёкших юзеров сверх
@@ -445,7 +452,31 @@ func rewardReferralActivations(ctx context.Context, log *slog.Logger, repo *post
 // Все три принимают cands, упорядоченные по (user_id, created_at), и группируют
 // подряд идущие строки одного юзера. now → действующий план через EffectivePlan.
 
-// selectSearchRestores — id поиск-подписок к возврату: самые старые до MaxSearch.
+// selectSearchPauses — id поиск-подписок к паузе (избыток сверх лимита плана,
+// самые старые остаются) и users.id затронутых юзеров.
+func selectSearchPauses(cands []postgres.PausedSearchSub, now time.Time) (pause, affected []int64) {
+	for i := 0; i < len(cands); {
+		j := i
+		for j < len(cands) && cands[j].UserID == cands[i].UserID {
+			j++
+		}
+		group := cands[i:j]
+		u := &domain.User{Plan: group[0].Plan, PlanExpiresAt: group[0].PlanExpiresAt}
+		limit := u.EffectivePlan(now).MaxSearch
+		if len(group) > limit {
+			for k := limit; k < len(group); k++ {
+				pause = append(pause, group[k].ID)
+			}
+			affected = append(affected, group[0].UserID)
+		}
+		i = j
+	}
+	return pause, affected
+}
+
+// selectSearchRestores — id поиск-подписок к возврату: самые старые до
+// (MaxSearch − уже активные) на юзера. Без учёта активных возврат превышал
+// лимит, и следующий тик снова гасил избыток (цикл пауза→возврат).
 func selectSearchRestores(cands []postgres.PausedSearchSub, now time.Time) []int64 {
 	var out []int64
 	for i := 0; i < len(cands); {
@@ -455,7 +486,7 @@ func selectSearchRestores(cands []postgres.PausedSearchSub, now time.Time) []int
 		}
 		group := cands[i:j]
 		u := &domain.User{Plan: group[0].Plan, PlanExpiresAt: group[0].PlanExpiresAt}
-		limit := u.EffectivePlan(now).MaxSearch
+		limit := u.EffectivePlan(now).MaxSearch - group[0].ActiveCount
 		for k := 0; k < len(group) && k < limit; k++ {
 			out = append(out, group[k].ID)
 		}
