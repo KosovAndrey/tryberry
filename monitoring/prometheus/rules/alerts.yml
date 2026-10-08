@@ -415,9 +415,18 @@ groups:
       # по единицам наблюдений и упирается в верхний бакет гистограммы (ровно
       # 30с в алертах — это граница, а не измерение). Порог 0.05 запроса/с ≈ 15
       # запросов за 5 минут: ниже этого квантиль не несёт смысла.
+      #
+      # Порог WB свой (08-10-2026): с 23-09 цены WB идут ТОЛЬКО через браузерный
+      # сайдкар (пачки + ожидание живой дорожки), и норма p95 там ~25с — порог 10с
+      # давал 640 срабатываний за неделю на штатной работе. 45с — это уже очередь
+      # к пулу без живых дорожек; голый пул ловит WbSearchMinerNoHealthyLanes.
       - alert: HighScrapeLatency
         expr: |
-          tryberrybot:scrape_duration_p95:5m > 10
+          (
+            tryberrybot:scrape_duration_p95:5m{marketplace="wildberries"} > 45
+            or
+            tryberrybot:scrape_duration_p95:5m{marketplace!="wildberries"} > 10
+          )
           and
           sum by (marketplace) (rate(tryberrybot_scrape_duration_seconds_count[5m])) > 0.05
         for: 5m
@@ -425,7 +434,7 @@ groups:
           severity: warning
         annotations:
           summary: "Медленный скрейпинг {{ $labels.marketplace }}"
-          description: "p95 латентности > 10s в течение 5 минут (текущее: {{ $value | humanizeDuration }})"
+          description: "p95 латентности выше нормы площадки (WB 45с, остальные 10с) 5+ минут (текущее: {{ $value | humanizeDuration }})"
 
       # WB: товар не нашёлся ни на одном basket-шарде (удалён / трансгран. Ali не в
       # CDN / баскет за окном проб). Раньше per-event (increase>0, for:0m) — пейджил

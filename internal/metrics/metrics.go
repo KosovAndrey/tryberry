@@ -314,7 +314,10 @@ var (
 			Namespace: namespace,
 			Name:      "scrape_duration_seconds",
 			Help:      "Duration of marketplace scraping in seconds",
-			Buckets:   []float64{0.1, 0.25, 0.5, 1, 2, 5, 10, 30},
+			// 45/60/90 — для WB через браузерный сайдкар (с 23-09-2026): его норма
+			// ~25с, и с верхним бакетом 30 p95 упирался в потолок, не измеряя
+			// деградацию (HighScrapeLatency по WB сравнивает с 45с).
+			Buckets: []float64{0.1, 0.25, 0.5, 1, 2, 5, 10, 30, 45, 60, 90},
 		},
 		[]string{"marketplace"},
 	)
