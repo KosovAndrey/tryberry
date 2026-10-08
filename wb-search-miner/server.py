@@ -333,6 +333,7 @@ class Lane:
         self.idx = idx
         self.proxy = proxy
         self.lock = asyncio.Lock()
+        self._on_unhealthy = None   # колбэк пула: дорожка выпала → будить обслуживание
         self.healthy = False
         self._lock_since = 0.0      # когда лок захвачен (0 = свободен)
         self._servicing = False     # обслуживание уже запущено задачей
@@ -746,6 +747,21 @@ class Lane:
                 # Со страницы выдачи уходим сразу: держать её открытой дорого.
                 await self._park()
 
+    @property
+    def healthy(self) -> bool:
+        return self._healthy
+
+    @healthy.setter
+    def healthy(self, value: bool):
+        was = getattr(self, "_healthy", False)
+        self._healthy = value
+        # Выпадение (498, протухший прогрев, залипание) сразу будит обслуживание
+        # пула: раньше перепрогрев ждал очередного тика MAINT_INTERVAL_S (до 30с),
+        # и при ~40 выпадениях в час дорожки простаивали впустую — отсюда окна,
+        # когда живых дорожек нет ни одной (9–15% времени, замер 08-10-2026).
+        if was and not value and self._on_unhealthy is not None:
+            self._on_unhealthy()
+
     def due_keepalive(self, now: float) -> bool:
         return self.healthy and WARM_KEEPALIVE_S > 0 and (now - self._last_warm) >= WARM_KEEPALIVE_S
 
@@ -783,6 +799,10 @@ class Lane:
 class Pool:
     def __init__(self, lanes):
         self.lanes = lanes
+        # Внеочередной тик обслуживания: дорожка выпала из healthy (см. Lane.healthy).
+        self._kick = asyncio.Event()
+        for lane in lanes:
+            lane._on_unhealthy = self._kick.set
 
     def pick(self):
         alive = [l for l in self.lanes if l.healthy]
@@ -821,7 +841,14 @@ class Pool:
         живой и молча съедала все запросы (тот же отказ, что у ozon-miner 29-07).
         """
         while True:
-            await asyncio.sleep(MAINT_INTERVAL_S)
+            # Тик по расписанию ИЛИ сразу, как только дорожка выпала из healthy.
+            # Ретраи не учащаются: перепрогрев гейтят due_rewarm/_next_warm
+            # (backoff после неудачного прогрева), а дубль задачи — _servicing.
+            try:
+                await asyncio.wait_for(self._kick.wait(), timeout=MAINT_INTERVAL_S)
+            except asyncio.TimeoutError:
+                pass
+            self._kick.clear()
             now = time.monotonic()
             for lane in self.lanes:
                 # Вотчдог: лок держат дольше LANE_STUCK_S → дорожка залипла.
