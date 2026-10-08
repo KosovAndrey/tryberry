@@ -338,6 +338,38 @@ section{position:relative}
 .rplan li svg{width:15px;height:15px;flex:none;margin-top:3px;stroke:var(--berry-bright);stroke-width:2.4;fill:none}
 .rplan li.hl{color:var(--rose);font-weight:600}
 
+/* plus block (Pro+ / Reseller Pro+): свёрнутая полоса → конфигуратор-превью.
+   Сам тариф собирается в боте; цены — зеркало domain.PlusBases (plan_plus.go). */
+.plus{margin-top:22px;border:1.5px dashed rgba(232,51,108,.45);border-radius:24px;background:#fff8f5}
+.plus>summary{list-style:none;cursor:pointer;display:flex;align-items:center;justify-content:space-between;gap:14px;flex-wrap:wrap;padding:20px clamp(20px,3vw,30px)}
+.plus>summary::-webkit-details-marker{display:none}
+.plus>summary:focus-visible{outline:2px solid var(--berry);outline-offset:3px;border-radius:22px}
+.plus .ps-t{font-family:var(--font-display);font-weight:600;font-size:1.02rem;letter-spacing:-.01em}
+.plus .ps-t b{color:var(--berry)}
+.plus .ps-s{font-size:.86rem;color:var(--muted-light);margin-top:3px}
+.plus .ps-go{font-size:.84rem;font-weight:600;color:var(--berry-deep);white-space:nowrap;display:inline-flex;align-items:center;gap:6px}
+.plus .ps-go i{display:inline-block;transition:transform .25s;font-style:normal}
+.plus[open] .ps-go i{transform:rotate(90deg)}
+.plus-body{display:grid;grid-template-columns:1.3fr 1fr;gap:clamp(18px,3vw,34px);padding:4px clamp(20px,3vw,30px) 26px}
+.plus-seg{display:inline-flex;background:rgba(58,15,43,.06);border-radius:100px;padding:4px;margin-bottom:22px}
+.plus-seg button{border:0;background:none;font:inherit;font-size:.86rem;font-weight:600;color:var(--muted);padding:8px 16px;border-radius:100px;cursor:pointer;transition:background .2s,color .2s}
+.plus-seg button[aria-pressed="true"]{background:var(--berry);color:#fff}
+.plus-row{margin-bottom:20px}
+.plus-row label{display:flex;justify-content:space-between;align-items:baseline;font-size:.9rem;margin-bottom:8px}
+.plus-row label output{font-family:var(--font-display);font-weight:700;font-size:1.15rem;color:var(--ink)}
+.plus-row input[type=range]{width:100%;accent-color:var(--berry);cursor:pointer}
+.plus-row .hint{font-size:.76rem;color:var(--muted-light);margin-top:4px}
+.plus-sum{background:linear-gradient(165deg,#3a0f2b,#1f0917);color:var(--cream);border-radius:20px;padding:24px 22px;display:flex;flex-direction:column;gap:6px}
+.plus-sum .pn{font-family:var(--font-display);font-weight:600;font-size:1rem}
+.plus-sum .pi{font-size:.84rem;color:#c8a9b8}
+.plus-sum .pp{font-family:var(--font-display);font-weight:700;font-size:2rem;margin-top:10px}
+.plus-sum .pp small{font-family:var(--font-body);font-weight:400;font-size:.8rem;color:#c8a9b8}
+.plus-sum .psub{font-size:.82rem;color:#c8a9b8}
+.plus-sum .pcta{margin-top:16px;border:0;cursor:pointer;font:inherit;font-weight:600;font-size:.95rem;color:#fff;background:linear-gradient(120deg,var(--berry-bright),var(--berry-deep));padding:13px 18px;border-radius:14px;transition:transform .2s}
+.plus-sum .pcta:hover{transform:translateY(-2px)}
+.plus-sum .phow{font-size:.76rem;color:#a98896;margin-top:8px;line-height:1.45}
+@media(max-width:680px){.plus-body{grid-template-columns:1fr}.plus-seg .iv{display:none}}
+
 /* pay & refund visible block */
 .payinfo-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:18px}
 .paycard{background:var(--cream);border-radius:24px;padding:30px 28px;border:1px solid rgba(58,15,43,.08)}
@@ -542,7 +574,7 @@ footer{background:var(--plum-deep);padding:70px 0 40px;border-top:1px solid var(
     "@type": "AggregateOffer",
     "priceCurrency": "RUB",
     "lowPrice": "0",
-    "highPrice": "1990",
+    "highPrice": "6190",
     "offerCount": "6"
   }
 }
@@ -887,6 +919,43 @@ footer{background:var(--plum-deep);padding:70px 0 40px;border-top:1px solid var(
         </div>
       </div>
     </div>
+
+    <!-- PLUS: Pro+ / Reseller Pro+ — превью конфигуратора, собирается в боте -->
+    <details class="plus" id="plus" data-reveal>
+      <summary>
+        <div>
+          <div class="ps-t">Нужно больше поисков или товаров? <b>Pro+</b> и <b>Reseller Pro+</b></div>
+          <div class="ps-s">Та же скорость проверки, лимиты — сколько нужно. От 549 ₽/мес.</div>
+        </div>
+        <span class="ps-go">Посчитать цену <i>›</i></span>
+      </summary>
+      <div class="plus-body">
+        <div>
+          <div class="plus-seg" role="group" aria-label="Основа тарифа">
+            <button type="button" data-base="pro" aria-pressed="true">Pro+<span class="iv"> · раз в 15 мин</span></button>
+            <button type="button" data-base="rp" aria-pressed="false">Reseller Pro+<span class="iv"> · раз в 1 мин</span></button>
+          </div>
+          <div class="plus-row">
+            <label for="plusS">Поиск-подписок <output id="plusSv">20</output></label>
+            <input type="range" id="plusS" min="10" max="50" step="5" value="20">
+            <div class="hint" id="plusSh">+5 поисков — 150 ₽</div>
+          </div>
+          <div class="plus-row">
+            <label for="plusP">Товарных подписок <output id="plusPv">100</output></label>
+            <input type="range" id="plusP" min="100" max="500" step="50" value="100">
+            <div class="hint" id="plusPh">+50 товаров — 50 ₽</div>
+          </div>
+        </div>
+        <div class="plus-sum" aria-live="polite">
+          <div class="pn" id="plusName">Pro+</div>
+          <div class="pi" id="plusInfo">20 поисков · 100 товаров · проверка раз в 15 мин</div>
+          <div class="pp"><span id="plusPrice">799 ₽</span><small> / мес</small></div>
+          <div class="psub" id="plusSub">с автопродлением — 759 ₽</div>
+          <button type="button" class="pcta" id="plusGo">Собрать в боте →</button>
+          <div class="phow">В боте: «Тарифы» → «Нужно больше? Собрать свой». Там же оплата картой или СБП — тариф подключится сразу.</div>
+        </div>
+      </div>
+    </details>
 
     <p class="plans-note" data-reveal>Оплата проходит прямо в боте через <b>Робокассу</b> — банковской картой или через СБП. Подписка активируется автоматически сразу после подтверждения платежа. Free и триал доступны без карты по командам <b>/myplan</b> и <b>/trial</b>.</p>
   </div>
@@ -1302,6 +1371,42 @@ if(navStart)navStart.addEventListener('click',()=>{setMenu(false);openMpick();})
 const mpickClose=document.getElementById('mpickClose');
 if(mpickClose)mpickClose.addEventListener('click',closeMpick);
 if(mpick)mpick.addEventListener('click',e=>{if(e.target===mpick)closeMpick();});
+/* Pro+ / Reseller Pro+ — превью цены. ЗЕРКАЛО domain.PlusBases
+   (internal/domain/plan_plus.go): меняешь шаги/цены там — меняй и здесь. */
+(function(){
+  var root=document.getElementById('plus');if(!root)return;
+  var B={
+    pro:{name:'Pro+',base:'Pro',iv:'раз в 15 мин',price:499,s0:10,p0:100,sStep:5,sRub:150,pStep:50,pRub:50,sMax:50,pMax:500,sDef:20},
+    rp:{name:'Reseller Pro+',base:'Reseller Pro',iv:'раз в 1 мин',price:1990,s0:3,p0:15,sStep:1,sRub:450,pStep:5,pRub:150,sMax:10,pMax:50,sDef:4}
+  };
+  var cur='pro',$=function(id){return document.getElementById(id)};
+  var S=$('plusS'),P=$('plusP');
+  function pl(n,a,b,c){var m=n%10,h=n%100;return m===1&&h!==11?a:(m>=2&&m<=4&&(h<10||h>=20)?b:c)}
+  function rub(n){return n.toLocaleString('ru-RU')+' ₽'}
+  function setBase(k){
+    cur=k;var b=B[k];
+    S.min=b.s0;S.max=b.sMax;S.step=b.sStep;S.value=b.sDef;
+    P.min=b.p0;P.max=b.pMax;P.step=b.pStep;P.value=b.p0;
+    $('plusSh').textContent='+'+b.sStep+' '+pl(b.sStep,'поиск','поиска','поисков')+' — '+rub(b.sRub);
+    $('plusPh').textContent='+'+b.pStep+' '+pl(b.pStep,'товар','товара','товаров')+' — '+rub(b.pRub);
+    root.querySelectorAll('.plus-seg button').forEach(function(x){x.setAttribute('aria-pressed',x.dataset.base===k?'true':'false')});
+    upd();
+  }
+  function upd(){
+    var b=B[cur],s=+S.value,p=+P.value;
+    var price=b.price+(s-b.s0)/b.sStep*b.sRub+(p-b.p0)/b.pStep*b.pRub;
+    var sub=price-Math.floor((price*5+500)/1000)*10;
+    $('plusSv').textContent=s;$('plusPv').textContent=p;
+    $('plusName').textContent=(s===b.s0&&p===b.p0)?b.base+' — обычный тариф':b.name;
+    $('plusInfo').textContent=s+' '+pl(s,'поиск','поиска','поисков')+' · '+p+' '+pl(p,'товар','товара','товаров')+' · проверка '+b.iv;
+    $('plusPrice').textContent=rub(price);
+    $('plusSub').textContent='с автопродлением — '+rub(sub);
+  }
+  root.querySelectorAll('.plus-seg button').forEach(function(x){x.addEventListener('click',function(){setBase(x.dataset.base)})});
+  S.addEventListener('input',upd);P.addEventListener('input',upd);
+  $('plusGo').addEventListener('click',function(){if(typeof openMpick==='function')openMpick();});
+  setBase('pro');
+})();
 /* deep-link: прямой URL на документы (tryberrybot.ru/#offer, /#privacy) — для модерации
    платёжного провайдера и кнопки «назад». Открываем модалку по hash при загрузке/смене. */
 function syncLegalFromHash(){

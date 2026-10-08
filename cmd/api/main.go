@@ -24,6 +24,7 @@ import (
 
 	"gitlab.com/KosovAndrey/tryberrybot/internal/config"
 	"gitlab.com/KosovAndrey/tryberrybot/internal/db"
+	"gitlab.com/KosovAndrey/tryberrybot/internal/domain"
 	"gitlab.com/KosovAndrey/tryberrybot/internal/health"
 	"gitlab.com/KosovAndrey/tryberrybot/internal/kafka"
 	"gitlab.com/KosovAndrey/tryberrybot/internal/max"
@@ -523,12 +524,17 @@ func runMetricsUpdater(ctx context.Context, log *slog.Logger, pool *pgxpool.Pool
 		if err == nil {
 			defer planRows.Close()
 			metrics.UsersByPlan.Reset()
+			// «Плюс»-конфигурации суммируем в лейбл линейки (pro_plus).
+			byLabel := map[string]int{}
 			for planRows.Next() {
 				var plan string
 				var count int
 				if err := planRows.Scan(&plan, &count); err == nil {
-					metrics.UsersByPlan.WithLabelValues(plan).Set(float64(count))
+					byLabel[domain.PlanMetricLabel(plan)] += count
 				}
+			}
+			for label, count := range byLabel {
+				metrics.UsersByPlan.WithLabelValues(label).Set(float64(count))
 			}
 		}
 	}

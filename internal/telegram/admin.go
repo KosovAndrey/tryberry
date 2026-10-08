@@ -134,7 +134,7 @@ func (b *Bot) handleGrant(ctx context.Context, msg *tgbotapi.Message) {
 	}
 	args := strings.Fields(msg.CommandArguments())
 	if len(args) < 2 {
-		b.reply(msg.Chat.ID, "Использование: <code>/grant &lt;telegram_id&gt; &lt;план&gt; [дней]</code>\nПланы: free, trial, lite, pro, reseller_start, reseller_pro, unlimited")
+		b.reply(msg.Chat.ID, "Использование: <code>/grant &lt;telegram_id&gt; &lt;план&gt; [дней]</code>\nПланы: free, trial, lite, pro, reseller_start, reseller_pro, unlimited, pro_plus_s&lt;поиски&gt;_p&lt;товары&gt;, reseller_pro_plus_s&lt;поиски&gt;_p&lt;товары&gt;")
 		return
 	}
 	tgID, err := strconv.ParseInt(args[0], 10, 64)
@@ -145,7 +145,7 @@ func (b *Bot) handleGrant(ctx context.Context, msg *tgbotapi.Message) {
 	planName := strings.ToLower(args[1])
 	plan, ok := domain.PlanByName(planName)
 	if !ok {
-		b.reply(msg.Chat.ID, "Неизвестный план. Доступно: free, trial, lite, pro, reseller_start, reseller_pro, unlimited.")
+		b.reply(msg.Chat.ID, "Неизвестный план. Доступно: free, trial, lite, pro, reseller_start, reseller_pro, unlimited, pro_plus_s&lt;поиски&gt;_p&lt;товары&gt;, reseller_pro_plus_s&lt;поиски&gt;_p&lt;товары&gt;.")
 		return
 	}
 

@@ -50,7 +50,7 @@ func (b *Bot) applyGrantPromo(ctx context.Context, vkID int64, user *domain.User
 		return
 	}
 
-	plan := domain.Plans[promo.Plan]
+	plan, _ := domain.PlanByName(promo.Plan)
 	b.restorePausedAfterUpgrade(ctx, user.ID, plan)
 
 	b.send(ctx, vkID, fmt.Sprintf(

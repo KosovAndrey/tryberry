@@ -76,10 +76,13 @@ var Plans = map[string]Plan{
 
 const planFree = "free"
 
-// PlanByName — план по имени (ok=false, если такого нет).
+// PlanByName — план по имени (ok=false, если такого нет). Кроме каталога Plans
+// понимает «плюс»-планы с лимитами в имени (pro_plus_s30_p150, см. plan_plus.go).
 func PlanByName(name string) (Plan, bool) {
-	p, ok := Plans[name]
-	return p, ok
+	if p, ok := Plans[name]; ok {
+		return p, true
+	}
+	return plusPlanByName(name)
 }
 
 // EffectivePlan — действующий план с учётом срока: если срок истёк → free.
@@ -91,7 +94,7 @@ func (u *User) EffectivePlan(now time.Time) Plan {
 	if u.PlanExpiresAt != nil && now.After(*u.PlanExpiresAt) {
 		name = planFree
 	}
-	if p, ok := Plans[name]; ok {
+	if p, ok := PlanByName(name); ok {
 		return p
 	}
 	return Plans[planFree]
@@ -153,7 +156,7 @@ func (p Plan) BundleWindow() time.Duration {
 	switch {
 	case IsResellerPlan(p.Name), p.Name == "unlimited":
 		return 0
-	case p.Name == "pro" || p.Name == "trial":
+	case p.Name == "pro" || p.Name == "trial" || strings.HasPrefix(p.Name, "pro_plus_"):
 		return 5 * time.Minute
 	case p.Name == "lite":
 		return 10 * time.Minute

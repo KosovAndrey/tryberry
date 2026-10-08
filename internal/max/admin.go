@@ -159,7 +159,7 @@ func (b *Bot) handleGrant(ctx context.Context, maxID int64, args []string) {
 		return
 	}
 	if len(args) < 2 {
-		b.send(ctx, maxID, "Использование: /grant <telegram_id> <план> [дней]\nПланы: free, trial, lite, pro, reseller_start, reseller_pro, unlimited", nil)
+		b.send(ctx, maxID, "Использование: /grant <telegram_id> <план> [дней]\nПланы: free, trial, lite, pro, reseller_start, reseller_pro, unlimited, pro_plus_s<поиски>_p<товары>, reseller_pro_plus_s<поиски>_p<товары>", nil)
 		return
 	}
 	tgID, err := strconv.ParseInt(args[0], 10, 64)
@@ -170,7 +170,7 @@ func (b *Bot) handleGrant(ctx context.Context, maxID int64, args []string) {
 	planName := strings.ToLower(args[1])
 	plan, ok := domain.PlanByName(planName)
 	if !ok {
-		b.send(ctx, maxID, "Неизвестный план. Доступно: free, trial, lite, pro, reseller_start, reseller_pro, unlimited.", nil)
+		b.send(ctx, maxID, "Неизвестный план. Доступно: free, trial, lite, pro, reseller_start, reseller_pro, unlimited, pro_plus_s<поиски>_p<товары>, reseller_pro_plus_s<поиски>_p<товары>.", nil)
 		return
 	}
 
@@ -442,7 +442,7 @@ func (b *Bot) handlePromoCreate(ctx context.Context, maxID int64, args []string)
 		planName := strings.ToLower(args[2])
 		plan, ok := domain.PlanByName(planName)
 		if !ok || planName == "free" {
-			b.send(ctx, maxID, "Неизвестный план. Доступно: trial, lite, pro, reseller_start, reseller_pro, unlimited.", nil)
+			b.send(ctx, maxID, "Неизвестный план. Доступно: trial, lite, pro, reseller_start, reseller_pro, unlimited, pro_plus_s<поиски>_p<товары>, reseller_pro_plus_s<поиски>_p<товары>.", nil)
 			return
 		}
 		days, err := strconv.Atoi(args[3])
