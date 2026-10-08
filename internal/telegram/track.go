@@ -572,6 +572,10 @@ func (b *Bot) doTrack(ctx context.Context, chatID int64, rawURL string, user *do
 			// Ссылка в форме, которую площадка не обслуживает (Я.Маркет /product/).
 			// Не «ошибка» и не «попробуй позже» — сама карточка жива, нужен другой адрес.
 			msg = scraper.DeadURLFormMsg
+		case errors.Is(err, scraper.ErrLivePriceUnavailable):
+			// Живая цена не ответила, а старую архивную мы не показываем: честно
+			// говорим, что это временно.
+			msg = scraper.LivePriceUnavailableMsg
 		case errors.Is(err, scraper.ErrMarketplaceBlocked):
 			// Площадка отказала — но если товар нам знаком, показываем последнюю
 			// известную цену из своей истории вместо глухого «не удалось».

@@ -2,6 +2,7 @@ package scraper
 
 import (
 	"context"
+	"errors"
 	"net/http"
 	"strings"
 	"testing"
@@ -20,7 +21,6 @@ import (
 func cardSidecarScraper(t *testing.T, archiveKopecks int64, sidecar func(*http.Request) *http.Response) (*WildberriesScraper, *int) {
 	t.Helper()
 	s := NewWildberriesScraper(1000)
-	s.SetUCardPrimary(true)
 	s.SetCardBrowserSidecar("http://wb-search-miner:8081")
 	s.http = &http.Client{Transport: roundTripFunc(func(r *http.Request) (*http.Response, error) {
 		switch {
@@ -73,22 +73,22 @@ func TestCardBrowserFallbackServesLivePrice(t *testing.T) {
 	}
 }
 
-func TestCardBrowserFallbackFallsBackToArchive(t *testing.T) {
-	// Нет прогретых дорожек: сайдкар отвечает 502. Цена тогда из архива —
-	// устаревшая, но бот остаётся живым (тот же размен, что у WB_UCARD_PRIMARY).
+func TestCardBrowserDownGivesNoArchivePrice(t *testing.T) {
+	// Нет прогретых дорожек: сайдкар отвечает 502. Архивную цену (отстаёт на
+	// дни) не отдаём — скрейп пропускается с ErrLivePriceUnavailable.
 	s, calls := cardSidecarScraper(t, 500000, func(r *http.Request) *http.Response {
 		return resp(502, "no healthy lanes", nil)
 	})
 
 	res, err := s.Scrape(context.Background(), "https://www.wildberries.ru/catalog/211695539/detail.aspx")
-	if err != nil {
-		t.Fatalf("скрейп упал: %v", err)
+	if !errors.Is(err, ErrLivePriceUnavailable) {
+		t.Fatalf("err = %v, ждали ErrLivePriceUnavailable", err)
 	}
 	if *calls == 0 {
 		t.Fatal("сайдкар не позвали")
 	}
-	if res.Price != 5000 {
-		t.Fatalf("цена %v — ждали архивные 5000", res.Price)
+	if res != nil {
+		t.Fatalf("результат %+v — архивная цена протекла", res)
 	}
 }
 
@@ -98,9 +98,16 @@ func TestCardBrowserNotConfiguredKeepsOldPath(t *testing.T) {
 		return resp(200, wbUCardBody(69900), nil)
 	})
 	s.SetCardBrowserSidecar("")
+	s.ucard = &http.Client{Transport: roundTripFunc(func(r *http.Request) (*http.Response, error) {
+		return resp(200, wbUCardBody(69900), nil), nil
+	})}
 
-	if _, err := s.Scrape(context.Background(), "https://www.wildberries.ru/catalog/211695539/detail.aspx"); err != nil {
+	res, err := s.Scrape(context.Background(), "https://www.wildberries.ru/catalog/211695539/detail.aspx")
+	if err != nil {
 		t.Fatalf("скрейп упал: %v", err)
+	}
+	if res.Price != 699 {
+		t.Fatalf("цена %v — ждали живую с публичного хоста", res.Price)
 	}
 	if *calls != 0 {
 		t.Fatalf("сайдкар звали %d раз при пустом URL", *calls)
@@ -110,7 +117,7 @@ func TestCardBrowserNotConfiguredKeepsOldPath(t *testing.T) {
 func TestCardBrowserRetriesAfterChallenge(t *testing.T) {
 	// 498 = у дорожки протух токен wbaas; сайдкар метит её нездоровой и чинит
 	// фоном, а вторая попытка попадает на соседнюю. Без ретрая товар молча
-	// уезжал бы на архивную цену, отставшую на дни.
+	// пропускался бы без цены до следующей задачи.
 	n := 0
 	s, calls := cardSidecarScraper(t, 500000, func(r *http.Request) *http.Response {
 		n++
@@ -134,8 +141,7 @@ func TestCardBrowserRetriesAfterChallenge(t *testing.T) {
 
 func TestCardBrowserDownFallsBackToPublicHost(t *testing.T) {
 	// Сайдкар лёг, а публичный хост жив (так будет, когда WB откроет ручки
-	// обратно — он уже дважды менял их местами). Цена должна прийти оттуда, а
-	// не с архива, отстающего на дни.
+	// обратно — он уже дважды менял их местами). Цена должна прийти оттуда.
 	s, calls := cardSidecarScraper(t, 500000, func(r *http.Request) *http.Response {
 		return resp(502, "no healthy lanes", nil)
 	})

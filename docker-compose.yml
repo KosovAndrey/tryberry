@@ -130,8 +130,6 @@ services:
       # api.yookassa.ru — мимо прокси (RU-IP сервера, см. api). Создание платежей.
       NO_PROXY: "postgres,redis,kafka,jaeger,localhost,127.0.0.1,api.vk.com,api.yookassa.ru,platform-api2.max.ru"
       # Живая цена WB при /track (u-card едет через тот же xray из HTTPS_PROXY).
-      # Рубильник — см. WB_UCARD_PRIMARY у scraper.
-      WB_UCARD_PRIMARY: "${WB_UCARD_PRIMARY:-true}"
       # Хост живой карточки WB (пусто → card.wb.ru; u-card с 21-09 403 всем).
       WB_CARD_API_BASE: "${WB_CARD_API_BASE:-}"
       # Живая цена через браузер, когда публичный хост закрыт: с 23-09-2026 WB
@@ -262,13 +260,10 @@ services:
       # u-card (ЖИВАЯ цена WB) через xray: u-card 403-ит прямой RU-IP воркера,
       # зарубежный exit принимает. Пусто → идёт напрямую (403).
       WB_UCARD_PROXY_URL: "${WB_UCARD_PROXY_URL:-http://xray:8888}"
-      # Цена WB — с живого u-card; архив basket-CDN только под историю/имя/картинку
-      # (его последняя точка отстаёт на ДНИ и врала в 97% скрейпов при success rate
-      # 100%). Нагрузка на xray ~4.2 запроса/мин — замер прода 2026-07-16.
-      # РУБИЛЬНИК: WB_UCARD_PRIMARY=false в .env → прежний порядок «архив первый»
-      # (цены снова отстанут, но бот переживёт падение xray / 403 от u-card).
-      # Следить: wb_price_source{source="basket"} — рост доли = цены снова врут.
-      WB_UCARD_PRIMARY: "${WB_UCARD_PRIMARY:-true}"
+      # Цена WB — ТОЛЬКО с живой карточки; архив basket-CDN только под историю/
+      # имя/картинку (его последняя точка отстаёт на ДНИ). Фолбэка на архивную цену
+      # нет: живая не добыта → скрейп пропускается без события (иначе notifier
+      # срабатывал по старым данным). Следить: wb_price_source{source="none"}.
       # Хост живой карточки WB (пусто → card.wb.ru; u-card с 21-09 403 всем).
       WB_CARD_API_BASE: "${WB_CARD_API_BASE:-}"
       # Живая цена через браузер, когда публичный хост закрыт: с 23-09-2026 WB
