@@ -51,8 +51,12 @@ func (b *Bot) sendPlansMenu(ctx context.Context, tgID, chatID int64, messageID i
 		))
 	}
 
+	sb.WriteString("➕ Мало поисков или товаров? Собери <b>Pro+</b> или <b>Reseller Pro+</b> с нужными лимитами.\n\n")
 	sb.WriteString("Бесплатный тариф Free — 5 товаров и 1 поиск-подписка (проверка раз в 6 часов). Новым пользователям доступен триал поиска: /trial.")
 
+	rows = append(rows, tgbotapi.NewInlineKeyboardRow(
+		tgbotapi.NewInlineKeyboardButtonData("➕ Нужно больше? Собрать свой", "plus:menu"),
+	))
 	rows = append(rows, tgbotapi.NewInlineKeyboardRow(
 		tgbotapi.NewInlineKeyboardButtonData("◀️ В меню", "menu:main"),
 	))
@@ -123,10 +127,79 @@ func (b *Bot) sendPlanCard(ctx context.Context, tgID, chatID int64, messageID in
 			tgbotapi.NewInlineKeyboardButtonData(promoLabel, "plan:promo:"+p.Name),
 		))
 	}
+	if domain.IsPlusPlan(p.Name) {
+		rows = append(rows, tgbotapi.NewInlineKeyboardRow(
+			tgbotapi.NewInlineKeyboardButtonData("⚙️ Изменить лимиты", "plus:cfg:"+p.Name),
+		))
+	} else if pb, ok := domain.PlusKeyForBase(p.Name); ok {
+		rows = append(rows, tgbotapi.NewInlineKeyboardRow(
+			tgbotapi.NewInlineKeyboardButtonData(
+				fmt.Sprintf("➕ Нужно больше — собрать %s", pb.Title), "plus:cfg:"+pb.DefaultName()),
+		))
+	}
 	rows = append(rows, tgbotapi.NewInlineKeyboardRow(
 		tgbotapi.NewInlineKeyboardButtonData("◀️ К тарифам", "menu:plans"),
 	))
 	b.showView(chatID, messageID, sb.String(), tgbotapi.NewInlineKeyboardMarkup(rows...))
+}
+
+// sendPlusPicker — экран «Нужно больше?»: выбор линейки Pro+ / Reseller Pro+.
+func (b *Bot) sendPlusPicker(chatID int64, messageID int) {
+	var rows [][]tgbotapi.InlineKeyboardButton
+	for _, pb := range domain.PlusBases {
+		rows = append(rows, tgbotapi.NewInlineKeyboardRow(
+			tgbotapi.NewInlineKeyboardButtonData(
+				fmt.Sprintf("%s — от %d ₽/мес", pb.Title, pb.FromRub()), "plus:cfg:"+pb.DefaultName()),
+		))
+	}
+	rows = append(rows, tgbotapi.NewInlineKeyboardRow(
+		tgbotapi.NewInlineKeyboardButtonData("◀️ К тарифам", "menu:plans"),
+	))
+	b.showView(chatID, messageID, domain.PlusPickerText("<b>", "</b>"), tgbotapi.NewInlineKeyboardMarkup(rows...))
+}
+
+// sendPlusConfig — конфигуратор «плюс»-тарифа: ±шаг по поискам/товарам
+// пересобирает то же сообщение, «Дальше» ведёт на обычную карточку тарифа
+// (оплата/подписка/промокод — общий флоу по имени плана).
+func (b *Bot) sendPlusConfig(ctx context.Context, tgID, chatID int64, messageID int, name string) {
+	text, ok := domain.PlusConfigText(name, "<b>", "</b>")
+	if !ok {
+		b.sendPlusPicker(chatID, messageID)
+		return
+	}
+	pb, s, pr, _ := domain.ParsePlusConfig(name)
+
+	// stepRow — пара «− / +» по одной оси; кнопку в упоре (пол/потолок) не
+	// показываем, чтобы нажатие не было пустым.
+	stepRow := func(ds, dp int, minus, plus string) []tgbotapi.InlineKeyboardButton {
+		var row []tgbotapi.InlineKeyboardButton
+		if n, _ := domain.PlusStep(name, -ds, -dp); n != name {
+			row = append(row, tgbotapi.NewInlineKeyboardButtonData(minus, "plus:cfg:"+n))
+		}
+		if n, _ := domain.PlusStep(name, ds, dp); n != name {
+			row = append(row, tgbotapi.NewInlineKeyboardButtonData(plus, "plus:cfg:"+n))
+		}
+		return row
+	}
+
+	var rows [][]tgbotapi.InlineKeyboardButton
+	if row := stepRow(1, 0, fmt.Sprintf("➖ %d 🔎", pb.SearchStep), fmt.Sprintf("➕ %d 🔎", pb.SearchStep)); len(row) > 0 {
+		rows = append(rows, row)
+	}
+	if row := stepRow(0, 1, fmt.Sprintf("➖ %d 📦", pb.ProductStep), fmt.Sprintf("➕ %d 📦", pb.ProductStep)); len(row) > 0 {
+		rows = append(rows, row)
+	}
+
+	payName, _ := domain.PlusPayName(name)
+	payLabel := fmt.Sprintf("✅ Дальше — %d ₽/мес", pb.Price(s, pr))
+	if pct := b.pendingDiscountPct(ctx, tgID); pct > 0 {
+		payLabel = fmt.Sprintf("✅ Дальше — %s ₽/мес", discountedRub(pb.Price(s, pr), pct))
+	}
+	rows = append(rows,
+		tgbotapi.NewInlineKeyboardRow(tgbotapi.NewInlineKeyboardButtonData(payLabel, "plan:view:"+payName)),
+		tgbotapi.NewInlineKeyboardRow(tgbotapi.NewInlineKeyboardButtonData("◀️ К тарифам", "menu:plans")),
+	)
+	b.showView(chatID, messageID, text, tgbotapi.NewInlineKeyboardMarkup(rows...))
 }
 
 // discountedRub — цена в рублях (целое) со скидкой pct%, готовая строка ("349").

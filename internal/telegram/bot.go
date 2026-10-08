@@ -580,6 +580,12 @@ func (b *Bot) handleCallback(ctx context.Context, cb *tgbotapi.CallbackQuery) {
 	case cb.Data == "menu:plans":
 		b.sendPlansMenu(ctx, cb.From.ID, chatID, messageID)
 
+	case cb.Data == "plus:menu":
+		b.sendPlusPicker(chatID, messageID)
+
+	case strings.HasPrefix(cb.Data, "plus:cfg:"):
+		b.sendPlusConfig(ctx, cb.From.ID, chatID, messageID, strings.TrimPrefix(cb.Data, "plus:cfg:"))
+
 	case strings.HasPrefix(cb.Data, "plan:view:"):
 		b.sendPlanCard(ctx, cb.From.ID, chatID, messageID, strings.TrimPrefix(cb.Data, "plan:view:"))
 

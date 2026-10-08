@@ -46,7 +46,10 @@ func (b *Bot) sendPlans(ctx context.Context, maxID int64, user *domain.User) {
 			ColorPrimary,
 		)})
 	}
+	sb.WriteString("➕ Мало поисков или товаров? Собери Pro+ или Reseller Pro+ с нужными лимитами.\n\n")
 	sb.WriteString("Бесплатный тариф Free — 5 товаров и 1 поиск-подписка (проверка раз в 6 часов). Новым пользователям доступен триал поиска — кнопка «Триал».")
+	rows = append(rows, []Button{TextButton("➕ Нужно больше? Собрать свой",
+		fmt.Sprintf(`{"cmd":%q,"k":""}`, cmdPlus), ColorSecondary)})
 
 	b.send(ctx, maxID, sb.String(), &Keyboard{Buttons: rows})
 }
@@ -108,8 +111,65 @@ func (b *Bot) sendPlanCard(ctx context.Context, maxID int64, user *domain.User, 
 		rows = append(rows, []Button{TextButton(promoLabel,
 			fmt.Sprintf(`{"cmd":%q,"k":%q}`, cmdPromo, p.Name), ColorSecondary)})
 	}
+	if domain.IsPlusPlan(p.Name) {
+		rows = append(rows, []Button{TextButton("⚙️ Изменить лимиты",
+			fmt.Sprintf(`{"cmd":%q,"k":%q}`, cmdPlus, p.Name), ColorSecondary)})
+	} else if pb, ok := domain.PlusKeyForBase(p.Name); ok {
+		rows = append(rows, []Button{TextButton("➕ Нужно больше — собрать "+pb.Title,
+			fmt.Sprintf(`{"cmd":%q,"k":%q}`, cmdPlus, pb.DefaultName()), ColorSecondary)})
+	}
 	rows = append(rows, []Button{TextButton("◀️ К тарифам", buttonPayload(cmdPlans), ColorSecondary)})
 	b.send(ctx, maxID, sb.String(), &Keyboard{Buttons: rows})
+}
+
+// sendPlusConfig — «плюс»-тарифы: пустое/невалидное name → выбор линейки
+// (Pro+ / Reseller Pro+), иначе конфигуратор с ±шагом по поискам/товарам.
+// «Дальше» ведёт на обычную карточку тарифа — общий флоу оплаты по имени плана.
+func (b *Bot) sendPlusConfig(ctx context.Context, maxID int64, user *domain.User, name string) {
+	text, ok := domain.PlusConfigText(name, "", "")
+	if !ok {
+		var rows [][]Button
+		for _, pb := range domain.PlusBases {
+			rows = append(rows, []Button{TextButton(
+				fmt.Sprintf("%s — от %d ₽/мес", pb.Title, pb.FromRub()),
+				fmt.Sprintf(`{"cmd":%q,"k":%q}`, cmdPlus, pb.DefaultName()), ColorPrimary)})
+		}
+		rows = append(rows, []Button{TextButton("◀️ К тарифам", buttonPayload(cmdPlans), ColorSecondary)})
+		b.send(ctx, maxID, domain.PlusPickerText("", ""), &Keyboard{Buttons: rows})
+		return
+	}
+	pb, s, pr, _ := domain.ParsePlusConfig(name)
+
+	// stepRow — пара «− / +» по одной оси; кнопку в упоре (пол/потолок) не показываем.
+	stepRow := func(ds, dp int, minus, plus string) []Button {
+		var row []Button
+		if n, _ := domain.PlusStep(name, -ds, -dp); n != name {
+			row = append(row, TextButton(minus, fmt.Sprintf(`{"cmd":%q,"k":%q}`, cmdPlus, n), ColorSecondary))
+		}
+		if n, _ := domain.PlusStep(name, ds, dp); n != name {
+			row = append(row, TextButton(plus, fmt.Sprintf(`{"cmd":%q,"k":%q}`, cmdPlus, n), ColorSecondary))
+		}
+		return row
+	}
+
+	var rows [][]Button
+	if row := stepRow(1, 0, fmt.Sprintf("➖ %d 🔎", pb.SearchStep), fmt.Sprintf("➕ %d 🔎", pb.SearchStep)); len(row) > 0 {
+		rows = append(rows, row)
+	}
+	if row := stepRow(0, 1, fmt.Sprintf("➖ %d 📦", pb.ProductStep), fmt.Sprintf("➕ %d 📦", pb.ProductStep)); len(row) > 0 {
+		rows = append(rows, row)
+	}
+
+	payName, _ := domain.PlusPayName(name)
+	payLabel := fmt.Sprintf("✅ Дальше — %d ₽/мес", pb.Price(s, pr))
+	if pct := b.usablePendingDiscount(ctx, user.ID); pct > 0 {
+		payLabel = fmt.Sprintf("✅ Дальше — %s ₽/мес", discountedRub(pb.Price(s, pr), pct))
+	}
+	rows = append(rows,
+		[]Button{TextButton(payLabel, fmt.Sprintf(`{"cmd":%q,"k":%q}`, cmdPlanCard, payName), ColorPrimary)},
+		[]Button{TextButton("◀️ К тарифам", buttonPayload(cmdPlans), ColorSecondary)},
+	)
+	b.send(ctx, maxID, text, &Keyboard{Buttons: rows})
 }
 
 func (b *Bot) subSupported() bool {

@@ -55,7 +55,7 @@ func (b *Bot) applyGrantPromo(ctx context.Context, chatID int64, user *domain.Us
 
 	b.restorePausedAfterUpgrade(ctx, user.TelegramID)
 
-	plan := domain.Plans[promo.Plan]
+	plan, _ := domain.PlanByName(promo.Plan)
 	b.reply(chatID, fmt.Sprintf(
 		"🎉 <b>Промокод активирован!</b>\n\n"+
 			"Тариф: <b>%s</b>\n"+

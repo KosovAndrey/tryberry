@@ -68,6 +68,7 @@ const (
 	cmdSUntrack    = "suntrack"    // отписка от поиска
 	cmdPlans       = "plans"       // витрина тарифов
 	cmdPlanCard    = "plan"        // карточка тарифа (k=имя плана)
+	cmdPlus        = "plus"        // «плюс»-тарифы: k="" — выбор линейки, иначе конфигурация
 	cmdBuy         = "buy"         // разовая оплата (k=имя плана)
 	cmdSub         = "sub"         // экран согласия на подписку (k=имя плана)
 	cmdSubOk       = "subok"       // подтверждённое оформление подписки (k=имя плана)
@@ -492,6 +493,8 @@ func (b *Bot) handleMessage(ctx context.Context, vkID int64, text, payload strin
 		b.sendPlans(ctx, vkID, user)
 	case cmdPlanCard:
 		b.sendPlanCard(ctx, vkID, user, p.Kind)
+	case cmdPlus:
+		b.sendPlusConfig(ctx, vkID, user, p.Kind)
 	case cmdBuy:
 		b.handlePlanBuy(ctx, vkID, user, p.Kind)
 	case cmdSub:

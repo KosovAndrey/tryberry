@@ -47,6 +47,7 @@ const (
 	cmdSUntrack    = "suntrack"
 	cmdPlans       = "plans"
 	cmdPlanCard    = "plan"
+	cmdPlus        = "plus" // «плюс»-тарифы: k="" — выбор линейки, иначе конфигурация
 	cmdBuy         = "buy"
 	cmdSub         = "sub"
 	cmdSubOk       = "subok"
@@ -448,6 +449,8 @@ func (b *Bot) handleMessage(ctx context.Context, maxID int64, text, payload stri
 		b.sendPlans(ctx, maxID, user)
 	case cmdPlanCard:
 		b.sendPlanCard(ctx, maxID, user, p.Kind)
+	case cmdPlus:
+		b.sendPlusConfig(ctx, maxID, user, p.Kind)
 	case cmdBuy:
 		b.handlePlanBuy(ctx, maxID, user, p.Kind)
 	case cmdSub:
