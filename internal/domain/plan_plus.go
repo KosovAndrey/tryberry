@@ -15,15 +15,8 @@ import (
 // автопродление работают без отдельной логики и миграций.
 //
 // Конфигуратор позволяет только РАСШИРЯТЬ базу (меньше базы — это Lite/Start).
-// ЦЕНЫ МЕНЯЮТСЯ ЗДЕСЬ (и в зеркале web/index.html, блок #plus). Уже купленные «плюс»-планы пересчитаются по новой
+// ЦЕНЫ ШАГОВ МЕНЯЮТСЯ ЗДЕСЬ. Уже купленные «плюс»-планы пересчитаются по новой
 // формуле при следующем автопродлении.
-
-// PriceTier — ступень цены поисков: каждый поиск с номером ≤ UpTo (и выше
-// предыдущей ступени) стоит Rub ₽/мес.
-type PriceTier struct {
-	UpTo int
-	Rub  int
-}
 
 // PlusBase — описание «плюс»-линейки над базовым планом.
 type PlusBase struct {
@@ -31,11 +24,8 @@ type PlusBase struct {
 	Title string // «Pro+»
 	Base  string // базовый план: лимиты-минимум, цена-база, интервалы
 
-	SearchStep int // шаг конфигуратора по поискам
-	// SearchTiers — оптовая лесенка добавочных поисков (по возрастанию UpTo,
-	// последняя UpTo = MaxSearch, границы кратны шагу от базы). Первая ступень —
-	// «полная» цена: от неё считаем выгоду, которую показываем юзеру.
-	SearchTiers    []PriceTier
+	SearchStep     int // шаг конфигуратора по поискам
+	SearchStepRub  int // цена шага по поискам, ₽/мес
 	ProductStep    int // шаг по товарам
 	ProductStepRub int // цена шага по товарам, ₽/мес
 	MaxSearch      int // потолок конфигуратора
@@ -44,26 +34,19 @@ type PlusBase struct {
 
 // PlusBases — линейки «плюс»-тарифов (порядок = порядок на экране выбора).
 //
-// Поиски — оптовой лесенкой: первые добавочные чуть дороже, дальше дешевле.
-// Юзер платит больше «плоской» цены на малых объёмах, но видит выгоду и стимул
-// добрать до следующей ступени. Нижняя ступень — пол цены поиска: поиск самый
-// дорогой по нагрузке ресурс, наша стоимость на поиск от объёма не падает.
-// Товары дешёвые и почти не нагружают — по плоской цене.
-//
-// Pro+: Pro = 10 поисков за 499 ₽ (~50 ₽/поиск). 11–20 по 35 ₽, 21–30 по 30 ₽,
-// 31–50 по 25 ₽; товары 1 ₽/шт. 20 поисков = 849 ₽, 30 = 1149 ₽, 50 = 1649 ₽.
+// Pro+: Pro = 10 поисков за 499 ₽ (~50 ₽/поиск); сверх базы — 30 ₽/поиск
+// (оптом дешевле, но поиск — самый дорогой по нагрузке ресурс, ниже не
+// опускаем). Товары дешёвые — 1 ₽/товар. 20 поисков = 799 ₽, 30 = 1099 ₽.
 //
 // Reseller Pro+: минутная проверка в 15 раз дороже 15-минутной. Маржинальная
 // цена внутри линейки: Start→Pro = +2 поиска +10 товаров за 1000 ₽ — отсюда
-// ~450 ₽/поиск: 4–5-й по 500 ₽, 6–7-й по 450 ₽, 8–10-й по 400 ₽; 150 ₽ за 5 товаров.
+// 450 ₽/поиск и 150 ₽ за 5 товаров.
 var PlusBases = []PlusBase{
 	{Key: "pro_plus", Title: "Pro+", Base: "pro",
-		SearchStep: 5, SearchTiers: []PriceTier{{20, 35}, {30, 30}, {50, 25}},
-		ProductStep: 50, ProductStepRub: 50,
+		SearchStep: 5, SearchStepRub: 150, ProductStep: 50, ProductStepRub: 50,
 		MaxSearch: 50, MaxProduct: 500},
 	{Key: "reseller_pro_plus", Title: "Reseller Pro+", Base: "reseller_pro",
-		SearchStep: 1, SearchTiers: []PriceTier{{5, 500}, {7, 450}, {10, 400}},
-		ProductStep: 5, ProductStepRub: 150,
+		SearchStep: 1, SearchStepRub: 450, ProductStep: 5, ProductStepRub: 150,
 		MaxSearch: 10, MaxProduct: 50},
 }
 
@@ -94,63 +77,15 @@ func (pb PlusBase) DefaultName() string {
 
 // FromRub — минимальная цена линейки (база + самый дешёвый шаг) для «от N ₽».
 func (pb PlusBase) FromRub() int {
-	b := pb.BasePlan()
-	return b.PriceRub + min(pb.searchCost(b.MaxSearch+pb.SearchStep), pb.ProductStepRub)
-}
-
-// SearchRub — цена n-го по счёту поиска (n > базы) по лесенке.
-func (pb PlusBase) SearchRub(n int) int {
-	for _, t := range pb.SearchTiers {
-		if n <= t.UpTo {
-			return t.Rub
-		}
-	}
-	return pb.SearchTiers[len(pb.SearchTiers)-1].Rub
-}
-
-// searchCost — стоимость добавочных поисков сверх базы до search включительно.
-func (pb PlusBase) searchCost(search int) int {
-	sum := 0
-	for n := pb.BasePlan().MaxSearch + 1; n <= search; n++ {
-		sum += pb.SearchRub(n)
-	}
-	return sum
+	return pb.BasePlan().PriceRub + min(pb.SearchStepRub, pb.ProductStepRub)
 }
 
 // Price — цена разовой оплаты, ₽/мес.
 func (pb PlusBase) Price(search, product int) int {
 	b := pb.BasePlan()
-	return b.PriceRub + pb.searchCost(search) +
+	return b.PriceRub +
+		(search-b.MaxSearch)/pb.SearchStep*pb.SearchStepRub +
 		(product-b.MaxProduct)/pb.ProductStep*pb.ProductStepRub
-}
-
-// SearchSavings — выгода лесенки против «полной» цены (первой ступени) на
-// всех добавочных поисках. 0, пока юзер в первой ступени.
-func (pb PlusBase) SearchSavings(search int) int {
-	extra := search - pb.BasePlan().MaxSearch
-	return extra*pb.SearchTiers[0].Rub - pb.searchCost(search)
-}
-
-// tierFrom — номер первого поиска ступени i (для подписи «11–20»).
-func (pb PlusBase) tierFrom(i int) int {
-	if i == 0 {
-		return pb.BasePlan().MaxSearch + 1
-	}
-	return pb.SearchTiers[i-1].UpTo + 1
-}
-
-// TierLadder — лесенка одной строкой: «11–20 по 35 ₽ · 21–30 по 30 ₽ · 31–50 по 25 ₽».
-func (pb PlusBase) TierLadder() string {
-	parts := make([]string, len(pb.SearchTiers))
-	for i, t := range pb.SearchTiers {
-		from := pb.tierFrom(i)
-		if from == t.UpTo {
-			parts[i] = fmt.Sprintf("%d-й по %d ₽", from, t.Rub)
-		} else {
-			parts[i] = fmt.Sprintf("%d–%d по %d ₽", from, t.UpTo, t.Rub)
-		}
-	}
-	return strings.Join(parts, " · ")
 }
 
 // valid — лимиты в сетке шагов, не ниже базы и не выше потолка.
@@ -268,10 +203,9 @@ func PlusConfigText(name, b0, b1 string) (string, bool) {
 	b := pb.BasePlan()
 	var sb strings.Builder
 	fmt.Fprintf(&sb, "⚙️ %sСобери свой %s%s\n", b0, pb.Title, b1)
-	fmt.Fprintf(&sb, "Всё как в %s (проверка %s), только больше лимитов.\n\n", b.Title, IntervalPhrase(b.Interval))
-	fmt.Fprintf(&sb, "🔎 Поиск-подписок: %s%d%s\n", b0, s, b1)
+	fmt.Fprintf(&sb, "Всё как в %s — проверка %s, — но больше лимитов.\n\n", b.Title, IntervalPhrase(b.Interval))
+	fmt.Fprintf(&sb, "🔎 Поиск-подписок: %s%d%s  (+%d — %d ₽)\n", b0, s, b1, pb.SearchStep, pb.SearchStepRub)
 	fmt.Fprintf(&sb, "📦 Товаров: %s%d%s  (+%d — %d ₽)\n\n", b0, p, b1, pb.ProductStep, pb.ProductStepRub)
-	fmt.Fprintf(&sb, "Чем больше поисков, тем дешевле каждый:\n%s\n\n", pb.TierLadder())
 	if pb.IsBase(s, p) {
 		fmt.Fprintf(&sb, "Это обычный тариф %s%s%s — %d ₽/мес. Добавь поисков или товаров кнопками ниже.",
 			b0, b.Title, b1, b.PriceRub)
@@ -282,27 +216,7 @@ func PlusConfigText(name, b0, b1 string) (string, bool) {
 	if plan.SubPriceRub > 0 {
 		fmt.Fprintf(&sb, " · с автопродлением %d ₽", plan.SubPriceRub)
 	}
-	if sv := pb.SearchSavings(s); sv > 0 {
-		fmt.Fprintf(&sb, "\n🎁 Экономия %s%d ₽%s на оптовой цене поисков", b0, sv, b1)
-	}
-	if hint := pb.NextSearchHint(s); hint != "" {
-		sb.WriteString("\n" + hint)
-	}
 	return sb.String(), true
-}
-
-// NextSearchHint — стимул добрать до следующей ступени: «➕ С 31-го поиска —
-// по 25 ₽». Пусто в последней ступени (дешевле уже не будет).
-func (pb PlusBase) NextSearchHint(search int) string {
-	for i, t := range pb.SearchTiers {
-		if search <= t.UpTo {
-			if i+1 == len(pb.SearchTiers) {
-				return ""
-			}
-			return fmt.Sprintf("➕ С %d-го поиска — по %d ₽", pb.tierFrom(i+1), pb.SearchTiers[i+1].Rub)
-		}
-	}
-	return ""
 }
 
 // PlusPayName — куда ведёт «Дальше» из конфигуратора: сам «плюс»-план либо,

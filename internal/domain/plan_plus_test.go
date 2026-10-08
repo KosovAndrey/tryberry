@@ -13,10 +13,10 @@ func TestPlusPlanByName(t *testing.T) {
 	if p.MaxSearch != 30 || p.MaxProduct != 150 {
 		t.Errorf("limits = %d/%d", p.MaxSearch, p.MaxProduct)
 	}
-	if p.PriceRub != 499+10*35+10*30+1*50 {
+	if p.PriceRub != 499+4*150+1*50 {
 		t.Errorf("price = %d", p.PriceRub)
 	}
-	if p.SubPriceRub != 1199-60 {
+	if p.SubPriceRub != 1149-60 {
 		t.Errorf("sub price = %d", p.SubPriceRub)
 	}
 	if p.Interval != Plans["pro"].Interval || p.SearchCooldown != Plans["pro"].SearchCooldown {
@@ -30,7 +30,7 @@ func TestPlusPlanByName(t *testing.T) {
 	if !ok {
 		t.Fatal("reseller_pro_plus_s5_p20 not parsed")
 	}
-	if r.PriceRub != 1990+2*500+1*150 || r.Interval != time.Minute {
+	if r.PriceRub != 1990+2*450+1*150 || r.Interval != time.Minute {
 		t.Errorf("reseller+: price=%d interval=%v", r.PriceRub, r.Interval)
 	}
 	if !IsResellerPlan(r.Name) || r.BundleWindow() != 0 {
@@ -112,63 +112,5 @@ func TestPlusPayNameAndDefaults(t *testing.T) {
 	}
 	if txt, ok := PlusConfigText("pro_plus_s20_p100", "", ""); !ok || txt == "" {
 		t.Errorf("config text empty")
-	}
-}
-
-func TestPlusTiers(t *testing.T) {
-	pro, _ := PlusBaseByKey("pro_plus")
-	for _, c := range []struct{ s, price, savings int }{
-		{10, 499, 0}, {15, 674, 0}, {20, 849, 0}, {25, 999, 25}, {30, 1149, 50}, {40, 1399, 150}, {50, 1649, 250},
-	} {
-		if got := pro.Price(c.s, 100); got != c.price {
-			t.Errorf("pro+ s%d: price %d, want %d", c.s, got, c.price)
-		}
-		if got := pro.SearchSavings(c.s); got != c.savings {
-			t.Errorf("pro+ s%d: savings %d, want %d", c.s, got, c.savings)
-		}
-	}
-	if got := pro.TierLadder(); got != "11–20 по 35 ₽ · 21–30 по 30 ₽ · 31–50 по 25 ₽" {
-		t.Errorf("ladder = %q", got)
-	}
-	for s, want := range map[int]string{
-		10: "➕ С 21-го поиска — по 30 ₽",
-		20: "➕ С 21-го поиска — по 30 ₽",
-		25: "➕ С 31-го поиска — по 25 ₽",
-		30: "➕ С 31-го поиска — по 25 ₽",
-		35: "", // последняя ступень
-		50: "",
-	} {
-		if got := pro.NextSearchHint(s); got != want {
-			t.Errorf("hint@%d = %q, want %q", s, got, want)
-		}
-	}
-	if pro.FromRub() != 549 {
-		t.Errorf("pro+ from = %d", pro.FromRub())
-	}
-
-	rp, _ := PlusBaseByKey("reseller_pro_plus")
-	if got := rp.Price(10, 15); got != 1990+2*500+2*450+3*400 {
-		t.Errorf("reseller+ s10 = %d", got)
-	}
-	if got := rp.TierLadder(); got != "4–5 по 500 ₽ · 6–7 по 450 ₽ · 8–10 по 400 ₽" {
-		t.Errorf("reseller ladder = %q", got)
-	}
-}
-
-// Инварианты лесенок: возрастающие границы, последняя = потолок, границы
-// кратны шагу от базы (шаг не перескакивает ступень), цена ступеней падает.
-func TestPlusTierInvariants(t *testing.T) {
-	for _, pb := range PlusBases {
-		b := pb.BasePlan()
-		prevUp, prevRub := b.MaxSearch, 1<<30
-		for _, tr := range pb.SearchTiers {
-			if tr.UpTo <= prevUp || (tr.UpTo-b.MaxSearch)%pb.SearchStep != 0 || tr.Rub >= prevRub {
-				t.Errorf("%s: bad tier %+v", pb.Key, tr)
-			}
-			prevUp, prevRub = tr.UpTo, tr.Rub
-		}
-		if prevUp != pb.MaxSearch {
-			t.Errorf("%s: last tier %d != MaxSearch %d", pb.Key, prevUp, pb.MaxSearch)
-		}
 	}
 }
