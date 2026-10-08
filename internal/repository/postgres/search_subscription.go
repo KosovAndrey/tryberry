@@ -229,22 +229,25 @@ type PausedSearchSub struct {
 	Plan          string
 	PlanExpiresAt *time.Time
 	CreatedAt     time.Time
+	ActiveCount   int // заполняется только в ListPausedWithinGrace, иначе 0
 }
 
-// PauseExpiredSearchSubs ставит на паузу активные поиск-подписки пользователей с
-// истёкшим планом (effective plan = free → MaxSearch=0, поиск не положен вовсе).
-// Возвращает users.id затронутых пользователей (без дублей) для разового
-// уведомления. Идемпотентна: паузные (active=FALSE) под условие не попадают,
-// поэтому повторный вызов не шлёт уведомление снова.
-func (r *SearchSubscriptionRepo) PauseExpiredSearchSubs(ctx context.Context) ([]int64, error) {
+// ListActiveOfExpiredUsers — активные поиск-подписки пользователей с истёкшим
+// планом (effective = free, MaxSearch=1). Упорядочено (user_id, created_at):
+// вызывающий оставляет старейшие в пределах лимита и гасит избыток.
+//
+// NB: раньше здесь был PauseExpiredSearchSubs, гасивший ВСЕ поиски истёкших
+// (эпоха free.MaxSearch=0). После открытия фри-поиска restore на том же тике
+// возвращал один поиск, следующий тик снова гасил его — бесконечный цикл
+// пауза→возврат с повторным «Тариф закончился» раз в reconcile-интервал.
+func (r *SearchSubscriptionRepo) ListActiveOfExpiredUsers(ctx context.Context) ([]PausedSearchSub, error) {
 	const q = `
-		UPDATE search_subscriptions s
-		SET active = FALSE, paused_at = NOW(), updated_at = NOW()
-		FROM users u
-		WHERE s.user_id = u.id
-		  AND s.active = TRUE AND s.paused_at IS NULL
+		SELECT s.id, s.user_id, u.plan, u.plan_expires_at, s.created_at
+		FROM search_subscriptions s
+		JOIN users u ON u.id = s.user_id
+		WHERE s.active = TRUE AND s.paused_at IS NULL
 		  AND u.plan_expires_at IS NOT NULL AND u.plan_expires_at < NOW()
-		RETURNING u.id`
+		ORDER BY s.user_id, s.created_at`
 
 	rows, err := r.db.Query(ctx, q)
 	if err != nil {
@@ -252,28 +255,39 @@ func (r *SearchSubscriptionRepo) PauseExpiredSearchSubs(ctx context.Context) ([]
 	}
 	defer rows.Close()
 
-	seen := make(map[int64]bool)
-	var ids []int64
+	var out []PausedSearchSub
 	for rows.Next() {
-		var tg int64
-		if err := rows.Scan(&tg); err != nil {
+		var p PausedSearchSub
+		if err := rows.Scan(&p.ID, &p.UserID, &p.Plan, &p.PlanExpiresAt, &p.CreatedAt); err != nil {
 			return nil, err
 		}
-		if !seen[tg] {
-			seen[tg] = true
-			ids = append(ids, tg)
-		}
+		out = append(out, p)
 	}
-	return ids, rows.Err()
+	return out, rows.Err()
+}
+
+// PauseSearchSubs ставит поиск-подписки на паузу (active=FALSE, paused_at=NOW()).
+// Повторно не трогает уже паузные (paused_at сохраняет начало grace).
+func (r *SearchSubscriptionRepo) PauseSearchSubs(ctx context.Context, ids []int64) error {
+	if len(ids) == 0 {
+		return nil
+	}
+	const q = `
+		UPDATE search_subscriptions
+		SET active = FALSE, paused_at = NOW(), updated_at = NOW()
+		WHERE id = ANY($1) AND paused_at IS NULL`
+	_, err := r.db.Exec(ctx, q, ids)
+	return err
 }
 
 // ListPausedWithinGrace возвращает паузные подписки, ещё не вышедшие из grace
-// (paused_at >= cutoff), вместе с планом владельца. Упорядочено по (user_id,
-// created_at), чтобы вызывающий мог группировать по юзеру и восстанавливать
-// самые старые в пределах MaxSearch.
+// (paused_at >= cutoff), вместе с планом владельца и числом его уже активных
+// поисков. Упорядочено по (user_id, created_at), чтобы вызывающий мог
+// группировать по юзеру и восстанавливать самые старые до (MaxSearch − активные).
 func (r *SearchSubscriptionRepo) ListPausedWithinGrace(ctx context.Context, cutoff time.Time) ([]PausedSearchSub, error) {
 	const q = `
-		SELECT s.id, s.user_id, u.plan, u.plan_expires_at, s.created_at
+		SELECT s.id, s.user_id, u.plan, u.plan_expires_at, s.created_at,
+		       (SELECT count(*) FROM search_subscriptions a WHERE a.user_id = s.user_id AND a.active) AS active_count
 		FROM search_subscriptions s
 		JOIN users u ON u.id = s.user_id
 		WHERE s.paused_at IS NOT NULL AND s.paused_at >= $1
@@ -288,7 +302,7 @@ func (r *SearchSubscriptionRepo) ListPausedWithinGrace(ctx context.Context, cuto
 	var out []PausedSearchSub
 	for rows.Next() {
 		var p PausedSearchSub
-		if err := rows.Scan(&p.ID, &p.UserID, &p.Plan, &p.PlanExpiresAt, &p.CreatedAt); err != nil {
+		if err := rows.Scan(&p.ID, &p.UserID, &p.Plan, &p.PlanExpiresAt, &p.CreatedAt, &p.ActiveCount); err != nil {
 			return nil, err
 		}
 		out = append(out, p)
