@@ -215,12 +215,13 @@ func productSchedulerTick(
 		subs       int        // активных подписчиков — кап популярности
 		fastSub    bool       // есть подписчик минутного (reseller) тарифа — бэкофф не применяем
 		has        bool       // есть хоть один подписчик, по которому товар скрейпится
+		retryAt    *time.Time // внеплановый повтор после пропуска без живой цены (MarkLiveRetry)
 	}
 	byProduct := make(map[int64]*agg)
 	for _, r := range rows {
 		a, ok := byProduct[r.ProductID]
 		if !ok {
-			a = &agg{url: r.URL, lastEn: r.LastEnqueuedAt, lastChange: r.LastPriceChangeAt}
+			a = &agg{url: r.URL, lastEn: r.LastEnqueuedAt, lastChange: r.LastPriceChangeAt, retryAt: r.LiveRetryAt}
 			byProduct[r.ProductID] = a
 		}
 		a.subs++
@@ -276,7 +277,10 @@ func productSchedulerTick(
 		if !a.fastSub && eff > resellerLaneCutoff {
 			eff = domain.ApplyVolatility(eff, a.lastChange, a.subs, now, 0)
 		}
-		if a.lastEn != nil && now.Sub(*a.lastEn) < eff {
+		// Внеплановый повтор (WB без живой цены, MarkLiveRetry в scraper) ставит
+		// товар раньше планового срока: волна 498 у сайдкара длится секунды, и
+		// ждать 15–60 мин до следующей задачи незачем.
+		if a.lastEn != nil && now.Sub(*a.lastEn) < eff && !domain.LiveRetryDue(a.retryAt, now) {
 			continue
 		}
 		dueList = append(dueList, due{id: id, url: a.url})
