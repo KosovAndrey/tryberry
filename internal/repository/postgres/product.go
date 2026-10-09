@@ -223,6 +223,8 @@ func (r *ProductRepo) UpdateScrapedData(ctx context.Context, id int64, name, ima
 		           END,
 		    image_url = COALESCE(NULLIF($3, ''), image_url),
 		    in_stock  = COALESCE($4, in_stock),
+		    live_fail_streak = 0,
+		    live_retry_at = NULL,
 		    updated_at = NOW()
 		WHERE id = $1
 		RETURNING (SELECT in_stock FROM prev)`
@@ -276,13 +278,16 @@ type SchedulableProduct struct {
 	// LastPriceChangeAt — когда цена менялась в последний раз (NULL = новый
 	// трек); питает волатильностный бэкофф в планировщике (domain.VolatilityMult).
 	LastPriceChangeAt *time.Time
+	// LiveRetryAt — внеплановый повтор после пропуска без живой цены
+	// (MarkLiveRetry); NULL = повтора нет.
+	LiveRetryAt *time.Time
 }
 
 // GetSchedulableProducts — по строке на каждую активную товарную подписку: товар
 // + план владельца. MIN-интервал и решение «пора» планировщик считает в Go.
 func (r *ProductRepo) GetSchedulableProducts(ctx context.Context) ([]SchedulableProduct, error) {
 	const q = `
-		SELECT p.id, p.url, p.last_enqueued_at, u.plan, u.plan_expires_at, p.last_price_change_at
+		SELECT p.id, p.url, p.last_enqueued_at, u.plan, u.plan_expires_at, p.last_price_change_at, p.live_retry_at
 		FROM products p
 		JOIN subscriptions s ON s.product_id = p.id AND s.active = TRUE
 		JOIN users u ON u.id = s.user_id`
@@ -296,12 +301,31 @@ func (r *ProductRepo) GetSchedulableProducts(ctx context.Context) ([]Schedulable
 	var out []SchedulableProduct
 	for rows.Next() {
 		var p SchedulableProduct
-		if err := rows.Scan(&p.ProductID, &p.URL, &p.LastEnqueuedAt, &p.OwnerPlan, &p.PlanExpiresAt, &p.LastPriceChangeAt); err != nil {
+		if err := rows.Scan(&p.ProductID, &p.URL, &p.LastEnqueuedAt, &p.OwnerPlan, &p.PlanExpiresAt, &p.LastPriceChangeAt, &p.LiveRetryAt); err != nil {
 			return nil, err
 		}
 		out = append(out, p)
 	}
 	return out, rows.Err()
+}
+
+// MarkLiveRetry — скрейп пропущен без живой цены (WB: сайдкар/карточка не
+// ответили): назначить внеплановый повтор через domain.LiveRetryDelay(streak) и
+// нарастить серию. Удвоение задержки гасит повторы при долгой стене само.
+func (r *ProductRepo) MarkLiveRetry(ctx context.Context, productID int64) (time.Duration, error) {
+	// В SET справа — СТАРОЕ значение серии: первый пропуск (0) даёт базовую
+	// задержку, как domain.LiveRetryDelay(1).
+	const q = `
+		UPDATE products
+		SET live_fail_streak = live_fail_streak + 1,
+		    live_retry_at = NOW() + make_interval(secs =>
+		        LEAST($2::float8 * power(2, LEAST(live_fail_streak, 16)), $3::float8))
+		WHERE id = $1
+		RETURNING live_fail_streak`
+	var streak int
+	err := r.db.QueryRow(ctx, q, productID,
+		domain.LiveRetryBase.Seconds(), domain.LiveRetryMax.Seconds()).Scan(&streak)
+	return domain.LiveRetryDelay(streak), err
 }
 
 // TouchPriceChanged — зафиксировать смену цены товара (сбрасывает
@@ -319,7 +343,9 @@ func (r *ProductRepo) ClaimEnqueued(ctx context.Context, ids []int64) error {
 	if len(ids) == 0 {
 		return nil
 	}
-	const q = `UPDATE products SET last_enqueued_at = NOW() WHERE id = ANY($1)`
+	// live_retry_at гасим: поставленный в очередь товар внеплановый повтор
+	// получил (или он стал не нужен — подошёл плановый срок).
+	const q = `UPDATE products SET last_enqueued_at = NOW(), live_retry_at = NULL WHERE id = ANY($1)`
 	_, err := r.db.Exec(ctx, q, ids)
 	return err
 }

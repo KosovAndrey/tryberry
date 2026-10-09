@@ -103,3 +103,23 @@ func TestEffectiveSearchCooldown(t *testing.T) {
 		t.Errorf("empty plan: got %v, want %v", got, def)
 	}
 }
+
+func TestLiveRetryDelay(t *testing.T) {
+	want := map[int]time.Duration{
+		0: 2 * time.Minute, 1: 2 * time.Minute, 2: 4 * time.Minute, 3: 8 * time.Minute,
+		4: 16 * time.Minute, 5: 30 * time.Minute, 50: 30 * time.Minute,
+	}
+	for streak, w := range want {
+		if got := LiveRetryDelay(streak); got != w {
+			t.Errorf("LiveRetryDelay(%d) = %v, want %v", streak, got, w)
+		}
+	}
+}
+
+func TestLiveRetryDue(t *testing.T) {
+	now := time.Now()
+	past, future := now.Add(-time.Second), now.Add(time.Minute)
+	if LiveRetryDue(nil, now) || LiveRetryDue(&future, now) || !LiveRetryDue(&past, now) || !LiveRetryDue(&now, now) {
+		t.Error("LiveRetryDue: nil/будущее — нет, прошлое/сейчас — да")
+	}
+}

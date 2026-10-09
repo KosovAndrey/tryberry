@@ -71,3 +71,31 @@ func ApplyVolatility(eff time.Duration, lastChange *time.Time, subscribers int, 
 	}
 	return out
 }
+
+// Внеплановый повтор скрейпа, когда живой цены не было (WB: сайдкар стоит без
+// живых дорожек — обычно волна 498 на 30–60с). Задержка удваивается с серией
+// пропусков: 2, 4, 8, 16, 30, 30… мин. При долгой стене повторы реже планового
+// каданса и сайдкар не нагружают; при короткой волне товар обновится через
+// пару минут, а не через 15–60 (миграция 034).
+const (
+	LiveRetryBase = 2 * time.Minute
+	LiveRetryMax  = 30 * time.Minute
+)
+
+// LiveRetryDelay — задержка повтора после streak-го пропуска подряд (streak ≥ 1).
+// Зеркало формулы в ProductRepo.MarkLiveRetry.
+func LiveRetryDelay(streak int) time.Duration {
+	if streak < 1 {
+		streak = 1
+	}
+	d := LiveRetryBase
+	for i := 1; i < streak && d < LiveRetryMax; i++ {
+		d *= 2
+	}
+	return min(d, LiveRetryMax)
+}
+
+// LiveRetryDue — пора ли внеплановый повтор (срок назначен и наступил).
+func LiveRetryDue(retryAt *time.Time, now time.Time) bool {
+	return retryAt != nil && !now.Before(*retryAt)
+}

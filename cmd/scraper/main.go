@@ -307,9 +307,14 @@ func makeHandler(
 			// Живая цена не добыта (WB: сайдкар/хост карточки не ответили). Ретраи
 			// здесь бесполезны (сайдкар сам делает 2 попытки по 25с) и только держат
 			// слот; событие не шлём, чтобы notifier не сработал по старым данным.
-			// Следующая плановая задача по товару попробует снова.
+			// Вместо ожидания плановой задачи (15–60 мин) назначаем внеплановый
+			// повтор через 2, 4, 8… мин: обычно это короткая волна 498 у сайдкара.
 			if errors.Is(err, scraper.ErrLivePriceUnavailable) {
-				log.Warn("scrape skipped (no live price)", "err", err)
+				delay, rerr := productRepo.MarkLiveRetry(ctx, task.ProductID)
+				if rerr != nil {
+					log.Warn("mark live retry", "err", rerr)
+				}
+				log.Warn("scrape skipped (no live price)", "err", err, "retry_in", delay)
 				return nil
 			}
 			log.Error("scrape failed", "err", err)
