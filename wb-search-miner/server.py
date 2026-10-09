@@ -140,6 +140,8 @@ LANE_MAX_AGE_S = float(os.getenv("WB_LANE_MAX_AGE_SECONDS", "0"))
 LANE_MAX_AGE_JITTER = float(os.getenv("WB_LANE_MAX_AGE_JITTER", "0.2"))
 
 MAINT_INTERVAL_S = float(os.getenv("WB_HEALTH_INTERVAL_SECONDS", "30"))
+# Перепроверка выпавшей, но ещё занятой запросом дорожки (см. maintenance_loop).
+BUSY_RECHECK_S = float(os.getenv("WB_BUSY_RECHECK_SECONDS", "1"))
 # Лок дорожки держат дольше этого — считаем её залипшей. Порог с запасом над
 # самым долгим штатным запросом (навигация + ожидание u-search).
 LANE_STUCK_S = float(os.getenv("WB_LANE_STUCK_SECONDS", "180"))
@@ -840,15 +842,17 @@ class Pool:
         всего пула, а залипшую дорожку никто не снимал с healthy — она числилась
         живой и молча съедала все запросы (тот же отказ, что у ozon-miner 29-07).
         """
+        wait = MAINT_INTERVAL_S
         while True:
             # Тик по расписанию ИЛИ сразу, как только дорожка выпала из healthy.
             # Ретраи не учащаются: перепрогрев гейтят due_rewarm/_next_warm
             # (backoff после неудачного прогрева), а дубль задачи — _servicing.
             try:
-                await asyncio.wait_for(self._kick.wait(), timeout=MAINT_INTERVAL_S)
+                await asyncio.wait_for(self._kick.wait(), timeout=wait)
             except asyncio.TimeoutError:
                 pass
             self._kick.clear()
+            wait = MAINT_INTERVAL_S
             now = time.monotonic()
             for lane in self.lanes:
                 # Вотчдог: лок держат дольше LANE_STUCK_S → дорожка залипла.
@@ -862,6 +866,12 @@ class Pool:
                     lane._needs_relaunch = True
                     continue
                 if lane.lock.locked() or lane._servicing:
+                    # Выпала, но лок ещё держит запрос (498 на поиске: после него
+                    # дорожка уходит на стоянку под локом). Внеочередной тик уже
+                    # потрачен — перепроверим через секунду, а не через 30с
+                    # (прод 09-10: 498 в 07:14:26, перепрогрев только в 07:14:56).
+                    if not lane.healthy and not lane._servicing:
+                        wait = min(wait, BUSY_RECHECK_S)
                     continue
                 if lane.due_recycle(now):
                     # healthy снимаем ЧЕСТНО: браузер сейчас исчезнет. Дальше

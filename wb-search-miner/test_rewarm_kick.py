@@ -82,7 +82,22 @@ async def main():
     await asyncio.sleep(0.5)
     check(lane.warms == 1, f"после неудачи ждём backoff, без долбёжки (прогревов: {lane.warms})")
 
+    # Выпала ПОД ЛОКОМ (498 на поиске, дальше стоянка под тем же локом):
+    # внеочередной тик застаёт лок занятым — перепрогрев обязан начаться вскоре
+    # после освобождения, а не через MAINT_INTERVAL_S.
+    busy = CountingLane(2)
+    busy.healthy = True
+    pool2 = server.Pool([busy])
+    maint2 = asyncio.ensure_future(pool2.maintenance_loop())
+    await asyncio.sleep(0.05)
+    async with busy.lock:
+        busy.healthy = False
+        await asyncio.sleep(0.3)  # «уход на стоянку»
+    await asyncio.sleep(1.5)
+    check(busy.warms == 1, f"выпавшая под локом прогрета сразу после освобождения (прогревов: {busy.warms})")
+
     maint.cancel()
+    maint2.cancel()
 
 
 asyncio.run(main())
