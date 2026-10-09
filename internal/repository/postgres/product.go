@@ -281,13 +281,15 @@ type SchedulableProduct struct {
 	// LiveRetryAt — внеплановый повтор после пропуска без живой цены
 	// (MarkLiveRetry); NULL = повтора нет.
 	LiveRetryAt *time.Time
+	// LiveFailStreak — пропусков без живой цены подряд (0 = последний скрейп удался).
+	LiveFailStreak int
 }
 
 // GetSchedulableProducts — по строке на каждую активную товарную подписку: товар
 // + план владельца. MIN-интервал и решение «пора» планировщик считает в Go.
 func (r *ProductRepo) GetSchedulableProducts(ctx context.Context) ([]SchedulableProduct, error) {
 	const q = `
-		SELECT p.id, p.url, p.last_enqueued_at, u.plan, u.plan_expires_at, p.last_price_change_at, p.live_retry_at
+		SELECT p.id, p.url, p.last_enqueued_at, u.plan, u.plan_expires_at, p.last_price_change_at, p.live_retry_at, p.live_fail_streak
 		FROM products p
 		JOIN subscriptions s ON s.product_id = p.id AND s.active = TRUE
 		JOIN users u ON u.id = s.user_id`
@@ -301,7 +303,7 @@ func (r *ProductRepo) GetSchedulableProducts(ctx context.Context) ([]Schedulable
 	var out []SchedulableProduct
 	for rows.Next() {
 		var p SchedulableProduct
-		if err := rows.Scan(&p.ProductID, &p.URL, &p.LastEnqueuedAt, &p.OwnerPlan, &p.PlanExpiresAt, &p.LastPriceChangeAt, &p.LiveRetryAt); err != nil {
+		if err := rows.Scan(&p.ProductID, &p.URL, &p.LastEnqueuedAt, &p.OwnerPlan, &p.PlanExpiresAt, &p.LastPriceChangeAt, &p.LiveRetryAt, &p.LiveFailStreak); err != nil {
 			return nil, err
 		}
 		out = append(out, p)

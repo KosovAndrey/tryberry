@@ -335,22 +335,25 @@ groups:
       # (source="none", scrape status no_live_price) — товары просто перестают
       # обновляться. Раньше в той же поломке цены тихо шли из архива и будили
       # notifier по старым данным (инцидент 16–21.09: 5,5 дней ucard=0).
-      # Порог 20% пропусков; объём > 10 отсекает ночную тишину.
+      # С 09-10 считаем ущерб по ТОВАРАМ, а не долю попыток: доля
+      # wb_price_source_total{source="none"} держалась 30% при НУЛЕ застрявших
+      # товаров — её раздували две минутные позиции reseller-тарифа (~70 попыток
+      # в час каждая против 4–12 у прочих), а промах им стоит минуту-две.
+      # Застрявший = domain.LiveStuckStreak (4) пропуска подряд, ≥14 мин без
+      # цены. Порог 10% товаров и не меньше двух — один «ядовитый» артикул не
+      # будит. Долю попыток смотреть в Grafana, она по-прежнему полезна для
+      # динамики wbaas.
       - alert: WbLivePriceLost
         expr: |
-          (
-            sum(increase(tryberrybot_wb_price_source_total{source="none"}[1h]))
-              /
-            sum(increase(tryberrybot_wb_price_source_total[1h]))
-          ) > 0.2
-          and on()
-          sum(increase(tryberrybot_wb_price_source_total[1h])) > 10
-        for: 30m
+          tryberrybot_wb_live_stuck_products >= 2
+          and
+          tryberrybot_wb_live_stuck_products / tryberrybot_wb_live_tracked_products > 0.1
+        for: 15m
         labels:
           severity: warning
         annotations:
-          summary: "WB: живой цены нет, скрейпы карточек пропускаются"
-          description: "Больше 20% скрейпов WB за час без живой цены — товары не обновляются (архивную цену не отдаём). Смотреть ошибки ручки: sum by (transport, outcome) (increase(tryberrybot_wb_ucard_fetch_total[1h])), healthy-дорожки сайдкара (wb_search_miner_healthy_lanes), логи pt_wb_search_miner и scraper на 'no live price'. Рычаги: WB_SEARCH_POOL_SIZE/WB_SEARCH_MINER_CPUS (ёмкость сайдкара), WB_CARD_DIRECT/WB_CARD_API_BASE (если WB откроет публичный хост)."
+          summary: "WB: товары застряли без живой цены ({{ $value }})"
+          description: "Больше 10% WB-товаров с подпиской 4+ скрейпа подряд без живой цены (≥14 мин не обновляются, архивную цену не отдаём). Смотреть: healthy-дорожки сайдкара (wb_search_miner_healthy_lanes), ошибки ручки sum by (transport, outcome) (increase(tryberrybot_wb_ucard_fetch_total[1h])), логи pt_wb_search_miner на 498 и scraper на 'no live price'; какие товары — SELECT id, live_fail_streak, url FROM products WHERE live_fail_streak >= 4. Рычаги: WB_SEARCH_POOL_SIZE/WB_SEARCH_MINER_CPUS (ёмкость сайдкара), WB_CARD_DIRECT/WB_CARD_API_BASE (если WB откроет публичный хост)."
 
       # ГЛАВНЫЙ алерт по WB-сайдкару: healthy_lanes ВРЁТ при залипании драйвера.
       # Инцидент 13-08: /search висел бесконечно (чтение тела ответа было без

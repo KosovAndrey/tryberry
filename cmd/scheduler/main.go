@@ -31,6 +31,7 @@ import (
 	"gitlab.com/KosovAndrey/tryberrybot/internal/domain"
 	"gitlab.com/KosovAndrey/tryberrybot/internal/health"
 	"gitlab.com/KosovAndrey/tryberrybot/internal/kafka"
+	"gitlab.com/KosovAndrey/tryberrybot/internal/metrics"
 	"gitlab.com/KosovAndrey/tryberrybot/internal/repository/postgres"
 	"gitlab.com/KosovAndrey/tryberrybot/internal/tracing"
 )
@@ -189,6 +190,25 @@ func runProductScheduler(
 	}
 }
 
+// reportWBLive — гейджи ущерба по WB-товарам (metrics.WBLiveTracked/WBLiveStuck).
+// Строки — по подписке, поэтому товар считаем один раз.
+func reportWBLive(rows []postgres.SchedulableProduct) {
+	seen := make(map[int64]bool, len(rows))
+	tracked, stuck := 0, 0
+	for _, r := range rows {
+		if seen[r.ProductID] || !strings.Contains(strings.ToLower(r.URL), "wildberries") {
+			continue
+		}
+		seen[r.ProductID] = true
+		tracked++
+		if r.LiveFailStreak >= domain.LiveStuckStreak {
+			stuck++
+		}
+	}
+	metrics.WBLiveTracked.Set(float64(tracked))
+	metrics.WBLiveStuck.Set(float64(stuck))
+}
+
 func productSchedulerTick(
 	ctx context.Context,
 	log *slog.Logger,
@@ -201,6 +221,7 @@ func productSchedulerTick(
 	if err != nil {
 		return fmt.Errorf("get schedulable products: %w", err)
 	}
+	reportWBLive(rows)
 	if len(rows) == 0 {
 		return nil
 	}

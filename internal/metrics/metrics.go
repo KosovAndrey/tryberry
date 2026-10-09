@@ -430,6 +430,27 @@ var (
 		[]string{"source"},
 	)
 
+	// WBLiveTracked / WBLiveStuck — WB-товары с активной подпиской и те из них,
+	// что застряли без живой цены (domain.LiveStuckStreak пропусков подряд).
+	// Считает scheduler на каждом тике. В отличие от доли попыток
+	// (wb_price_source_total) это ущерб по ТОВАРАМ: минутные позиции
+	// reseller-тарифа дают десятки попыток в час и раздувают долю, хотя каждый
+	// промах стоит им минуту-две.
+	WBLiveTracked = promauto.NewGauge(
+		prometheus.GaugeOpts{
+			Namespace: namespace,
+			Name:      "wb_live_tracked_products",
+			Help:      "WB products with an active subscription",
+		},
+	)
+	WBLiveStuck = promauto.NewGauge(
+		prometheus.GaugeOpts{
+			Namespace: namespace,
+			Name:      "wb_live_stuck_products",
+			Help:      "WB products with LiveStuckStreak+ consecutive scrapes skipped for lack of a live price",
+		},
+	)
+
 	// AliPriceSource — каким путём взята цена AliExpress. direct — основной (запрос
 	// к aer-jsonapi напрямую с датацентр-IP по сессионной cookie, без прокси); proxy
 	// — fallback-рефреш (cookie протухла → один запрос через RU-прокси, он же

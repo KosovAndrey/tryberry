@@ -3,6 +3,13 @@ package main
 import (
 	"testing"
 	"time"
+
+	"github.com/prometheus/client_golang/prometheus"
+	dto "github.com/prometheus/client_model/go"
+
+	"gitlab.com/KosovAndrey/tryberrybot/internal/domain"
+	"gitlab.com/KosovAndrey/tryberrybot/internal/metrics"
+	"gitlab.com/KosovAndrey/tryberrybot/internal/repository/postgres"
 )
 
 func TestJitterFactorRange(t *testing.T) {
@@ -101,4 +108,31 @@ func TestWBSearchFloorKeepsFastLane(t *testing.T) {
 			}
 		})
 	}
+}
+
+// Строки GetSchedulableProducts — по подписке: товар с двумя подписчиками
+// считается один раз, не-WB не считается, застрявший — с LiveStuckStreak.
+func TestReportWBLive(t *testing.T) {
+	wb := "https://www.wildberries.ru/catalog/1/detail.aspx"
+	reportWBLive([]postgres.SchedulableProduct{
+		{ProductID: 1, URL: wb, LiveFailStreak: domain.LiveStuckStreak},
+		{ProductID: 1, URL: wb, LiveFailStreak: domain.LiveStuckStreak},
+		{ProductID: 2, URL: wb, LiveFailStreak: domain.LiveStuckStreak - 1},
+		{ProductID: 3, URL: "https://www.ozon.ru/product/3", LiveFailStreak: 9},
+	})
+	if got := gaugeValue(t, metrics.WBLiveTracked); got != 2 {
+		t.Fatalf("tracked = %v, ждём 2", got)
+	}
+	if got := gaugeValue(t, metrics.WBLiveStuck); got != 1 {
+		t.Fatalf("stuck = %v, ждём 1", got)
+	}
+}
+
+func gaugeValue(t *testing.T, g prometheus.Gauge) float64 {
+	t.Helper()
+	var m dto.Metric
+	if err := g.Write(&m); err != nil {
+		t.Fatal(err)
+	}
+	return m.GetGauge().GetValue()
 }

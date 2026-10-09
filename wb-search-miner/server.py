@@ -614,10 +614,23 @@ class Lane:
             await asyncio.sleep(wait)
         self._last_at = time.monotonic()
 
+    def _dead_under_lock(self, what: str) -> bool:
+        """Дорожка выпала, пока запрос ждал её лок (её же 498 у соседнего запроса).
+        Слать с протухшим токеном незачем: это гарантированный 498, лишний сигнал
+        wbaas и лок, который держит перепрогрев. Прод 09-10: ~треть всех 498 —
+        такие хвосты очереди (пары 498 на одной дорожке через 0.1–1с). Код 0 =
+        «дорожка не ответила»: батчер берёт соседнюю, ручки отдают 502."""
+        if self.healthy:
+            return False
+        log.info("дорожка %d: выпала, пока %s ждал лок — не шлю", self.idx, what)
+        return True
+
     async def fetch_card(self, nms: str):
         """Живые карточки пачкой (nm=id1;id2;...). Ответ той же формы, что отдавал
         закрытый u-card.wb.ru, — Go-парсер не меняется."""
         async with self.lock:
+            if self._dead_under_lock("u-card"):
+                return 0, b""
             self._lock_since = time.monotonic()
             try:
                 await self._spacing()
@@ -633,6 +646,8 @@ class Lane:
     async def fetch_card_detail(self, nm: str):
         """Карточка одного артикула через detail — добор того, что list потерял."""
         async with self.lock:
+            if self._dead_under_lock("u-card detail"):
+                return 0, b""
             self._lock_since = time.monotonic()
             try:
                 await self._spacing()
@@ -650,18 +665,22 @@ class Lane:
         запроса и перехват нативного ответа фронта."""
         if not filters:
             async with self.lock:
-                self._lock_since = time.monotonic()
-                try:
-                    await self._spacing()
-                    status, body = await self._api_fetch(
-                        _search_api_url(query, sort, page), "u-search")
-                    if status == 200:
-                        _mark_success()
-                        log.info("дорожка %d: search %r p%d ок (%d байт)",
-                                 self.idx, query[:40], page, len(body))
-                        return status, body
-                finally:
-                    self._lock_since = 0.0
+                # Выпавшей дорожкой in-page fetch не шлём (гарантированный 498),
+                # но навигацию ниже оставляем: после 498 на fetch поиск и раньше
+                # шёл через неё.
+                if not self._dead_under_lock("u-search"):
+                    self._lock_since = time.monotonic()
+                    try:
+                        await self._spacing()
+                        status, body = await self._api_fetch(
+                            _search_api_url(query, sort, page), "u-search")
+                        if status == 200:
+                            _mark_success()
+                            log.info("дорожка %d: search %r p%d ок (%d байт)",
+                                     self.idx, query[:40], page, len(body))
+                            return status, body
+                    finally:
+                        self._lock_since = 0.0
             # Сюда попадаем при 403/пустом ответе: пробуем прежний путь через
             # навигацию — он переживает протухший deviceid-путь.
         return await self._fetch_search_via_nav(query, sort, page, filters)

@@ -80,6 +80,10 @@ func ApplyVolatility(eff time.Duration, lastChange *time.Time, subscribers int, 
 const (
 	LiveRetryBase = 2 * time.Minute
 	LiveRetryMax  = 30 * time.Minute
+	// LiveStuckStreak — с какой серии товар считается застрявшим без цены:
+	// 4 пропуска подряд = не меньше 2+4+8 = 14 мин без живой цены. Короткая
+	// волна 498 (30–60с) столько не набирает.
+	LiveStuckStreak = 4
 )
 
 // LiveRetryDelay — задержка повтора после streak-го пропуска подряд (streak ≥ 1).
